@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scorebook 记分簿 · 让你的交易直觉越用越准</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..600&family=Archivo:wdth,wght@75..125,400..700&family=DM+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="/src/styles/tokens.css">
+<link rel="stylesheet" href="/src/styles/patch.css">
+</head>
+<body>
+<header class="masthead"><div class="mast">
+  <a class="brand" href="#/home">Scorebook<small>记分簿</small></a>
+  <nav class="tabs" id="nav"></nav>
+  <div class="right">
+    <button class="searchbtn" id="btnFocusSearch" title="搜索（⌘K）"><span></span><span>搜你说过的话</span><span class="kbd">⌘K</span></button>
+    <button class="btn primary" id="btnCapture" title="记录判断（⌃⇧S）"><span></span>记录判断<span class="kbd">⌃⇧S</span></button>
+    <a class="iconbtn" id="navSettings" href="#/settings" title="设置"><span></span></a>
+  </div>
+</div></header>
+<main id="main" tabindex="-1"></main>
+<div id="layer"></div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
