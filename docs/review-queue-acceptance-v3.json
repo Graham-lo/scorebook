@@ -1,0 +1,27 @@
+{
+  "records": 100000,
+  "concurrency": 20,
+  "sparse_records": "5 drafts, 2 published reviews, 3 snoozed; oldest submissions, so ordered call scans cannot stop early",
+  "buckets": {
+    "needs_review": {
+      "samples": 200,
+      "p95_ms": 25.69,
+      "max_ms": 32.75
+    },
+    "in_progress": {
+      "samples": 200,
+      "p95_ms": 8.2,
+      "max_ms": 10.93
+    },
+    "completed": {
+      "samples": 200,
+      "p95_ms": 9.61,
+      "max_ms": 13.17
+    },
+    "snoozed": {
+      "samples": 200,
+      "p95_ms": 7.06,
+      "max_ms": 8.0
+    }
+  }
+}

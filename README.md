@@ -1,6 +1,6 @@
 # Scorebook Backend
 
-交易判断、截图与复盘知识库的模块化 Rust 后端。当前为 **0.1.0 基础实现**，不是原任务书全部 P1/P2/P3 已验收的声明。前端不在本项目中修改。
+交易判断、截图与复盘知识库的模块化 Rust 后端。当前为 **v3 可靠性与性能改造实现**，不是原任务书全部 P1/P2/P3 已验收的声明。前端不在本项目中修改。
 
 - Rust / Axum / Tokio / SQLx；PostgreSQL 17 + pgvector。
 - 用户数据隔离，Bearer 密钥哈希存储；单独的模型只读密钥。
@@ -28,9 +28,9 @@ ops/run.sh serve
 ops/run.sh worker
 ```
 
-API 默认 `127.0.0.1:8787`，数据库默认 `127.0.0.1:55432`。关闭终端会结束相应前台进程；尚未安装 launchd 自启动。不要把本地开发部署当作公网多用户生产部署。
+API 默认 `127.0.0.1:8787`，数据库默认 `127.0.0.1:55432`。前台启动模式会随终端结束；macOS 自启动脚本见 `ops/install-launchd.py`。不要把本地开发部署当作公网多用户生产部署。
 
-本地视觉模型可独立关闭，结构检索和记录链路仍可用：
+本地视觉模型独立运行；未配置时只接受用户明确选择的结构检索，不把视觉/融合请求自动换成结构模式：
 
 ```sh
 python3 -m venv vision/.venv
@@ -40,6 +40,8 @@ vision/.venv/bin/python vision/server.py
 ```
 
 模型运行时只加载本地文件；setup 下载固定 revision 的权重。`.env` 配置 `SCOREBOOK_VISION_URL=http://127.0.0.1:8790` 后，图片后台任务同时提取视觉特征。模型源、权重 SHA-256、预处理固定在 `vision/server.py` 和 Rust 适配器中。
+
+复盘的完整交互和状态规范见 [docs/review-experience.md](docs/review-experience.md)。自动保存、恢复、发布、放弃草稿和结果变化确认都使用独立版本保护。
 
 ## 接口入口
 
@@ -51,7 +53,7 @@ vision/.venv/bin/python vision/server.py
 | 上传用户图片、下载原图 | `POST /v1/attachments`、`GET /v1/attachments/{id}` |
 | 复盘、标签、打法、行情段 | `/v1/reviews`、`/v1/tags`、`/v1/playbooks`、`/v1/episodes` |
 | 复盘库按图搜索 | `POST /v1/similarity/search` |
-| 历史行情特征建库、覆盖 | `POST/GET /v1/history/indexes` |
+| 历史行情特征建库、覆盖 | `/v1/history/indexes`、`/v1/history/coverage`、`/v1/history/plans` |
 | 从币安历史窗口按图搜索 | `POST /v1/history/search` |
 | 临时行情、临时 SVG 图 | `POST /v1/market/data`、`POST /v1/market/chart` |
 | 模型工具发现与调用 | `GET /v1/knowledge/tools`、`POST /v1/knowledge/tools/call` |
@@ -63,10 +65,10 @@ HTTP 示例使用占位密钥，不应把真实密钥复制进 Git。参见 [doc
 
 | 目录 | 唯一职责 |
 |---|---|
-| `src/domain/` | 纯函数：显式语法、Decimal 评价、日历、样本统计、绘图 |
-| `src/application/` | 按功能拆分的用例；记录、复盘、历史索引、检索、结算、导出、删除、模型工具 |
-| `src/adapters/` | PostgreSQL、文件存储、币安 REST、本地图像特征服务 |
-| `src/http/` | 按用例分组的 HTTP 适配、认证、契约，不复制业务规则 |
+| `crates/core/src/domain/` | 纯函数：显式语法、Decimal 评价、日历、样本统计、绘图 |
+| `crates/infrastructure/src/application/` | 按功能拆分的用例；记录、复盘、历史索引、检索、结算、导出、删除、模型工具 |
+| `crates/infrastructure/src/adapters/` | PostgreSQL、文件存储、币安 REST、本地图像特征服务 |
+| `crates/http/src/` | 按用例分组的 HTTP 适配、认证、契约，不复制业务规则 |
 | `vision/` | 独立模型进程与依赖；不把 PyTorch 装进 Rust API 进程 |
 | `migrations/` | 追加式数据库升级；历史迁移保留，最新迁移体现不存行情的要求 |
 | `tests/` | 领域边界、真实 PostgreSQL 集成、真实本地模型连通测试 |
@@ -82,8 +84,8 @@ docker compose exec -T postgres psql -U scorebook -d postgres -c 'CREATE DATABAS
 ops/test.sh
 # 先启动本地模型，再跑真实视觉模型用例
 ops/test.sh --features vision-tests
-cargo fmt -- --check
-cargo clippy --all-targets --features vision-tests -- -D warnings
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --features vision-tests -- -D warnings
 ```
 
 集成测试必须使用专用数据库，不会静默跳过数据库测试。当前实现、实测结果与仍未完成的验收见 [docs/status.md](docs/status.md)。

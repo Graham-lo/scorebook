@@ -1,6 +1,7 @@
 services:
   postgres:
     image: pgvector/pgvector:0.8.2-pg17
+    shm_size: 1gb
     environment:
       POSTGRES_DB: scorebook
       POSTGRES_USER: scorebook

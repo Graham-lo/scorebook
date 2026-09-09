@@ -181,6 +181,50 @@
         ],
         "type": "object"
       },
+      "CoverageFilter": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cutoff_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interval": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "market": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "CreateCall": {
         "additionalProperties": false,
         "properties": {
@@ -379,6 +423,48 @@
         ],
         "type": "object"
       },
+      "DiscardDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_draft_revision": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_draft_revision"
+        ],
+        "type": "object"
+      },
+      "DraftInput": {
+        "additionalProperties": false,
+        "properties": {
+          "better_play": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_draft_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "note": {
+            "type": "string"
+          },
+          "vs_last": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "expected_draft_revision",
+          "note"
+        ],
+        "type": "object"
+      },
       "EpisodeLink": {
         "additionalProperties": false,
         "properties": {
@@ -542,6 +628,31 @@
         ],
         "type": "object"
       },
+      "HistoryFilter": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "HistoryIndexRequest": {
         "additionalProperties": false,
         "properties": {
@@ -582,6 +693,59 @@
           "interval",
           "start_at",
           "end_at"
+        ],
+        "type": "object"
+      },
+      "HistoryPlanRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "end_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "intervals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "market": {
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "start_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "stride_bars": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "window_bars": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "symbols",
+          "market",
+          "intervals",
+          "start_at",
+          "end_at",
+          "window_bars",
+          "stride_bars",
+          "models"
         ],
         "type": "object"
       },
@@ -693,6 +857,23 @@
         ],
         "type": "string"
       },
+      "PlanControl": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "action"
+        ],
+        "type": "object"
+      },
       "PlaybookInput": {
         "additionalProperties": false,
         "properties": {
@@ -774,6 +955,57 @@
         ],
         "type": "object"
       },
+      "PublishDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_call_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "expected_draft_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "expected_outcome_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_draft_revision",
+          "expected_call_revision",
+          "expected_outcome_ids"
+        ],
+        "type": "object"
+      },
+      "QueueFilter": {
+        "additionalProperties": false,
+        "properties": {
+          "bucket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Region": {
         "additionalProperties": false,
         "properties": {
@@ -806,6 +1038,19 @@
         ],
         "type": "object"
       },
+      "RetryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_generation"
+        ],
+        "type": "object"
+      },
       "Review": {
         "additionalProperties": false,
         "properties": {
@@ -819,6 +1064,13 @@
             "format": "uuid",
             "type": "string"
           },
+          "expected_outcome_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
           "expected_revision": {
             "format": "int64",
             "type": "integer"
@@ -831,10 +1083,54 @@
           }
         },
         "required": [
+          "expected_outcome_ids",
           "call_id",
           "note",
           "vs_last",
           "expected_revision"
+        ],
+        "type": "object"
+      },
+      "RevisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "claim_no": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "expected_outcome_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_no",
+          "expected_outcome_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "SessionInput": {
+        "additionalProperties": false,
+        "properties": {
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ttl_seconds": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "permissions",
+          "ttl_seconds"
         ],
         "type": "object"
       },
@@ -944,6 +1240,26 @@
         ],
         "type": "object"
       },
+      "SnoozeInput": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "until": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "type": "object"
+      },
       "TagInput": {
         "additionalProperties": false,
         "properties": {
@@ -1017,9 +1333,14 @@
           "arguments": {},
           "name": {
             "type": "string"
+          },
+          "tool_call_id": {
+            "format": "uuid",
+            "type": "string"
           }
         },
         "required": [
+          "tool_call_id",
           "name",
           "arguments"
         ],
@@ -1084,9 +1405,9 @@
     }
   },
   "info": {
-    "description": "Rust backend. Decimal strings, UTC timestamps, immutable evidence. Some advanced P1 acceptance remains pending; see docs/status.md.",
+    "description": "Modular Rust backend. UTC timestamps, decimal strings, immutable evidence, bounded history, resumable review drafts. See docs/status.md for acceptance limits.",
     "title": "Scorebook Backend",
-    "version": "0.1.0"
+    "version": "0.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1297,7 +1618,98 @@
     "/v1/calls": {
       "get": {
         "operationId": "get__v1_calls",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "instrument",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "timeframe",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1630,6 +2042,159 @@
         }
       }
     },
+    "/v1/calls/{id}/history": {
+      "get": {
+        "operationId": "get__v1_calls__id__history",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/calls/{id}/outcome-revisions": {
+      "post": {
+        "operationId": "post__v1_calls__id__outcome-revisions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
     "/v1/calls/{id}/replays": {
       "post": {
         "operationId": "post__v1_calls__id__replays",
@@ -1658,6 +2223,330 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/EvaluationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/calls/{id}/review-draft": {
+      "get": {
+        "operationId": "get__v1_calls__id__review-draft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post__v1_calls__id__review-draft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/calls/{id}/review-draft/discard": {
+      "post": {
+        "operationId": "post__v1_calls__id__review-draft_discard",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscardDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/calls/{id}/review-draft/publish": {
+      "post": {
+        "operationId": "post__v1_calls__id__review-draft_publish",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/calls/{id}/review-reminder": {
+      "post": {
+        "operationId": "post__v1_calls__id__review-reminder",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnoozeInput"
               }
             }
           },
@@ -2317,6 +3206,56 @@
         }
       }
     },
+    "/v1/exports/{id}/files/{name}": {
+      "get": {
+        "operationId": "get__v1_exports__id__files__name_",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Manifest-listed NDJSON filename or attachments/<uuid>",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Verified archive file stream"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
     "/v1/exports/{id}/manifest": {
       "get": {
         "operationId": "get__v1_exports__id__manifest",
@@ -2408,6 +3347,115 @@
         "security": []
       }
     },
+    "/v1/history/coverage": {
+      "get": {
+        "operationId": "get__v1_history_coverage",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "cutoff_at",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "model_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
     "/v1/history/indexes": {
       "get": {
         "operationId": "get__v1_history_indexes",
@@ -2465,6 +3513,185 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/HistoryIndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/history/plans": {
+      "post": {
+        "operationId": "post__v1_history_plans",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/history/plans/{id}": {
+      "get": {
+        "operationId": "get__v1_history_plans__id_",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/history/plans/{id}/control": {
+      "post": {
+        "operationId": "post__v1_history_plans__id__control",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanControl"
               }
             }
           },
@@ -2620,6 +3847,75 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{id}/retry": {
+      "post": {
+        "operationId": "post__v1_jobs__id__retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -2934,10 +4230,86 @@
         }
       }
     },
+    "/v1/ready": {
+      "get": {
+        "operationId": "get__v1_ready",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "security": []
+      }
+    },
     "/v1/review-queue": {
       "get": {
         "operationId": "get__v1_review-queue",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "bucket",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3037,7 +4409,198 @@
     "/v1/search": {
       "get": {
         "operationId": "get__v1_search",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "instrument",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "timeframe",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "operationId": "post__v1_sessions",
         "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}/revoke": {
+      "post": {
+        "operationId": "post__v1_sessions__id__revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3268,6 +4831,115 @@
           },
           "required": true
         },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/similarity/sessions/{id}": {
+      "get": {
+        "operationId": "get__v1_similarity_sessions__id_",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {},
+                    "meta": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found in current tenant"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/v1/similarity/sessions/{id}/save": {
+      "post": {
+        "operationId": "post__v1_similarity_sessions__id__save",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

@@ -74,11 +74,11 @@ async fn main() -> anyhow::Result<()> {
     }
     let db = Database::connect(&std::env::var("DATABASE_URL")?).await?;
     db.migrate().await?;
-    let s = Services {
+    let s = Services::new(
         db,
-        storage: Storage::new(std::env::var("SCOREBOOK_STORAGE").unwrap_or_else(|_| "data".into())),
-        vision: Vision::new(std::env::var("SCOREBOOK_VISION_URL").ok()),
-    };
+        Storage::new(std::env::var("SCOREBOOK_STORAGE").unwrap_or_else(|_| "data".into())),
+        Vision::new(std::env::var("SCOREBOOK_VISION_URL").ok()),
+    )?;
     let issuing_read_only = matches!(&cli.command, Command::CreateReadKey { .. });
     match cli.command {
         Command::Migrate => println!("Migrations applied."),
@@ -121,18 +121,59 @@ async fn main() -> anyhow::Result<()> {
             let listener = tokio::net::TcpListener::bind(&addr).await?;
             tracing::info!(address=%addr,"Scorebook API listening");
             axum::serve(listener, scorebook::http::router(s))
-                .with_graceful_shutdown(async {
-                    let _ = tokio::signal::ctrl_c().await;
-                })
+                .with_graceful_shutdown(shutdown_signal())
                 .await?;
         }
         Command::Worker => {
-            tracing::info!("Scorebook worker running");
-            loop {
-                tokio::select! {_ = tokio::signal::ctrl_c()=>break,r=jobs::run_one(&s)=>{match r{Ok(true)=>{},Ok(false)=>tokio::time::sleep(std::time::Duration::from_secs(2)).await,Err(e)=>{tracing::warn!(code=%e.code,"worker iteration failed");tokio::time::sleep(std::time::Duration::from_secs(2)).await;}}}}
+            tracing::info!("Scorebook worker running; interactive=2 batch=1 maintenance=1");
+            let (stop, rx) = tokio::sync::watch::channel(false);
+            let mut workers = tokio::task::JoinSet::new();
+            for queue in ["interactive", "interactive", "batch", "maintenance"] {
+                let services = s.clone();
+                let mut rx = rx.clone();
+                workers.spawn(async move {
+                    let mut next_gc=tokio::time::Instant::now();
+                    loop {
+                        if queue=="maintenance" && tokio::time::Instant::now()>=next_gc {
+                            if let Err(e)=scorebook::application::gc::schedule(&services).await {tracing::warn!(code=%e.code,"cleanup scheduling failed");}
+                            next_gc=tokio::time::Instant::now()+std::time::Duration::from_secs(60);
+                        }
+                        if *rx.borrow(){break;}
+                        match jobs::run_filtered(&services,None,Some(queue)).await {
+                            Ok(true)=>{},
+                            result=>{
+                                if let Err(e)=result{tracing::warn!(code=%e.code,queue,"worker iteration failed");}
+                                tokio::select!{_=rx.changed()=>{},_=tokio::time::sleep(std::time::Duration::from_secs(2))=>{}}
+                            }
+                        }
+                    }
+                });
+            }
+            shutdown_signal().await;
+            let _ = stop.send(true);
+            let grace = async { while workers.join_next().await.is_some() {} };
+            if tokio::time::timeout(std::time::Duration::from_secs(120), grace)
+                .await
+                .is_err()
+            {
+                workers.abort_all();
             }
         }
         _ => {}
     }
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{}};
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

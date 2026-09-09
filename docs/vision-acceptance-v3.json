@@ -1,0 +1,11 @@
+{
+  "scope": "Local encoder HTTP including PNG decode, preprocessing and CPU inference; excludes API upload/vector query",
+  "concurrency": 2,
+  "samples": 40,
+  "p95_ms": 64.38,
+  "max_ms": 83.24,
+  "batch8_ms": 215.85,
+  "batch_single_cosine": 0.99999988516008,
+  "weights_verified": true,
+  "old_embed_route": 404
+}

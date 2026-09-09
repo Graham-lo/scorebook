@@ -1,3 +1,7 @@
+[workspace]
+members = [".","crates/core","crates/infrastructure","crates/http"]
+resolver = "3"
+
 [package]
 name = "scorebook"
 version = "0.1.0"
@@ -6,7 +10,12 @@ rust-version = "1.88"
 default-run = "scorebook"
 
 [dependencies]
+scorebook-core = { path = "crates/core" }
+scorebook-infrastructure = { path = "crates/infrastructure" }
+scorebook-http = { path = "crates/http" }
 anyhow = "1"
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
 axum = { version = "0.8.9", features = ["multipart", "macros"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }

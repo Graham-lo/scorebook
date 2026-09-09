@@ -1,0 +1,102 @@
+{
+  "duration_requested_seconds": 1800,
+  "dataset": "100000 synthetic calls; 1000000 synthetic events; no market source data",
+  "database": "scorebook_accept_df468381e339",
+  "release_sha256": "47b264e1aab5b6119e902e9976ed83466a4128e7dd6940c5b85ae69f7ebeed6b",
+  "limits": "Local mixed-load acceptance; not production sizing or human chart-quality validation.",
+  "cold_first_request": {
+    "list": 9.93,
+    "common": 2.67,
+    "rare": 2.86,
+    "zero": 2.67,
+    "cjk_zero": 3.48
+  },
+  "warm_api_20_concurrent": {
+    "list": {
+      "samples": 200,
+      "p50_ms": 9.27,
+      "p95_ms": 19.81,
+      "max_ms": 23.59
+    },
+    "common": {
+      "samples": 200,
+      "p50_ms": 10.26,
+      "p95_ms": 14.45,
+      "max_ms": 16.85
+    },
+    "rare": {
+      "samples": 200,
+      "p50_ms": 11.12,
+      "p95_ms": 16.29,
+      "max_ms": 19.23
+    },
+    "zero": {
+      "samples": 200,
+      "p50_ms": 12.33,
+      "p95_ms": 19.19,
+      "max_ms": 22.8
+    },
+    "cjk_zero": {
+      "samples": 200,
+      "p50_ms": 18.72,
+      "p95_ms": 29.63,
+      "max_ms": 38.92
+    }
+  },
+  "million_row_export": {
+    "seconds": 14.4,
+    "rows": 1200035,
+    "baseline_rss_bytes": 8945664,
+    "peak_rss_bytes": 13942784,
+    "growth_bytes": 4997120,
+    "verified": "verified"
+  },
+  "faults": [
+    "API SIGKILL and same-release restart",
+    "worker SIGKILL and same-release restart"
+  ],
+  "last_draft_revision": 888,
+  "elapsed_seconds": 1800.22,
+  "mixed_load": {
+    "list": {
+      "samples": 11183,
+      "p50_ms": 3.84,
+      "p95_ms": 8.84,
+      "max_ms": 172.76
+    },
+    "common": {
+      "samples": 11183,
+      "p50_ms": 4.11,
+      "p95_ms": 9.88,
+      "max_ms": 178.81
+    },
+    "rare": {
+      "samples": 11183,
+      "p50_ms": 3.62,
+      "p95_ms": 8.56,
+      "max_ms": 250.2
+    },
+    "zero": {
+      "samples": 11183,
+      "p50_ms": 3.61,
+      "p95_ms": 8.5,
+      "max_ms": 189.64
+    },
+    "cjk_zero": {
+      "samples": 11183,
+      "p50_ms": 3.69,
+      "p95_ms": 8.67,
+      "max_ms": 117.33
+    }
+  },
+  "totals": {
+    "list": 11183,
+    "common": 11183,
+    "rare": 11183,
+    "zero": 11183,
+    "cjk_zero": 11183,
+    "draft_saves": 888
+  },
+  "errors": {},
+  "draft_recovered": true
+}

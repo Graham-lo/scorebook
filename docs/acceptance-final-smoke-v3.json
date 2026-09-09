@@ -1,0 +1,102 @@
+{
+  "duration_requested_seconds": 60,
+  "dataset": "100000 synthetic calls; 1000000 synthetic events; no market source data",
+  "database": "scorebook_accept_0740d39ddcb3",
+  "release_sha256": "2b8f24c51edc32fb175ca8187892227ae64e04be19ff1d0783fb59c68d904e5f",
+  "limits": "Local mixed-load acceptance; not production sizing or human chart-quality validation.",
+  "cold_first_request": {
+    "list": 9.19,
+    "common": 2.48,
+    "rare": 2.42,
+    "zero": 2.29,
+    "cjk_zero": 3.13
+  },
+  "warm_api_20_concurrent": {
+    "list": {
+      "samples": 200,
+      "p50_ms": 6.44,
+      "p95_ms": 15.23,
+      "max_ms": 18.75
+    },
+    "common": {
+      "samples": 200,
+      "p50_ms": 6.71,
+      "p95_ms": 7.8,
+      "max_ms": 8.58
+    },
+    "rare": {
+      "samples": 200,
+      "p50_ms": 8.23,
+      "p95_ms": 10.45,
+      "max_ms": 11.86
+    },
+    "zero": {
+      "samples": 200,
+      "p50_ms": 7.96,
+      "p95_ms": 10.18,
+      "max_ms": 11.85
+    },
+    "cjk_zero": {
+      "samples": 200,
+      "p50_ms": 11.6,
+      "p95_ms": 15.39,
+      "max_ms": 17.73
+    }
+  },
+  "million_row_export": {
+    "seconds": 12.95,
+    "rows": 1200033,
+    "baseline_rss_bytes": 10665984,
+    "peak_rss_bytes": 14680064,
+    "growth_bytes": 4014080,
+    "verified": "verified"
+  },
+  "faults": [
+    "API SIGKILL and same-release restart",
+    "worker SIGKILL and same-release restart"
+  ],
+  "last_draft_revision": 30,
+  "elapsed_seconds": 60.31,
+  "mixed_load": {
+    "list": {
+      "samples": 371,
+      "p50_ms": 5.62,
+      "p95_ms": 10.1,
+      "max_ms": 23.6
+    },
+    "common": {
+      "samples": 372,
+      "p50_ms": 6.18,
+      "p95_ms": 10.17,
+      "max_ms": 17.74
+    },
+    "rare": {
+      "samples": 372,
+      "p50_ms": 5.29,
+      "p95_ms": 9.78,
+      "max_ms": 23.92
+    },
+    "cjk_zero": {
+      "samples": 370,
+      "p50_ms": 5.76,
+      "p95_ms": 9.91,
+      "max_ms": 21.93
+    },
+    "zero": {
+      "samples": 371,
+      "p50_ms": 5.64,
+      "p95_ms": 9.45,
+      "max_ms": 17.3
+    }
+  },
+  "totals": {
+    "list": 371,
+    "common": 372,
+    "rare": 372,
+    "cjk_zero": 370,
+    "zero": 371,
+    "draft_saves": 30
+  },
+  "errors": {},
+  "draft_recovered": true
+}

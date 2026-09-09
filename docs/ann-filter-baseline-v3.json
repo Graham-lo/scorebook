@@ -1,0 +1,497 @@
+{
+  "rows": 1000000,
+  "dimension": 192,
+  "query_distribution": "40 distinct synthetic clusters at offsets i*19997; each unfiltered and ETHUSDT 10% symbol filter",
+  "ef_search": 1000,
+  "scan_mem_multiplier": 4,
+  "details": [
+    {
+      "probe": 0,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 1,
+      "symbol": null,
+      "recall_at_20": 0.9,
+      "candidates": 1000
+    },
+    {
+      "probe": 2,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 3,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 4,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 5,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 6,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 7,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 8,
+      "symbol": null,
+      "recall_at_20": 0.9,
+      "candidates": 1000
+    },
+    {
+      "probe": 9,
+      "symbol": null,
+      "recall_at_20": 0.85,
+      "candidates": 1000
+    },
+    {
+      "probe": 10,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 11,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 12,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 13,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 14,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 15,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 16,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 17,
+      "symbol": null,
+      "recall_at_20": 0.85,
+      "candidates": 1000
+    },
+    {
+      "probe": 18,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 19,
+      "symbol": null,
+      "recall_at_20": 0.9,
+      "candidates": 1000
+    },
+    {
+      "probe": 20,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 21,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 22,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 23,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 24,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 25,
+      "symbol": null,
+      "recall_at_20": 0.9,
+      "candidates": 1000
+    },
+    {
+      "probe": 26,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 27,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 28,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 29,
+      "symbol": null,
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 30,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 31,
+      "symbol": null,
+      "recall_at_20": 0.9,
+      "candidates": 1000
+    },
+    {
+      "probe": 32,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 33,
+      "symbol": null,
+      "recall_at_20": 0.85,
+      "candidates": 1000
+    },
+    {
+      "probe": 34,
+      "symbol": null,
+      "recall_at_20": 0.9,
+      "candidates": 1000
+    },
+    {
+      "probe": 35,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 36,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 37,
+      "symbol": null,
+      "recall_at_20": 0.9,
+      "candidates": 1000
+    },
+    {
+      "probe": 38,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 39,
+      "symbol": null,
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 0,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 1,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.2,
+      "candidates": 1000
+    },
+    {
+      "probe": 2,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 3,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.05,
+      "candidates": 1000
+    },
+    {
+      "probe": 4,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.05,
+      "candidates": 1000
+    },
+    {
+      "probe": 5,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.1,
+      "candidates": 1000
+    },
+    {
+      "probe": 6,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.85,
+      "candidates": 1000
+    },
+    {
+      "probe": 7,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 8,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 9,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.15,
+      "candidates": 1000
+    },
+    {
+      "probe": 10,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 11,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.15,
+      "candidates": 1000
+    },
+    {
+      "probe": 12,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.4,
+      "candidates": 1000
+    },
+    {
+      "probe": 13,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.15,
+      "candidates": 1000
+    },
+    {
+      "probe": 14,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.6,
+      "candidates": 1000
+    },
+    {
+      "probe": 15,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.05,
+      "candidates": 1000
+    },
+    {
+      "probe": 16,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 17,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.4,
+      "candidates": 1000
+    },
+    {
+      "probe": 18,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.1,
+      "candidates": 1000
+    },
+    {
+      "probe": 19,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.1,
+      "candidates": 1000
+    },
+    {
+      "probe": 20,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 21,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.45,
+      "candidates": 1000
+    },
+    {
+      "probe": 22,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.1,
+      "candidates": 1000
+    },
+    {
+      "probe": 23,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.15,
+      "candidates": 1000
+    },
+    {
+      "probe": 24,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.4,
+      "candidates": 1000
+    },
+    {
+      "probe": 25,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.2,
+      "candidates": 1000
+    },
+    {
+      "probe": 26,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.95,
+      "candidates": 1000
+    },
+    {
+      "probe": 27,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.05,
+      "candidates": 1000
+    },
+    {
+      "probe": 28,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.1,
+      "candidates": 1000
+    },
+    {
+      "probe": 29,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 30,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 1.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 31,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.7,
+      "candidates": 1000
+    },
+    {
+      "probe": 32,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.85,
+      "candidates": 1000
+    },
+    {
+      "probe": 33,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.3,
+      "candidates": 1000
+    },
+    {
+      "probe": 34,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.0,
+      "candidates": 1000
+    },
+    {
+      "probe": 35,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.35,
+      "candidates": 1000
+    },
+    {
+      "probe": 36,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.8,
+      "candidates": 1000
+    },
+    {
+      "probe": 37,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.25,
+      "candidates": 1000
+    },
+    {
+      "probe": 38,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.05,
+      "candidates": 1000
+    },
+    {
+      "probe": 39,
+      "symbol": "ETHUSDT",
+      "recall_at_20": 0.5,
+      "candidates": 1000
+    }
+  ],
+  "recall_at_20_mean": 0.645625,
+  "recall_at_20_min": 0.0,
+  "p95_ms": 576.81,
+  "max_ms": 644.75,
+  "concurrency": 8,
+  "samples": 160,
+  "status": "superseded diagnostic evidence, not final acceptance",
+  "final_report": "ann-acceptance-v3.json"
+}

@@ -1,26 +1,27 @@
-# 数据模块与生命周期
+# v3 数据分区与生命周期
 
-所有私有表使用 owner_id 隔离；API 不能通过请求正文指定 owner_id。UUID 为资源 ID，用户可读标识另行展示。
+| 数据 | 身份 / 生命周期 |
+|---|---|
+| calls / call_state | 原判断不可变；展示变更 revision 与草稿时钟独立 |
+| attachments / call_attachments | 用户原字节及明确引用；kind 区分现场、补充、参考、查询 |
+| reviews / review_outcome_refs | 已发布复盘不可变，引用用户当时确认的 outcome IDs |
+| review_queue_projection | 业务事务内更新的可重建队列状态；分类索引避免长期累计后逐条重算 |
+| review_drafts / review_preferences | 可恢复草稿和稍后提醒，各自 CAS；正式发布不重写原话 |
+| outcomes / outcome_heads | 原始结果、数据订正、规则回放；正式 head 有约束，data_revision 形成有序链 |
+| assessments | 等待到期、缺输入、重试、能力缺失等处理状态，与交易结果分离 |
+| manifests / manifest_migrations | 规则、位置和输入哈希；旧元数据通过显式迁移记录修复，不包含原始行情 |
+| jobs / job_attempts / job_targets | 稳定去重身份、代次与租约、精确目标；尝试历史默认保留 30 天 |
+| requests / request_refs | 内容哈希、幂等响应和类型引用；临时响应过期后保留最小标记 |
+| image_embeddings | 私有、按 owner 和模型空间检索的派生图像特征 |
+| similarity_sessions / search_result_refs | 查询/结果快照和引用；未保存默认 7 天，saved 的引用继续保护原图 |
+| history_indexes / history_plans | 用户的构建意图、子范围、检查点及公共代引用；没有 OHLC |
+| public_market.generations/features/generation_features | 公共合约派生数据；可重建、按代发布；未引用的未发布特征 7 天后有限批清理 |
+| export_artifacts / export_pins / export_refs / export_runs | 导出状态、精确保护对象、分块校验和暂存目录登记；默认 7 天到期 |
+| restore_receipts | 同一已校验归档的恢复完成身份，不允许覆盖无该回执的已有用户 |
+| storage_objects | 原图发布 pending/ready/expired/purged 登记，异常遗留可有限批回收 |
+| gc_schedule / owner_queue_turns | 清理和任务公平轮转；仅为内部运行数据 |
+| api_keys | 哈希凭证、权限、到期、父凭证及撤销；明文不入库、不导出 |
+| provider_budgets | 相同出口和合约产品的共享 REST 预算和封禁冷却 |
+| tags / playbooks / episodes / set_snapshots | 版本定义、显式关联和冻结分析集合；不是事后覆盖历史证据 |
 
-| 模块 | 表 | 事实与可变范围 |
-|---|---|---|
-| 身份 | users、api_keys | 密钥只存 SHA-256；full/read_only；凭证不导出 |
-| 请求 | requests | 操作范围内幂等键、请求摘要、响应；删除时清理关联内容，保留防重墓碑 |
-| 记录 | calls、call_state | 原文/原始参数冻结；revision/voided 为可重建展示状态 |
-| 证据 | attachments、call_attachments | 用户原始图片哈希与时间身份；物理文件在受控 owner/id 目录 |
-| 追加 | events、reviews | 更正请求、复盘、作废等追加，不修改原文 |
-| 分类 | tags、call_tags | 标签定义版本、别名及 hot/cold 归类；不改变评分 |
-| 情境 | episodes、episode_links | 固定首条锚点、120h 建议范围；建议与确认分离 |
-| 打法 | playbooks、playbook_events、adoptions | 版本父链、状态事件、计划引用；不凭引用自动判断已执行 |
-| 规则/结果 | rules、manifests、outcomes | 规则及结果冻结；manifest 只保留口径、时间和输入摘要，不保存行情序列 |
-| 合约 | instrument_catalog | 币安合约元信息及刷新时间；不是 OHLC 行情仓库 |
-| 图片索引 | embedding_models、image_embeddings | 模型身份、裁剪区域、向量、质量提示；原图可重建特征 |
-| 历史索引 | history_indexes、history_windows | 任务范围、实际覆盖、合约/周期/起止窗口、向量、来源摘要；无 OHLC/raw/image 字段 |
-| 检索 | similarity_sessions、similarity_feedback | 查询参数、候选来源、排序与反馈；用户原话副本纳入删除传播 |
-| 集合 | set_snapshots、verdicts | 固定成员及可展开统计，规则分组；人工裁决完整流程后续补齐 |
-| 后台 | jobs、outbox | 工作租约/重试；outbox 为 Telegram 后续接口预留，目前不发送 |
-| 删除 | deletion_requests、tombstones | 短时确认令牌哈希、范围、最小墓碑；物理清理独立任务 |
-
-`market_snapshots` 在迁移 0005 删除。旧开发阶段 manifest 中 bars/trades/base/atr0/end_price 被移除，并标记不能离线重放。已有用户原文和原图不受此迁移影响。
-
-持久化系统只保存知识库证据、业务结果、元信息与派生索引。用户上传的图可以含行情；禁止把系统按 REST 重建的 OHLC 或图表自动写回附件仓库。
+所有私有引用按 owner 查询并使用明确外键/关联表。删除不是扫描任意文本中的 UUID。行情 OHLC、逐笔成交、系统生成 SVG/PNG 不属于持久数据，禁止出现在上述表、队列、导出或日志中。原用户截图仍是长期保留的证据。

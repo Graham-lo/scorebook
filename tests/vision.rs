@@ -11,11 +11,12 @@ async fn real_local_dino_embedding_and_pgvector_roundtrip() {
     db.migrate().await.unwrap();
     let (o, _) = db.create_user("vision-test").await.unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let s = Services {
-        db,
-        storage: Storage::new(temp.path()),
-        vision: Vision::new(Some("http://127.0.0.1:8790".into())),
-    };
+    let s = Services::new(
+        db.clone(),
+        Storage::new(temp.path()),
+        Vision::new(Some("http://127.0.0.1:8790".into())),
+    )
+    .unwrap();
     let mut im = image::RgbImage::from_pixel(640, 320, image::Rgb([20, 22, 24]));
     for j in 0..60u32 {
         for x in j * 10 + 8..j * 10 + 14 {
