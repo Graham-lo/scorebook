@@ -107,3 +107,21 @@ pub(super) async fn resource_response(
     )
         .into_response())
 }
+
+pub(super) async fn assessment_source(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+    h: HeaderMap,
+    Json(v): Json<api::jobs::AssessmentSourcePlan>,
+) -> Result<Json<Value>> {
+    invoke(
+        &s,
+        o,
+        Action::AssessmentSourcePlan,
+        Some(id),
+        Some(key(&h)?),
+        json!(v),
+    )
+    .await
+}

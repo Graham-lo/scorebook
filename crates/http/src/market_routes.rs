@@ -109,3 +109,20 @@ pub(super) async fn history_coverage(
 ) -> Result<Json<Value>> {
     invoke(&s, o, Action::HistoryCoverage, None, None, json!(v)).await
 }
+
+pub(super) async fn history_revalidate(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+    h: HeaderMap,
+) -> Result<Json<Value>> {
+    invoke(
+        &s,
+        o,
+        Action::HistoryRevalidate,
+        Some(id),
+        Some(key(&h)?),
+        json!({}),
+    )
+    .await
+}

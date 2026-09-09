@@ -21,7 +21,7 @@ pub async fn owner(s: &Services, owner: Uuid) -> Result<Value> {
         .bind(&sessions)
         .execute(&mut *tx)
         .await?;
-    let images:Vec<Uuid>=sqlx::query_scalar("SELECT a.id FROM attachments a WHERE a.owner_id=$1 AND a.kind='query' AND a.uploaded_at<now()-interval '24 hours' AND NOT EXISTS(SELECT 1 FROM call_attachments l WHERE l.owner_id=a.owner_id AND l.attachment_id=a.id) AND NOT EXISTS(SELECT 1 FROM search_result_refs r WHERE r.owner_id=a.owner_id AND r.entity_type='attachment' AND r.entity_id=a.id) AND NOT EXISTS(SELECT 1 FROM job_targets t JOIN jobs j ON j.id=t.job_id WHERE t.owner_id=a.owner_id AND t.entity_type='attachment' AND t.entity_id=a.id AND j.status IN ('queued','running','retry_wait')) ORDER BY a.uploaded_at,a.id LIMIT 200 FOR UPDATE SKIP LOCKED").bind(owner).fetch_all(&mut *tx).await?;
+    let images:Vec<Uuid>=sqlx::query_scalar("SELECT a.id FROM attachments a WHERE a.owner_id=$1 AND a.kind='query' AND a.uploaded_at<now()-interval '24 hours' AND NOT EXISTS(SELECT 1 FROM call_attachments l WHERE l.owner_id=a.owner_id AND l.attachment_id=a.id) AND NOT EXISTS(SELECT 1 FROM chat_runs cr WHERE cr.owner_id=a.owner_id AND cr.body->'attachment_ids' ? a.id::text) AND NOT EXISTS(SELECT 1 FROM search_result_refs r WHERE r.owner_id=a.owner_id AND r.entity_type='attachment' AND r.entity_id=a.id) AND NOT EXISTS(SELECT 1 FROM job_targets t JOIN jobs j ON j.id=t.job_id WHERE t.owner_id=a.owner_id AND t.entity_type='attachment' AND t.entity_id=a.id AND j.status IN ('queued','running','retry_wait')) ORDER BY a.uploaded_at,a.id LIMIT 200 FOR UPDATE SKIP LOCKED").bind(owner).fetch_all(&mut *tx).await?;
     sqlx::query("UPDATE requests q SET response=jsonb_build_object('expired',true,'reason','query_image_expired') WHERE q.owner_id=$1 AND EXISTS(SELECT 1 FROM request_refs r WHERE r.owner_id=q.owner_id AND r.operation=q.operation AND r.key=q.key AND r.entity_type='attachment' AND r.entity_id=ANY($2))").bind(owner).bind(&images).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM attachments WHERE owner_id=$1 AND id=ANY($2)")
         .bind(owner)
@@ -44,6 +44,15 @@ pub async fn owner(s: &Services, owner: Uuid) -> Result<Value> {
         .await?;
     sqlx::query("WITH expired AS(SELECT operation,key FROM requests WHERE owner_id=$1 AND operation IN ('similarity.search','similarity.hybrid','history.search','review_draft.save') AND created_at<now()-interval '7 days' AND NOT response ? 'expired' AND NOT response ? 'deleted' ORDER BY created_at,operation,key LIMIT 500 FOR UPDATE SKIP LOCKED) UPDATE requests r SET response=jsonb_build_object('expired',true,'reason','transient_result_expired','session_id',response->'session_id') FROM expired e WHERE r.owner_id=$1 AND r.operation=e.operation AND r.key=e.key").bind(owner).execute(&mut *tx).await?;
     let attempts=sqlx::query("WITH expired AS(SELECT job_id,attempt FROM job_attempts WHERE owner_id=$1 AND finished_at<now()-interval '30 days' ORDER BY finished_at,job_id,attempt LIMIT 500 FOR UPDATE SKIP LOCKED) DELETE FROM job_attempts a USING expired e WHERE a.owner_id=$1 AND a.job_id=e.job_id AND a.attempt=e.attempt").bind(owner).execute(&mut *tx).await?.rows_affected();
+    let projections:Vec<Uuid>=sqlx::query_scalar("SELECT r.id FROM trade_projection_runs r WHERE r.owner_id=$1 AND r.status IN ('building','superseded') AND r.created_at<now()-interval '1 day' AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.owner_id=r.owner_id AND j.kind='trade.project' AND j.body->>'connection_id'=r.connection_id::text AND j.status IN ('queued','running','retry_wait','awaiting_input','blocked_capability')) ORDER BY r.created_at,r.id LIMIT 20 FOR UPDATE SKIP LOCKED").bind(owner).fetch_all(&mut *tx).await?;
+    sqlx::query("DELETE FROM trade_book_snapshots WHERE owner_id=$1 AND run_id=ANY($2)")
+        .bind(owner)
+        .bind(&projections)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("WITH batch AS(SELECT a.cycle_id,a.fill_id FROM trade_cycle_allocations a JOIN trade_cycles c ON c.owner_id=a.owner_id AND c.id=a.cycle_id WHERE c.owner_id=$1 AND c.run_id=ANY($2) ORDER BY a.cycle_id,a.fill_id LIMIT 1000) DELETE FROM trade_cycle_allocations a USING batch b WHERE a.owner_id=$1 AND a.cycle_id=b.cycle_id AND a.fill_id=b.fill_id").bind(owner).bind(&projections).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM trade_cycles c WHERE c.owner_id=$1 AND c.id IN(SELECT c.id FROM trade_cycles c WHERE c.owner_id=$1 AND c.run_id=ANY($2) AND NOT EXISTS(SELECT 1 FROM trade_cycle_allocations a WHERE a.owner_id=$1 AND a.cycle_id=c.id) ORDER BY c.id LIMIT 1000)").bind(owner).bind(&projections).execute(&mut *tx).await?;
+    let abandoned=sqlx::query("DELETE FROM trade_projection_runs r WHERE owner_id=$1 AND id=ANY($2) AND NOT EXISTS(SELECT 1 FROM trade_cycles c WHERE c.owner_id=$1 AND c.run_id=r.id)").bind(owner).bind(&projections).execute(&mut *tx).await?.rows_affected();
     if !remove.is_empty() || !exports.is_empty() {
         super::jobs::enqueue_tx(
             &mut tx,
@@ -67,7 +76,7 @@ pub async fn owner(s: &Services, owner: Uuid) -> Result<Value> {
     }
     tx.commit().await?;
     Ok(
-        json!({"expired_sessions":sessions.len(),"expired_queries":images.len(),"orphan_objects":orphans.len(),"expired_exports":exports.len(),"pruned_attempts":attempts}),
+        json!({"expired_sessions":sessions.len(),"expired_queries":images.len(),"orphan_objects":orphans.len(),"expired_exports":exports.len(),"pruned_attempts":attempts,"abandoned_projection_runs":abandoned}),
     )
 }
 pub async fn schedule(s: &Services) -> Result<()> {

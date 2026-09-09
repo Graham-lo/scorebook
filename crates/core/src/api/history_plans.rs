@@ -10,6 +10,9 @@ pub struct HistoryPlanRequest {
     pub market: String,
     pub intervals: Vec<String>,
     pub start_at: DateTime<Utc>,
+    /// Explicit per-contract continuation; each value is bounded by start_at/end_at.
+    #[serde(default)]
+    pub symbol_start_at: std::collections::BTreeMap<String, DateTime<Utc>>,
     pub end_at: DateTime<Utc>,
     pub window_bars: usize,
     pub stride_bars: usize,

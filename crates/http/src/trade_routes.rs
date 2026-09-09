@@ -16,6 +16,8 @@ pub fn routes() -> Router<Services> {
         .route("/v1/imports/csv", post(csv_import))
         .route("/v1/trades", get(fills))
         .route("/v1/trade-cycles", get(cycles))
+        .route("/v1/trade-cycles/{id}", get(cycle_detail))
+        .route("/v1/account-ledger", get(ledger))
         .route("/v1/position-seeds", post(seed))
         .route("/v1/reconciliations", post(reconcile))
         .route("/v1/execution-links", post(link))
@@ -159,4 +161,20 @@ async fn export_mapping(
         json!(v),
     )
     .await
+}
+
+async fn cycle_detail(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+    Query(v): Query<CycleDetailFilter>,
+) -> Result<Json<Value>> {
+    invoke(&s, o, Action::TradeCycleDetail, Some(id), None, json!(v)).await
+}
+async fn ledger(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Query(v): Query<TradeFilter>,
+) -> Result<Json<Value>> {
+    invoke(&s, o, Action::AccountLedger, None, None, json!(v)).await
 }

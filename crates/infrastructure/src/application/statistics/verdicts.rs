@@ -4,26 +4,13 @@ pub async fn schedule(
     owner: Uuid,
     run: Uuid,
     definition: Uuid,
-    groups: &[Value],
 ) -> Result<()> {
-    for group in groups {
-        let n = group["denominator"].as_i64().unwrap_or(0);
-        if n < 20 {
-            continue;
-        }
-        let sig = group["signature"].as_str().unwrap();
-        // Never create another outstanding request for this stable definition/group.
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,5))")
-            .bind(format!("{owner}:{definition}:{sig}"))
-            .execute(&mut **tx)
-            .await?;
-        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM verdict_requests WHERE owner_id=$1 AND definition_id=$2 AND signature=$3 AND status='pending')").bind(owner).bind(definition).bind(sig).fetch_one(&mut **tx).await?;
-        let last:i64=sqlx::query_scalar("SELECT COALESCE(max(explicit_count),0)::bigint FROM verdict_requests WHERE owner_id=$1 AND definition_id=$2 AND signature=$3 AND status='decided'").bind(owner).bind(definition).bind(sig).fetch_one(&mut **tx).await?;
-        if pending || n < last + 20 {
-            continue;
-        }
-        sqlx::query("INSERT INTO verdict_requests(id,owner_id,definition_id,run_id,signature,threshold,explicit_count) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING").bind(Uuid::new_v4()).bind(owner).bind(definition).bind(run).bind(sig).bind((last+20) as i32).bind(n as i32).execute(&mut **tx).await?;
-    }
+    // One definition lock and one set-wise insert, independent of group count.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,5))")
+        .bind(format!("{owner}:{definition}"))
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("WITH candidates AS(SELECT signature,(body->>'denominator')::bigint AS n FROM set_group_metrics WHERE owner_id=$1 AND run_id=$2),prior AS(SELECT signature,max(explicit_count) AS last_count FROM verdict_requests WHERE owner_id=$1 AND definition_id=$3 AND status='decided' GROUP BY signature) INSERT INTO verdict_requests(id,owner_id,definition_id,run_id,signature,threshold,explicit_count) SELECT gen_random_uuid(),$1,$3,$2,c.signature,COALESCE(p.last_count,0)+20,c.n FROM candidates c LEFT JOIN prior p USING(signature) WHERE c.n>=COALESCE(p.last_count,0)+20 AND NOT EXISTS(SELECT 1 FROM verdict_requests r WHERE r.owner_id=$1 AND r.definition_id=$3 AND r.signature=c.signature AND r.status='pending') ON CONFLICT DO NOTHING").bind(owner).bind(run).bind(definition).execute(&mut **tx).await?;
     Ok(())
 }
 pub async fn list(s: &Services, owner: Uuid, f: VerdictFilter) -> Result<Value> {

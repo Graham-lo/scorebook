@@ -131,3 +131,22 @@ fn aggregate_matches_batch_for_directional_completion() {
         w.result(Some("107".into()), true).unwrap()
     );
 }
+
+#[test]
+fn daily_stream_stops_at_new_trigger_deadline_without_losing_same_ms_order() {
+    let mut w = Watch::new(c("trade_touch"), t(), "100".into(), None).unwrap();
+    w.trades(
+        t(),
+        t() + Duration::hours(2),
+        &[
+            tr(1, 10, "106"),
+            tr(2, 10, "107"),
+            tr(3, 3610, "109"),
+            tr(4, 5000, "1000"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(w.through, t() + Duration::seconds(3610));
+    assert_eq!(w.path.as_ref().unwrap().highest, "109");
+    assert_eq!(w.last_trade_id, Some(3));
+}

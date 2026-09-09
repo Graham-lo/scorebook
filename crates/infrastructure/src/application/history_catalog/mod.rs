@@ -12,6 +12,7 @@ use scorebook_core::api::{history::HistorySource, history_catalog::*};
 use serde_json::{Value, json};
 use uuid::Uuid;
 pub mod archives;
+pub mod boundaries;
 pub mod subscriptions;
 pub fn validate_symbol(symbol: &str) -> Result<()> {
     if symbol.is_empty()

@@ -207,3 +207,9 @@ pub struct ExportMappingUpdate {
     pub expected_generation: i64,
     pub mapping: CsvMapping,
 }
+
+#[derive(Clone, Serialize, Deserialize, ToSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CycleDetailFilter {
+    pub cursor: Option<Uuid>,
+}

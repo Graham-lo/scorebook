@@ -14,6 +14,8 @@ use uuid::Uuid;
 mod analysis;
 pub mod reindex;
 mod repository;
+mod rerank;
+mod visual_query;
 pub async fn geometry(
     s: &Services,
     owner: Uuid,
@@ -170,82 +172,11 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     let candidates = if input.scope == ChartScope::BinanceHistory {
         repository::public_candidates(s, &input, vector).await?
     } else {
-        let (visual, _, _) = super::similarity::embed_mode(
-            s,
-            j.owner,
-            input.attachment_id,
-            input.region.clone(),
-            "dinov2-small-v1",
-            false,
-        )
-        .await?;
+        let visual = visual_query::encode(s, j.owner, &input, &query.quality.region).await?;
         repository::private_candidates(s, j.owner, &input, vector, visual).await?
     };
     repository::publish(s,j,&json!({"status":"provisional","items":candidates,"protocol":chart_match::PROTOCOL,"quality_validated":false}),false).await?;
-    let mut ranked = Vec::new();
-    let mut excluded = Vec::new();
-    for mut item in candidates {
-        repository::fence(s, j).await?.commit().await?;
-        let candidate = if input.scope == ChartScope::Private {
-            let attachment_id = serde_json::from_value(item["attachment_id"].clone())
-                .map_err(|_| Error::bad("invalid_candidate"))?;
-            match geometry(
-                s,
-                j.owner,
-                &ChartAnalysisInput {
-                    attachment_id,
-                    region: None,
-                    red_up: false,
-                },
-            )
-            .await
-            {
-                Ok(v) => v.candles,
-                Err(e) if e.kind == scorebook_core::error::ErrorKind::Invalid => {
-                    excluded.push(json!({"attachment_id":attachment_id,"reason":e.code}));
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        } else {
-            let string = |k: &str| {
-                item[k]
-                    .as_str()
-                    .ok_or_else(|| Error::bad("invalid_candidate"))
-            };
-            let start = string("start_at")?
-                .parse()
-                .map_err(|_| Error::bad("invalid_candidate"))?;
-            let end = string("end_at")?
-                .parse()
-                .map_err(|_| Error::bad("invalid_candidate"))?;
-            let payload = s
-                .market
-                .klines(
-                    string("market")?,
-                    string("symbol")?,
-                    string("interval")?,
-                    start,
-                    end,
-                )
-                .await?;
-            let bars: Vec<scorebook_core::domain::criteria::Bar> =
-                serde_json::from_value(payload["bars"].clone())
-                    .map_err(|_| Error::bad("invalid_provider_bars"))?;
-            if payload["coverage_complete"] != true
-                || digest(&bars) != item["source_hash_at_index"].as_str().unwrap_or("")
-            {
-                excluded.push(json!({"id":item["id"],"reason":"source_changed_or_incomplete"}));
-                continue;
-            }
-            item["chart_request"] = json!({"market":item["market"],"symbol":item["symbol"],"interval":item["interval"],"start_at":start,"end_at":end});
-            chart_match::from_bars(&bars)?
-        };
-        let score = chart_match::rerank(&query.candles, &candidate, input.reverse)?;
-        item["match"] = json!(score);
-        item["stage"] = json!("reranked");
-        ranked.push(item);
-    }
+    let (mut ranked, excluded) = rerank::run(s, j, &input, &query.candles, candidates).await?;
     ranked.sort_by(|a, b| {
         b["match"]["score"]
             .as_f64()

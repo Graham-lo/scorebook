@@ -28,6 +28,9 @@ pub struct Restic {
     executable: Option<PathBuf>,
 }
 impl Restic {
+    pub fn configured(&self) -> bool {
+        self.executable.is_some()
+    }
     pub fn at(executable: PathBuf) -> anyhow::Result<Self> {
         anyhow::ensure!(
             executable.is_absolute(),

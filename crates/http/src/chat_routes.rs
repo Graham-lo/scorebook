@@ -57,6 +57,7 @@ struct StreamState {
     owner: Uuid,
     id: Uuid,
     after: i64,
+    bearer: String,
     pending: std::collections::VecDeque<Value>,
     done: bool,
 }
@@ -80,11 +81,18 @@ async fn events(
     } else {
         v.after.unwrap_or(0)
     };
+    let bearer = h
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| Error::from(scorebook_core::error::Error::unauthorized()))?
+        .to_string();
     let state = StreamState {
         backend: s,
         owner: o,
         id,
         after,
+        bearer,
         pending: Default::default(),
         done: false,
     };
@@ -100,6 +108,15 @@ async fn events(
             }
             if st.done {
                 return None;
+            }
+            if st.backend.authenticate(st.bearer.clone()).await.is_err() {
+                st.done = true;
+                return Some((
+                    Ok(Event::default()
+                        .event("error")
+                        .data(json!({"code":"credential_revoked_or_expired"}).to_string())),
+                    st,
+                ));
             }
             let mut c = Command::new(st.owner, Action::ChatEvents, json!({"after":st.after}));
             c.subject = Some(st.id);

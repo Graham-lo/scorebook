@@ -103,35 +103,44 @@ impl Watch {
             if tr.at == start {
                 continue;
             }
-            if self.last_trade_id.is_some_and(|p| *id <= p) {
-                return Err("trade_order_unproven".into());
-            }
-            if let Some(p) = self.last_trade_id
-                && *id != p + 1
-            {
-                return Err("trade_id_gap".into());
-            }
-            self.last_trade_id = Some(*id);
+            self.reduce_trade(*id, tr)?;
             last_at = tr.at;
-            if self.start.is_none()
-                && self.criteria.trigger.as_ref().unwrap().kind == "trade_touch"
-                && self.matches(&tr.price)?
-            {
-                self.begin(tr.at, tr.price.clone())?;
-            }
-            if self.start.is_some_and(|at| tr.at >= at) && tr.at <= self.deadline() {
-                self.path.as_mut().unwrap().observe(
-                    &self.criteria,
-                    self.base.as_ref().unwrap(),
-                    &self.atr_at_submission,
-                    tr.at,
-                    tr.at,
-                    &tr.price,
-                    &tr.price,
-                )?;
-            }
         }
-        self.through = end;
+        self.through = end.min(self.deadline());
+        Ok(())
+    }
+    /// Reduce one row from a provider whose entire file/page ordering and coverage
+    /// are independently verified. `through` advances only after that verification.
+    pub fn reduce_trade(&mut self, id: i64, tr: &Trade) -> Result<(), String> {
+        if tr.at <= self.through || tr.at > self.deadline() {
+            return Ok(());
+        }
+        if self.last_trade_id.is_some_and(|p| id <= p) {
+            return Err("trade_order_unproven".into());
+        }
+        if let Some(p) = self.last_trade_id
+            && id != p + 1
+        {
+            return Err("trade_id_gap".into());
+        }
+        self.last_trade_id = Some(id);
+        if self.start.is_none()
+            && self.criteria.trigger.as_ref().unwrap().kind == "trade_touch"
+            && self.matches(&tr.price)?
+        {
+            self.begin(tr.at, tr.price.clone())?;
+        }
+        if self.start.is_some_and(|at| tr.at >= at) && tr.at <= self.deadline() {
+            self.path.as_mut().unwrap().observe(
+                &self.criteria,
+                self.base.as_ref().unwrap(),
+                &self.atr_at_submission,
+                tr.at,
+                tr.at,
+                &tr.price,
+                &tr.price,
+            )?;
+        }
         Ok(())
     }
     pub fn bars(

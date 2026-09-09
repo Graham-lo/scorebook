@@ -292,6 +292,14 @@ async fn import_file(
     hash: &str,
     imported: i64,
 ) -> Result<Value> {
+    // Validate all rows before the first immutable write; reuse the same RAM buffer.
+    let check_input = input.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        validate_file(&bytes, &check_input)?;
+        Ok::<_, Error>(bytes)
+    })
+    .await
+    .map_err(|_| Error::bad("export_validation_interrupted"))??;
     let mut reader = csv::Reader::from_reader(bytes.as_slice());
     let header = reader
         .headers()
@@ -453,4 +461,42 @@ pub async fn mapping(
     Database::finish(&mut tx, owner, "exchange.export.mapping", key, &body, &v).await?;
     tx.commit().await?;
     Ok(v)
+}
+
+fn validate_file(bytes: &[u8], input: &ExchangeExportInput) -> Result<()> {
+    let mut reader = csv::Reader::from_reader(bytes);
+    let headers = reader
+        .headers()
+        .map_err(|_| Error::bad("invalid_export_csv_header"))?
+        .clone();
+    let mut symbols = std::collections::HashSet::new();
+    for (n, record) in reader.records().enumerate() {
+        if n >= 500000 {
+            return Err(Error::bad("export_row_budget_exceeded"));
+        }
+        let record = record.map_err(|_| Error::bad("invalid_export_csv_row"))?;
+        if record.as_slice().len() > 20000 {
+            return Err(Error::bad("export_row_budget_exceeded"));
+        }
+        let row = super::csv_mapping::row(&headers, &record, &input.mapping, &input.dataset)?;
+        if let Some(symbol) = row["symbol"].as_str().filter(|s| !s.is_empty()) {
+            symbols.insert(symbol.to_string());
+        }
+        if symbols.len() > 4000 {
+            return Err(Error::bad("export_symbol_budget_exceeded"));
+        }
+        if input.dataset == "trades" {
+            let mut fill: FillInput = serde_json::from_value(row)
+                .map_err(|_| Error::bad("csv_fill_fields_incomplete"))?;
+            super::import::canonical(&mut fill)?;
+            if fill.traded_at < input.start_at || fill.traded_at >= input.end_at {
+                return Err(Error::bad("fill_outside_declared_coverage"));
+            }
+        } else {
+            let mut entry: LedgerEntryInput = serde_json::from_value(row)
+                .map_err(|_| Error::bad("csv_ledger_fields_incomplete"))?;
+            super::import::canonical_entry(&mut entry, input.start_at, input.end_at)?;
+        }
+    }
+    Ok(())
 }

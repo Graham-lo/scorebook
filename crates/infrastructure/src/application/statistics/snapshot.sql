@@ -1,7 +1,7 @@
-WITH src AS (
+WITH frozen AS (UPDATE set_runs SET source_snapshot_at=statement_timestamp(),status='frozen' WHERE owner_id=$1 AND id=$2 RETURNING id), src AS (
  SELECT c.id,c.submitted_at,c.body,c.instrument,c.market,c.timeframe,st.voided,ep.episode_id,ep.status AS group_status,
  EXISTS(SELECT 1 FROM adoptions a JOIN playbooks p ON p.owner_id=a.owner_id AND p.id=a.playbook_id
- WHERE a.owner_id=c.owner_id AND a.call_id=c.id AND (p.body->'evidence_call_ids' ? c.id::text OR c.submitted_at<=p.created_at)) AS formation_case
+ WHERE a.owner_id=c.owner_id AND a.call_id=c.id AND p.id=($3->>'playbook_id')::uuid AND (p.body->'evidence_call_ids' ? c.id::text OR c.submitted_at<=p.created_at)) AS formation_case
  FROM calls c JOIN call_state st ON st.owner_id=c.owner_id AND st.call_id=c.id
  LEFT JOIN LATERAL(SELECT episode_id,status FROM episode_links WHERE owner_id=c.owner_id AND call_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) ep ON true
  WHERE c.owner_id=$1

@@ -112,12 +112,17 @@ pub async fn advance(
     .bind(j.id)
     .fetch_optional(&s.db.pool)
     .await?;
+    let source: String = sqlx::query_scalar(
+        "SELECT source_plan FROM assessment_source_plans WHERE owner_id=$1 AND job_id=$2",
+    )
+    .bind(j.owner)
+    .bind(j.id)
+    .fetch_optional(&s.db.pool)
+    .await?
+    .unwrap_or_else(|| "rest_continuous_v1".into());
     let (mut w, revision) = if let Some((v, r, source)) = stored {
-        if source != "rest_continuous_v1" {
-            return Err(Error::deferred(
-                "archive_recovery_requires_archive_monitor",
-                RetryDirective::AwaitCapability,
-            ));
+        if source != "rest_continuous_v1" && source != "daily_archive_v1" {
+            return Err(Error::bad("invalid_assessment_source_plan"));
         }
         (
             serde_json::from_value::<Watch>(v)
@@ -125,18 +130,23 @@ pub async fn advance(
             r,
         )
     } else {
-        retention(market, submitted - Duration::minutes(1))?;
-        let base = s
-            .market
-            .trades(market, symbol, submitted - Duration::minutes(1), submitted)
-            .await?;
-        complete(&base)?;
-        let price = asof(&base).ok_or_else(|| {
-            Error::deferred(
-                "submission_reference_price_unproven",
-                RetryDirective::AwaitInput,
-            )
-        })?;
+        let (price, base) = if source == "daily_archive_v1" {
+            archive::reference(s, market, symbol, submitted).await?
+        } else {
+            retention(market, submitted - Duration::minutes(1))?;
+            let base = s
+                .market
+                .trades(market, symbol, submitted - Duration::minutes(1), submitted)
+                .await?;
+            complete(&base)?;
+            let price = asof(&base).ok_or_else(|| {
+                Error::deferred(
+                    "submission_reference_price_unproven",
+                    RetryDirective::AwaitInput,
+                )
+            })?;
+            (price, base)
+        };
         let needs_atr = matches!(c.template, Template::T1 | Template::T2 | Template::T3)
             && c.threshold_ratio.is_none()
             || c.template == Template::T5;
@@ -156,7 +166,10 @@ pub async fn advance(
         };
         let mut w = Watch::new(c, submitted, price, atr).map_err(Error::bad)?;
         checkpoint_hash(&mut w, json!([identity(base), identity(daily)]));
-        save(s, j, call_id, claim_no, market, symbol, &w, None, None).await?;
+        save(
+            s, j, call_id, claim_no, market, symbol, &source, &w, None, None,
+        )
+        .await?;
         (w, 0)
     };
     let target = (Utc::now() - Duration::seconds(3)).min(w.deadline());
@@ -209,6 +222,8 @@ pub async fn advance(
         {
             w.through = target;
         }
+    } else if source == "daily_archive_v1" {
+        (w, endpoint) = archive::advance(s, market, symbol, w, target).await?;
     } else if w.start.is_none()
         || w.through != second(w.through, 60)
         || second(target, 60) <= w.through
@@ -235,19 +250,27 @@ pub async fn advance(
         checkpoint_hash(&mut w, data);
     }
     if w.start.is_some() && w.through >= w.deadline() {
-        retention(market, w.deadline() - Duration::minutes(1))?;
-        let data = s
-            .market
-            .trades(
-                market,
-                symbol,
-                w.deadline() - Duration::minutes(1),
-                w.deadline(),
-            )
-            .await?;
-        complete(&data)?;
-        endpoint = asof(&data);
-        checkpoint_hash(&mut w, data);
+        if source == "daily_archive_v1" {
+            if endpoint.is_none() {
+                let (price, proof) = archive::reference(s, market, symbol, w.deadline()).await?;
+                endpoint = Some(price);
+                checkpoint_hash(&mut w, proof);
+            }
+        } else {
+            retention(market, w.deadline() - Duration::minutes(1))?;
+            let data = s
+                .market
+                .trades(
+                    market,
+                    symbol,
+                    w.deadline() - Duration::minutes(1),
+                    w.deadline(),
+                )
+                .await?;
+            complete(&data)?;
+            endpoint = asof(&data);
+            checkpoint_hash(&mut w, data);
+        }
         if endpoint.is_none() {
             return Err(Error::deferred(
                 "end_reference_price_unproven",
@@ -269,6 +292,7 @@ pub async fn advance(
         claim_no,
         market,
         symbol,
+        &source,
         &w,
         Some(revision),
         if terminal { Some(&result) } else { None },
@@ -301,6 +325,7 @@ async fn save(
     claim_no: usize,
     market: &str,
     symbol: &str,
+    source: &str,
     w: &Watch,
     expected: Option<i64>,
     result: Option<&Evaluation>,
@@ -312,7 +337,7 @@ async fn save(
             return Err(Error::conflict("monitor_checkpoint_conflict"));
         }
     } else {
-        sqlx::query("INSERT INTO trigger_watches(id,owner_id,call_id,claim_no,market,symbol,source_plan,checkpoint) VALUES($1,$2,$3,$4,$5,$6,'rest_continuous_v1',$7)").bind(j.id).bind(j.owner).bind(call_id).bind(claim_no as i32).bind(market).bind(symbol).bind(json!(w)).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO trigger_watches(id,owner_id,call_id,claim_no,market,symbol,source_plan,checkpoint) VALUES($1,$2,$3,$4,$5,$6,$8,$7)").bind(j.id).bind(j.owner).bind(call_id).bind(claim_no as i32).bind(market).bind(symbol).bind(json!(w)).bind(source).execute(&mut *tx).await?;
     }
     sqlx::query("INSERT INTO trigger_checkpoints(owner_id,watch_id,through_at,source_sha256,revision) VALUES($1,$2,$3,$4,$5) ON CONFLICT(owner_id,watch_id) DO UPDATE SET through_at=EXCLUDED.through_at,source_sha256=EXCLUDED.source_sha256,revision=EXCLUDED.revision").bind(j.owner).bind(j.id).bind(w.through).bind(&w.source_sha256).bind(expected.map(|v|v+1).unwrap_or(0)).execute(&mut *tx).await?;
     if let (Some(at), Some(price)) = (w.trigger_at, &w.trigger_price) {
@@ -321,3 +346,6 @@ async fn save(
     tx.commit().await?;
     Ok(())
 }
+
+mod archive;
+pub mod control;

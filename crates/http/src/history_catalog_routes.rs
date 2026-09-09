@@ -8,6 +8,7 @@ pub fn routes() -> Router<Services> {
         .route("/v1/history/subscriptions", post(subscribe))
         .route("/v1/history/subscriptions/{id}", get(subscription))
         .route("/v1/history/subscriptions/{id}/control", post(control))
+        .route("/v1/history/subscriptions/{id}/budget", post(budget))
         .route("/v1/history/archive-catalog", post(archives))
 }
 async fn catalog(
@@ -93,4 +94,22 @@ async fn archives(
     Json(v): Json<ArchiveCatalogInput>,
 ) -> Result<Json<Value>> {
     invoke(&s, o, Action::ArchiveCatalog, None, None, json!(v)).await
+}
+
+pub async fn budget(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+    h: HeaderMap,
+    Json(v): Json<SubscriptionBudget>,
+) -> Result<Json<Value>> {
+    invoke(
+        &s,
+        o,
+        Action::HistorySubscriptionBudget,
+        Some(id),
+        Some(key(&h)?),
+        json!(v),
+    )
+    .await
 }

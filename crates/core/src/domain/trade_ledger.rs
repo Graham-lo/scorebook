@@ -105,11 +105,11 @@ pub struct Projector {
 impl Projector {
     pub fn checkpoint(&self) -> Result<serde_json::Value> {
         Ok(
-            serde_json::json!({"protocol":"trade-projector-v1","state":serde_json::to_value(self).map_err(|_|Error::bad("projection_checkpoint_encoding"))?}),
+            serde_json::json!({"protocol":"trade-projector-v2","state":serde_json::to_value(self).map_err(|_|Error::bad("projection_checkpoint_encoding"))?}),
         )
     }
     pub fn resume(value: serde_json::Value) -> Result<Self> {
-        if value["protocol"] != "trade-projector-v1" {
+        if value["protocol"] != "trade-projector-v2" {
             return Err(Error::bad("projection_checkpoint_protocol_mismatch"));
         }
         serde_json::from_value(value["state"].clone())

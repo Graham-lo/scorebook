@@ -64,8 +64,19 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
                 role: "assistant".into(),
                 content: v,
             });
-            let results:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('tool_call_id',tool_call_id,'name',name,'result',result) FROM chat_tool_calls WHERE owner_id=$1 AND run_id=$2 AND turn_no=$3 AND status='completed' ORDER BY tool_call_id").bind(j.owner).bind(j.id).bind(n).fetch_all(&s.db.pool).await?;
-            for result in results {
+            let results:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('tool_call_id',c.tool_call_id,'name',c.name,'result',c.result,'evidence_id',e.id,'evidence_body',e.body) FROM chat_tool_calls c JOIN chat_tool_evidence e ON e.owner_id=c.owner_id AND e.run_id=c.run_id AND e.id=md5(c.run_id::text||':'||c.tool_call_id)::uuid WHERE c.owner_id=$1 AND c.run_id=$2 AND c.turn_no=$3 AND c.status='completed' ORDER BY c.tool_call_id").bind(j.owner).bind(j.id).bind(n).fetch_all(&s.db.pool).await?;
+            for mut result in results {
+                let evidence = result
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("evidence_body")
+                    .ok_or_else(|| Error::bad("tool_evidence_missing"))?;
+                let id = result
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("evidence_id")
+                    .ok_or_else(|| Error::bad("tool_evidence_missing"))?;
+                result["source"] = json!({"source_kind":"tool_result","source_id":id,"source_version":digest(&evidence)});
                 messages.push(ModelMessage {
                     role: "tool".into(),
                     content: result,
@@ -75,6 +86,20 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
         if serde_json::to_vec(&messages).unwrap().len() > 64000 {
             return budget(s, j, "model_context_budget_exhausted").await;
         }
+        let original_images = original_images(s, j.owner, &input.attachment_ids).await?;
+        if !original_images.is_empty() {
+            let refs: Vec<_> = original_images
+                .iter()
+                .map(|im| Citation {
+                    source_kind: "attachment".into(),
+                    source_id: im.attachment_id,
+                    source_version: im.source_version.clone(),
+                })
+                .collect();
+            let mut tx = jobs::fence(s, j).await?;
+            citations::register(&mut tx, j.owner, j.id, &refs, false).await?;
+            tx.commit().await?;
+        }
         let request = ModelRequest {
             run_id: j.id,
             turn: turn as u32,
@@ -82,6 +107,7 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
             messages,
             tools: tools::catalog(),
             attachment_ids: input.attachment_ids.clone(),
+            original_images,
         };
         let duration = (deadline - Utc::now()).to_std().unwrap_or_default();
         let reply = match tokio::time::timeout(duration, s.chat.reply(request)).await {
@@ -200,7 +226,28 @@ async fn run_tool(
     };
     let mut tx = jobs::fence(s, j).await?;
     citations::register(&mut tx, j.owner, j.id, &citations::collect(&result), false).await?;
-    sqlx::query("UPDATE chat_tool_calls SET status='completed',result=$4,completed_at=now() WHERE owner_id=$1 AND run_id=$2 AND tool_call_id=$3 AND status='prepared'").bind(j.owner).bind(j.id).bind(&call.id).bind(&result).execute(&mut *tx).await?;
+    let evidence_id:Uuid=sqlx::query_scalar("UPDATE chat_tool_calls SET status='completed',result=$4,completed_at=now() WHERE owner_id=$1 AND run_id=$2 AND tool_call_id=$3 AND status='prepared' RETURNING md5(run_id::text||':'||tool_call_id)::uuid").bind(j.owner).bind(j.id).bind(&call.id).bind(&result).fetch_optional(&mut *tx).await?.ok_or_else(||Error::conflict("tool_state_changed"))?;
+    let evidence = json!({"identity":"deterministic_tool_result","tool":call.name,"arguments_sha256":digest(&call.arguments),"result":result});
+    citations::register(
+        &mut tx,
+        j.owner,
+        j.id,
+        &[Citation {
+            source_kind: "tool_result".into(),
+            source_id: evidence_id,
+            source_version: digest(&evidence),
+        }],
+        false,
+    )
+    .await?;
+    sqlx::query(
+        "INSERT INTO job_targets SELECT $1,$2,r.* FROM reference_ids($3) r ON CONFLICT DO NOTHING",
+    )
+    .bind(j.owner)
+    .bind(j.id)
+    .bind(&result)
+    .execute(&mut *tx)
+    .await?;
     emit(&mut tx,j.owner,j.id,"tool_completed",json!({"tool_call_id":call.id,"name":call.name,"has_error":result.get("error").is_some(),"result_available":true})).await?;
     tx.commit().await?;
     Ok(())
@@ -273,4 +320,44 @@ async fn budget(s: &Services, j: &Job, reason: &str) -> Result<Value> {
     .await?;
     tx.commit().await?;
     Ok(json!({"chat_run_id":j.id,"status":"budget_exhausted","reason":reason}))
+}
+
+async fn original_images(s: &Services, owner: Uuid, ids: &[Uuid]) -> Result<Vec<OriginalImage>> {
+    use tokio::io::AsyncReadExt;
+    let rows: Vec<(Uuid, String, String, Value)> = sqlx::query_as(
+        "SELECT a.id,a.mime,a.sha256,k.body FROM attachments a JOIN knowledge_sources k ON k.owner_id=a.owner_id AND k.id=a.id AND k.kind='attachment' WHERE a.owner_id=$1 AND a.id=ANY($2) ORDER BY a.id",
+    )
+    .bind(owner)
+    .bind(ids)
+    .fetch_all(&s.db.pool)
+    .await?;
+    if rows.len() != ids.iter().collect::<std::collections::HashSet<_>>().len() {
+        return Err(Error::conflict("chat_original_image_removed"));
+    }
+    let mut images = Vec::new();
+    let mut bytes_used = 0;
+    for (id, mime, sha256, source) in rows {
+        let mut bytes = Vec::new();
+        s.images
+            .open(owner, id)
+            .await?
+            .take(20 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .await?;
+        bytes_used += bytes.len();
+        if bytes_used > 20 * 1024 * 1024 {
+            return Err(Error::bad("chat_original_image_budget_exceeded"));
+        }
+        if crate::adapters::db::hash_bytes(&bytes) != sha256 {
+            return Err(Error::bad("chat_original_image_integrity_failure"));
+        }
+        images.push(OriginalImage {
+            attachment_id: id,
+            mime,
+            sha256,
+            source_version: digest(&source),
+            bytes,
+        });
+    }
+    Ok(images)
 }

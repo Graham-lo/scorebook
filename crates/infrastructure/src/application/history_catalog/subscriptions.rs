@@ -53,12 +53,22 @@ pub async fn create(
     Ok(result)
 }
 fn cycle_end(source: &HistorySource) -> Result<DateTime<Utc>> {
-    let now = Utc::now();
+    cycle_end_at(source, Utc::now())
+}
+fn cycle_end_at(source: &HistorySource, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
     match source {
         HistorySource::Rest => DateTime::from_timestamp(now.timestamp().div_euclid(60) * 60, 0)
             .ok_or_else(|| Error::bad("invalid_date")),
         HistorySource::MonthlyArchive => {
-            chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+            // Monthly files are published on the first Monday; leave that UTC day to finish.
+            let first = chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap();
+            let monday = 1 + (7 - first.weekday().num_days_from_monday()) % 7;
+            let month = if now.day() <= monday {
+                first - Duration::days(1)
+            } else {
+                first
+            };
+            chrono::NaiveDate::from_ymd_opt(month.year(), month.month(), 1)
                 .and_then(|v| v.and_hms_opt(0, 0, 0))
                 .map(|v| v.and_utc())
                 .ok_or_else(|| Error::bad("invalid_date"))
@@ -67,7 +77,7 @@ fn cycle_end(source: &HistorySource) -> Result<DateTime<Utc>> {
 }
 pub async fn get(s: &Services, owner: Uuid, id: Uuid) -> Result<Value> {
     sqlx::query_scalar(
-        "SELECT to_jsonb(s)-'owner_id' FROM history_subscriptions s WHERE owner_id=$1 AND id=$2",
+        "SELECT (to_jsonb(s)-'owner_id')||jsonb_build_object('job_id',j.id,'job_status',j.status,'error_code',COALESCE(s.last_error,j.error_code)) FROM history_subscriptions s LEFT JOIN jobs j ON j.owner_id=s.owner_id AND j.kind='history.subscription' AND j.dedupe_key=s.id::text||':'||s.cycle::text WHERE s.owner_id=$1 AND s.id=$2",
     )
     .bind(owner)
     .bind(id)
@@ -119,6 +129,11 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
                 RetryDirective::AwaitInput,
             ));
         }
+        // Commit only a completed, gap-free child. Retrying this UPSERT is idempotent.
+        let mut tx = jobs::fence(s, j).await?;
+        sqlx::query("INSERT INTO history_subscription_cursors(owner_id,subscription_id,symbol,timeframe,window_bars,next_start) SELECT $1,$2,i.body->>'symbol',i.body->>'interval',(i.body->>'window_bars')::int,max((i.body->>'end_at')::timestamptz-((i.body->>'window_bars')::int-(i.body->>'stride_bars')::int)*CASE i.body->>'interval' WHEN '1m' THEN interval '1 minute' WHEN '5m' THEN interval '5 minutes' WHEN '15m' THEN interval '15 minutes' WHEN '1h' THEN interval '1 hour' WHEN '4h' THEN interval '4 hours' WHEN '1d' THEN interval '1 day' END) FROM history_indexes i JOIN jobs x ON x.id=i.id WHERE i.owner_id=$1 AND x.kind='history.index' AND x.dedupe_key LIKE $3 AND x.status='succeeded' GROUP BY i.body->>'symbol',i.body->>'interval',(i.body->>'window_bars')::int ON CONFLICT(owner_id,subscription_id,symbol,timeframe,window_bars) DO UPDATE SET next_start=greatest(history_subscription_cursors.next_start,EXCLUDED.next_start),updated_at=now()")
+            .bind(j.owner).bind(id).bind(format!("{child}:%")).execute(&mut *tx).await?;
+        tx.commit().await?;
         plan_no += 1;
     }
     let end: DateTime<Utc> = serde_json::from_value(state["cycle_end"].clone())
@@ -137,17 +152,28 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
     let window = [64usize, 128, 256][plan_no % 3];
     let stride = window / 4;
     let seconds = super::super::history::interval_seconds(&tf)?;
-    let start = state["watermark"]
-        .as_str()
-        .and_then(|v| v.parse::<DateTime<Utc>>().ok())
-        .map(|v| v - Duration::seconds((window - stride) as i64 * seconds))
-        .unwrap_or(input.start_at);
-    if (end - start).num_seconds() < window as i64 * seconds {
+    let batch_symbols = &symbols[batch * 200..((batch + 1) * 200).min(symbols.len())];
+    let cursors: Vec<(String,DateTime<Utc>)> = sqlx::query_as("SELECT symbol,next_start FROM history_subscription_cursors WHERE owner_id=$1 AND subscription_id=$2 AND timeframe=$3 AND window_bars=$4 AND symbol=ANY($5)")
+        .bind(j.owner).bind(id).bind(&tf).bind(window as i32).bind(batch_symbols).fetch_all(&s.db.pool).await?;
+    let cursors: std::collections::BTreeMap<_, _> = cursors.into_iter().collect();
+    let symbol_start_at: std::collections::BTreeMap<_, _> = batch_symbols
+        .iter()
+        .filter_map(|symbol| {
+            let start = cursors.get(symbol).copied().unwrap_or(input.start_at);
+            ((end - start).num_seconds() >= window as i64 * seconds)
+                .then(|| (symbol.clone(), start))
+        })
+        .collect();
+    let Some(start) = symbol_start_at.values().min().copied() else {
+        let mut tx = jobs::fence(s, j).await?;
+        sqlx::query("UPDATE history_subscriptions SET plan_no=$3,child_plan=NULL WHERE id=$1 AND cycle=$2 AND status='active'")
+            .bind(id).bind(cycle).bind((plan_no+1) as i32).execute(&mut *tx).await?;
+        tx.commit().await?;
         return Err(Error::deferred(
-            "subscription_waiting_for_closed_window",
-            RetryDirective::At(Utc::now() + Duration::hours(1)),
+            "subscription_no_new_closed_window",
+            RetryDirective::At(Utc::now() + Duration::milliseconds(100)),
         ));
-    }
+    };
     let mut tx = jobs::fence(s, j).await?;
     let plan = super::super::history_plans::create_tx(
         &mut tx,
@@ -156,7 +182,8 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
         scorebook_core::api::history_plans::HistoryPlanRequest {
             source: input.source,
             market: input.market,
-            symbols: symbols[batch * 200..((batch + 1) * 200).min(symbols.len())].to_vec(),
+            symbols: symbol_start_at.keys().cloned().collect(),
+            symbol_start_at,
             intervals: vec![tf],
             start_at: start,
             end_at: end,
@@ -207,6 +234,26 @@ pub async fn schedule(s: &Services) -> Result<()> {
         if watermark.is_some_and(|v| v >= end) {
             continue;
         }
+        let symbols = resolve_symbols(s, &input.market, &input.symbols).await?;
+        let estimate = super::estimate(
+            s,
+            HistoryEstimateInput {
+                market: input.market.clone(),
+                symbols: symbols.clone(),
+                intervals: input.intervals.clone(),
+                start_at: input.start_at,
+                end_at: end,
+            },
+        )
+        .await?;
+        if estimate["upper_bound_vectors"]
+            .as_u64()
+            .is_none_or(|v| v > input.max_vectors)
+        {
+            sqlx::query("UPDATE history_subscriptions SET status='needs_attention',last_error='history_capacity_budget_exceeded',revision=revision+1 WHERE id=$1").bind(id).execute(&mut *tx).await?;
+            continue;
+        }
+        sqlx::query("UPDATE history_subscriptions SET body=jsonb_set(body,'{resolved_symbols}',$2),last_error=NULL WHERE id=$1").bind(id).bind(json!(symbols)).execute(&mut *tx).await?;
         let job = jobs::enqueue_tx(
             &mut tx,
             owner,
@@ -275,6 +322,40 @@ pub async fn control(
         &mut tx,
         owner,
         "history.subscription.control",
+        key,
+        &body,
+        &v,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(v)
+}
+
+pub async fn budget(
+    s: &Services,
+    owner: Uuid,
+    id: Uuid,
+    key: &str,
+    input: SubscriptionBudget,
+) -> Result<Value> {
+    if input.max_vectors == 0 {
+        return Err(Error::bad("invalid_history_budget"));
+    }
+    let body = json!({"subscription_id":id,"budget":input});
+    let (mut tx, cached) =
+        s.db.write(owner, "history.subscription.budget", key, &body)
+            .await?;
+    if let Some(v) = cached {
+        return Ok(v);
+    }
+    let updated:Option<i64>=sqlx::query_scalar("UPDATE history_subscriptions SET body=jsonb_set(body,'{definition,max_vectors}',$4),revision=revision+1 WHERE owner_id=$1 AND id=$2 AND revision=$3 AND status IN ('paused','needs_attention') RETURNING revision").bind(owner).bind(id).bind(input.expected_revision).bind(json!(input.max_vectors)).fetch_optional(&mut *tx).await?;
+    let revision =
+        updated.ok_or_else(|| Error::conflict("subscription_revision_or_state_conflict"))?;
+    let v = json!({"subscription_id":id,"revision":revision,"max_vectors":input.max_vectors,"next_action":"resume"});
+    Database::finish(
+        &mut tx,
+        owner,
+        "history.subscription.budget",
         key,
         &body,
         &v,

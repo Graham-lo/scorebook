@@ -22,3 +22,11 @@ pub trait MarketDataProvider: Send + Sync {
     ) -> ProviderFuture<'a>;
     fn exchange_info<'a>(&'a self, market: &'a str) -> ProviderFuture<'a>;
 }
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize, utoipa::ToSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum HistorySource {
+    #[default]
+    Rest,
+    MonthlyArchive,
+}

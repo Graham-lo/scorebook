@@ -95,6 +95,17 @@ impl Facade {
                 .ok_or_else(|| Error::bad("idempotency_key_required"))
         };
         match action {
+            Action::TradeCycleDetail => {
+                app::trades::cycle_detail::get(s, owner, id()?, parse(payload)?).await
+            }
+            Action::AccountLedger => {
+                app::trades::cycle_detail::ledger(s, owner, parse(payload)?).await
+            }
+            Action::HistoryRevalidate => app::history::revalidate(s, owner, id()?, key()?).await,
+            Action::AssessmentSourcePlan => {
+                app::assessment_monitor::control::select(s, owner, id()?, key()?, parse(payload)?)
+                    .await
+            }
             Action::KnowledgeSourceSlice => {
                 app::knowledge_index::source_slice(s, owner, parse(payload)?).await
             }
@@ -163,6 +174,9 @@ impl Facade {
                 app::statistics::create(s, owner, key()?, parse(payload)?).await
             }
             Action::StatisticsGet => app::statistics::get(s, owner, id()?).await,
+            Action::StatisticsGroups => {
+                app::statistics::groups(s, owner, id()?, parse(payload)?).await
+            }
             Action::StatisticsMembers => {
                 app::statistics::members(s, owner, id()?, parse(payload)?).await
             }
@@ -218,6 +232,16 @@ impl Facade {
             }
             Action::HistorySubscriptionGet => {
                 app::history_catalog::subscriptions::get(s, owner, id()?).await
+            }
+            Action::HistorySubscriptionBudget => {
+                app::history_catalog::subscriptions::budget(
+                    s,
+                    owner,
+                    id()?,
+                    key()?,
+                    parse(payload)?,
+                )
+                .await
             }
             Action::HistorySubscriptionControl => {
                 app::history_catalog::subscriptions::control(
@@ -374,9 +398,7 @@ impl Facade {
                 app::review_workflow::snooze(s, owner, id()?, key()?, parse(payload)?).await
             }
             Action::Instruments => app::instruments::list(s, parse(payload)?).await,
-            Action::Capabilities => Ok(
-                json!({"records":"available","reviews":"draft_resume_and_immutable_publish","market_binance":"contracts_only","default_market":"usd_m","image_structure_search":"available_unvalidated","image_visual_search":if s.vision.url.is_some(){"configured"}else{"not_configured"},"vector_database":"pgvector","retrieval":"hnsw_iterative_v2","historical_search":"published_coverage_only","history_plans":"available","model_knowledge_tools":"scoped_ephemeral_compute","chat_generation":"planned","exchange_accounts":"planned","formal_statistics":"exploratory_only","conditional_monitor":"not_implemented","exports":"chunked_v2"}),
-            ),
+            Action::Capabilities => app::capabilities::get(s, owner).await,
             Action::AttachmentDownload | Action::ExportDownload => {
                 Err(Error::bad("resource_operation_required"))
             }

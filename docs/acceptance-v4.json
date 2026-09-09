@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-10",
+  "branch": "codex/backend-personal-v4",
+  "baseline": "eccd1f917433b92e61179c27c4c3556cedf19f3f",
+  "implemented_scope": [
+    "P1",
+    "P2",
+    "P3",
+    "P4",
+    "P5 tools/runtime",
+    "P7"
+  ],
+  "excluded_scope": [
+    "P6",
+    "frontend",
+    "multi-user product"
+  ],
+  "schema_tested": 41,
+  "main_schema_unchanged": 19,
+  "main_release_sha256": "8326dbc57d00b49d553e94eac2132ad7ca1f271fac3604b1071501f5ce953248",
+  "checks": {
+    "workspace_tests": {
+      "passed": 85,
+      "failed": 0,
+      "ignored": 8,
+      "ignored_are_not_passed": true
+    },
+    "clippy": "passed",
+    "format": "passed",
+    "dependency_boundaries": "passed",
+    "release_build": "passed",
+    "isolated_release_http": "docs/release-smoke-v4.json"
+  },
+  "independent_evidence": {
+    "million_derived_vectors": "docs/ann-acceptance-v4.json",
+    "fifty_thousand_fills": "docs/ledger-acceptance-v4.json",
+    "binance_monthly_archive": "passed: BTCUSDT 2024-01 1h 744 bars",
+    "binance_daily_aggtrades": "passed: ADAUSDT 2024-01-01 checksum and bounded reduction",
+    "binance_b1_sample": "passed: one live sample; separate 250-day controlled test",
+    "local_bge": "passed: real encoder + PostgreSQL search + deletion",
+    "native_ocr_pipeline": "passed: synthetic in-memory chart and source-revision exclusion; 1.93s for two test runs",
+    "restic": "passed: local encrypted repo readback + mixed isolated restore + wrong password",
+    "archive_v19_upgrade": "passed: explicit format upgrade + isolated restore"
+  },
+  "not_accepted": [
+    "real Chat provider not selected/configured",
+    "real exchange account/statement reconciliation unavailable",
+    "independent backup destination and real RPO/RTO not configured",
+    "200 real screenshot quality set unavailable",
+    "60 real question set unavailable",
+    "live WebSocket TLS handshake EOF",
+    "two-hour real mixed-workload acceptance not completed",
+    "all-Binance-history coverage not built"
+  ],
+  "raw_public_market_storage": "none",
+  "production_deployed": false,
+  "all_acceptance_complete": false
+}

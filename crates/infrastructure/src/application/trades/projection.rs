@@ -112,6 +112,9 @@ pub async fn build(s: &Services, j: &Job) -> Result<Value> {
         tx.commit().await?;
         return Ok(json!({"run_id":run,"status":"superseded"}));
     }
+    // Publish closed epochs only after checking the account revision under lock.
+    // A superseded producer cannot contaminate the active append-only epoch.
+    sqlx::query("INSERT INTO trade_epoch_cycles SELECT s.owner_id,s.epoch_id,s.symbol,s.position_side,c.ordinal,c.id FROM trade_book_snapshots s JOIN trade_cycles c ON c.owner_id=s.owner_id AND c.run_id=s.run_id AND c.symbol=s.symbol AND c.position_side=s.position_side WHERE s.owner_id=$1 AND s.run_id=$2 AND c.body->>'closed_at' IS NOT NULL ON CONFLICT DO NOTHING").bind(j.owner).bind(run).execute(&mut *tx).await?;
     sqlx::query("UPDATE trade_projection_runs SET status='ready',completed_at=now() WHERE id=$1")
         .bind(run)
         .execute(&mut *tx)
@@ -177,7 +180,7 @@ pub async fn list(s: &Services, owner: Uuid, input: TradeFilter) -> Result<Value
         }
         (runs, None)
     };
-    let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',c.id,'connection_id',c.connection_id,'projection_run_id',r.id,'cycle',c.body,'ledger_revision',r.ledger_revision,'stale',r.ledger_revision<>e.ledger_revision) FROM trade_projection_segments p JOIN trade_cycles c ON c.owner_id=p.owner_id AND c.run_id=p.source_run_id AND c.symbol=p.symbol AND c.position_side=p.position_side AND c.ordinal BETWEEN p.first_ordinal AND p.last_ordinal JOIN trade_projection_runs r ON r.owner_id=p.owner_id AND r.id=p.run_id JOIN exchange_connections e ON e.owner_id=c.owner_id AND e.id=c.connection_id WHERE c.owner_id=$1 AND p.run_id=ANY($2) AND r.status='ready' AND ($3::text IS NULL OR c.symbol=$3) AND ($4::uuid IS NULL OR c.id>$4) AND ($5::timestamptz IS NULL OR COALESCE((c.body->>'closed_at')::timestamptz,'infinity')>=$5) AND ($6::timestamptz IS NULL OR COALESCE((c.body->>'opened_at')::timestamptz,'-infinity')<$6) ORDER BY c.id LIMIT 101").bind(owner).bind(&runs).bind(input.symbol).bind(after).bind(input.start_at).bind(input.end_at).fetch_all(&s.db.pool).await?;
+    let rows:Vec<Value>=sqlx::query_scalar("WITH members AS(SELECT s.owner_id,s.run_id,c.cycle_id FROM trade_book_snapshots s JOIN trade_epoch_cycles c ON c.owner_id=s.owner_id AND c.epoch_id=s.epoch_id AND c.symbol=s.symbol AND c.position_side=s.position_side AND c.ordinal<=s.closed_through WHERE s.owner_id=$1 AND s.run_id=ANY($2) UNION ALL SELECT owner_id,run_id,open_cycle_id FROM trade_book_snapshots WHERE owner_id=$1 AND run_id=ANY($2) AND open_cycle_id IS NOT NULL), page AS MATERIALIZED(SELECT c.id,p.run_id FROM members p JOIN trade_cycles c ON c.owner_id=p.owner_id AND c.id=p.cycle_id JOIN trade_projection_runs r ON r.owner_id=p.owner_id AND r.id=p.run_id WHERE r.status='ready' AND ($3::text IS NULL OR c.symbol=$3) AND ($4::uuid IS NULL OR c.id>$4) AND ($5::timestamptz IS NULL OR COALESCE((c.body->>'closed_at')::timestamptz,'infinity')>=$5) AND ($6::timestamptz IS NULL OR COALESCE((c.body->>'opened_at')::timestamptz,'-infinity')<$6) ORDER BY c.id LIMIT 101) SELECT jsonb_build_object('id',c.id,'connection_id',c.connection_id,'projection_run_id',r.id,'cycle',c.body,'ledger_revision',r.ledger_revision,'stale',r.ledger_revision<>e.ledger_revision) FROM page p JOIN trade_cycles c ON c.owner_id=$1 AND c.id=p.id JOIN trade_projection_runs r ON r.owner_id=$1 AND r.id=p.run_id JOIN exchange_connections e ON e.owner_id=$1 AND e.id=c.connection_id ORDER BY c.id").bind(owner).bind(&runs).bind(input.symbol).bind(after).bind(input.start_at).bind(input.end_at).fetch_all(&s.db.pool).await?;
     let more = rows.len() > 100;
     let items: Vec<_> = rows.into_iter().take(100).collect();
     let next = if more {

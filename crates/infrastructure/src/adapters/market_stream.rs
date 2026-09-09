@@ -116,7 +116,11 @@ async fn run(entry: Arc<Entry>, url: String) {
         )
         .await;
         #[cfg(test)]
-        match &socket { Err(_) => eprintln!("public WebSocket connect timeout"), Ok(Err(e)) => eprintln!("public WebSocket connect error: {e}"), _ => () }
+        match &socket {
+            Err(_) => eprintln!("public WebSocket connect timeout"),
+            Ok(Err(e)) => eprintln!("public WebSocket connect error: {e}"),
+            _ => (),
+        }
         if let Ok(Ok((mut socket, _))) = socket {
             {
                 let mut b = entry.buffer.lock().unwrap();

@@ -104,3 +104,28 @@ pub async fn members(s: &Services, owner: Uuid, id: Uuid, f: MemberFilter) -> Re
 }
 
 pub mod baseline;
+
+pub async fn groups(s: &Services, owner: Uuid, id: Uuid, f: GroupFilter) -> Result<Value> {
+    let ready: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM set_runs WHERE owner_id=$1 AND id=$2 AND status='ready')",
+    )
+    .bind(owner)
+    .bind(id)
+    .fetch_one(&s.db.pool)
+    .await?;
+    if !ready {
+        return Err(Error::conflict("statistics_snapshot_not_ready"));
+    }
+    if f.cursor
+        .as_ref()
+        .is_some_and(|v| v.len() != 64 || !v.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err(Error::bad("invalid_group_cursor"));
+    }
+    let rows:Vec<Value>=sqlx::query_scalar("SELECT body FROM set_group_metrics WHERE owner_id=$1 AND run_id=$2 AND ($3::text IS NULL OR signature>$3) ORDER BY signature LIMIT 101").bind(owner).bind(id).bind(f.cursor).fetch_all(&s.db.pool).await?;
+    let more = rows.len() > 100;
+    let items: Vec<_> = rows.into_iter().take(100).collect();
+    Ok(
+        json!({"set_snapshot_id":id,"next_cursor":if more{items.last().map(|v|v["signature"].clone())}else{None},"items":items}),
+    )
+}

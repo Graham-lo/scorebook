@@ -20,6 +20,7 @@ type Services = Arc<dyn Backend>;
 mod error;
 use error::{Error, Result};
 mod contract;
+mod response_contract;
 pub use contract::openapi;
 pub use scorebook_core::api::dto as types;
 pub fn router(s: Services) -> Router {
@@ -40,6 +41,10 @@ pub fn router(s: Services) -> Router {
         .route(
             "/v1/history/indexes",
             get(history_indexes).post(history_index),
+        )
+        .route(
+            "/v1/history/indexes/{id}/revalidate",
+            post(history_revalidate),
         )
         .route("/v1/history/plans", post(history_plan_create))
         .route("/v1/history/plans/{id}", get(history_plan_get))
@@ -85,6 +90,7 @@ pub fn router(s: Services) -> Router {
         .route("/v1/similarity/feedback", post(similar_feedback))
         .route("/v1/jobs/{id}", get(job_get))
         .route("/v1/jobs/{id}/retry", post(job_retry))
+        .route("/v1/jobs/{id}/assessment-source", post(assessment_source))
         .route("/v1/calls/{id}/outcome-revisions", post(outcome_revision))
         .route("/v1/exports", post(export_create))
         .route("/v1/exports/{id}/manifest", get(export_manifest))
@@ -278,7 +284,7 @@ async fn tool_call(
 }
 async fn criteria_list() -> Json<Value> {
     envelope(
-        json!({"version":"criteria-v1","templates":["T0","T1","T2","T3","T4","T5"],"automatic_templates":["T0","T1","T2","T4","T5"],"T3_automatic":"not_implemented","default":"T0","path":"unknown","confidence":null,"numeric":"decimal34-half-even","crypto_default_hours":72}),
+        json!({"version":"criteria-v1","templates":["T0","T1","T2","T3","T4","T5"],"automatic_templates":["T0","T1","T2","T4","T5"],"T3_automatic":"explicit_trigger_rule_required","default":"T0","path":"unknown","confidence":null,"numeric":"decimal34-half-even","crypto_default_hours":72}),
     )
 }
 

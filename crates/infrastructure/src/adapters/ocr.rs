@@ -44,9 +44,10 @@ pub async fn recognize(bytes: Vec<u8>) -> Result<OcrResult> {
         .take()
         .ok_or_else(|| Error::transient("ocr_stdout_unavailable"))?;
     let task = async {
-        let write = async {
+        let write = async move {
             stdin.write_all(&bytes).await?;
             stdin.shutdown().await?;
+            drop(stdin); // ChildStdin shutdown does not close the pipe; OCR waits for EOF.
             Ok::<_, std::io::Error>(())
         };
         let read = async {

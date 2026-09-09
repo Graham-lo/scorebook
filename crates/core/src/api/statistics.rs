@@ -63,3 +63,9 @@ pub struct BaselineInput {
     pub source_plan: String,
     pub calendar: String,
 }
+
+#[derive(Clone, Serialize, Deserialize, ToSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GroupFilter {
+    pub cursor: Option<String>,
+}

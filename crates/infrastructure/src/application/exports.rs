@@ -57,17 +57,21 @@ pub(super) const TABLES: &[&str] = &[
     "trade_fills",
     "trade_books",
     "account_ledger_entries",
+    "account_asset_totals",
     "position_seeds",
     "trade_projection_runs",
     "trade_cycles",
     "trade_cycle_allocations",
     "trade_projection_heads",
-    "trade_projection_segments",
+    "trade_epoch_cycles",
+    "trade_book_snapshots",
     "trade_projection_checkpoints",
     "trade_reconciliations",
     "execution_links",
     "execution_link_fills",
     "jobs",
+    "assessment_source_plans",
+    "assessment_source_decisions",
     "trigger_watches",
     "trigger_checkpoints",
     "trigger_events",
@@ -79,6 +83,7 @@ pub(super) const TABLES: &[&str] = &[
     "set_definitions",
     "set_runs",
     "set_sample_members",
+    "set_group_metrics",
     "verdict_requests",
     "verdict_events",
     "baseline_runs",
@@ -93,8 +98,10 @@ pub(super) const TABLES: &[&str] = &[
     "exchange_export_resolutions",
     "history_indexes",
     "history_plans",
+    "history_plan_scopes",
     "history_subscriptions",
     "history_subscription_plans",
+    "history_subscription_cursors",
     "review_drafts",
     "review_preferences",
     "review_outcome_refs",
@@ -102,7 +109,7 @@ pub(super) const TABLES: &[&str] = &[
     "request_refs",
     "tombstones",
 ];
-pub const ARCHIVE_SCHEMA: i64 = 32;
+pub const ARCHIVE_SCHEMA: i64 = 41;
 const CHUNK_BYTES: usize = 4 * 1024 * 1024;
 pub async fn request(s: &Services, owner: Uuid, key: &str) -> Result<Value> {
     let body = json!({});
@@ -701,6 +708,28 @@ pub async fn restore(s: &Services, path: &Path) -> anyhow::Result<Value> {
     sqlx::query("UPDATE assessments a SET state='queued' FROM jobs j WHERE a.owner_id=$1 AND a.job_id=j.id AND j.status='queued'").bind(owner).execute(&mut *tx).await?;
     sqlx::query("UPDATE history_indexes i SET status='queued',coverage=NULL,completed_at=NULL FROM public_market.generations g WHERE i.owner_id=$1 AND i.generation_id=g.id AND g.status<>'ready'").bind(owner).execute(&mut *tx).await?;
     sqlx::query("UPDATE jobs j SET status='queued',run_after=now(),generation=generation+1 FROM history_indexes i WHERE i.owner_id=$1 AND i.id=j.id AND i.status='queued'").bind(owner).execute(&mut *tx).await?;
+    if manifest.get("upgrade").is_some() {
+        // Offline v19 migration applies the same explicit cutover as a live schema upgrade.
+        sqlx::query("UPDATE history_indexes SET body=jsonb_set(body,'{source}','\"rest\"') WHERE owner_id=$1 AND NOT body ? 'source'").bind(owner).execute(&mut *tx).await?;
+        sqlx::query("UPDATE history_plans SET body=jsonb_set(body,'{source}','\"rest\"') WHERE owner_id=$1 AND NOT body ? 'source'").bind(owner).execute(&mut *tx).await?;
+        sqlx::query("UPDATE public_market.generations g SET body=jsonb_set(g.body,'{source}','\"rest\"') FROM history_indexes i WHERE i.owner_id=$1 AND i.generation_id=g.id AND NOT g.body ? 'source'").bind(owner).execute(&mut *tx).await?;
+        sqlx::query("UPDATE jobs SET status='cancelled',generation=generation+1,lease_owner=NULL,lease_until=NULL,error_code='retired_model_requires_v2_rebuild' WHERE owner_id=$1 AND status IN('queued','running','retry_wait','awaiting_input','blocked_capability') AND ((kind='embed' AND body->>'model_id'='candle-profile-v1') OR (kind IN('history.index','history.plan') AND body->'models' ? 'candle-profile-v1'))").bind(owner).execute(&mut *tx).await?;
+        sqlx::query("UPDATE history_plans p SET status='cancelled' FROM jobs j WHERE p.owner_id=$1 AND p.id=j.id AND j.error_code='retired_model_requires_v2_rebuild'").bind(owner).execute(&mut *tx).await?;
+        let reindex = super::jobs::enqueue_tx(
+            &mut tx,
+            owner,
+            "images.reindex",
+            "v19-archive-v4-cutover",
+            json!({"protocol":"chart-match-v2"}),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e.code))?;
+        sqlx::query("INSERT INTO image_reindex_runs(id,owner_id) VALUES($1,$2)")
+            .bind(reindex)
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("INSERT INTO storage_objects(owner_id,id,state,created_at) SELECT owner_id,id,'ready',uploaded_at FROM attachments WHERE owner_id=$1").bind(owner).execute(&mut *tx).await?;
     sqlx::query("SELECT setval(pg_get_serial_sequence('events','sequence'),GREATEST(COALESCE((SELECT max(sequence) FROM events),0),1))").execute(&mut *tx).await?;
     sqlx::query(

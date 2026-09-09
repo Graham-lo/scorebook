@@ -6,6 +6,7 @@ pub struct TextEncoding {
     pub vectors: Vec<Vec<f32>>,
 }
 pub trait TextEncoder: Send + Sync {
+    fn configured(&self) -> bool;
     fn encode(&self, texts: Vec<String>) -> AppFuture<'_, TextEncoding>;
 }
 pub const MODEL: &str = "bge-m3-dense-v1";

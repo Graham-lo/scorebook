@@ -9,10 +9,12 @@ fn id(v: &Value) -> Result<Uuid> {
 }
 pub fn effect(name: &str) -> &'static str {
     match name {
-        "publish_review" | "revise_outcome" | "decide_verdict" | "transition_playbook" => {
-            "mutation"
-        }
-        "analyze_chart" | "search_charts" | "create_statistics" | "create_baseline" => "compute",
+        "publish_review" | "decide_verdict" | "create_history_subscription" => "mutation",
+        "analyze_chart"
+        | "search_charts"
+        | "create_statistics"
+        | "create_baseline"
+        | "create_history_plan" => "compute",
         _ => "read",
     }
 }
@@ -78,6 +80,27 @@ pub fn catalog() -> Vec<ToolDefinition> {
         ),
         ("get_statistics", "读取已冻结统计结果", ident.clone()),
         (
+            "list_account_ledger",
+            "分页读取资金费、转账等原币种账本流水",
+            schema::<scorebook_core::api::trades::TradeFilter>(),
+        ),
+        (
+            "read_trade_cycle",
+            "读取轮次及跨增量版本的全部成交分摊",
+            object(
+                json!({"id":{"type":"string","format":"uuid"},"filter":schema::<scorebook_core::api::trades::CycleDetailFilter>()}),
+                vec!["id", "filter"],
+            ),
+        ),
+        (
+            "statistics_groups",
+            "分页读取同一快照的完整分组指标",
+            object(
+                json!({"id":{"type":"string","format":"uuid"},"filter":schema::<scorebook_core::api::statistics::GroupFilter>()}),
+                vec!["id", "filter"],
+            ),
+        ),
+        (
             "statistics_members",
             "分页核对同一统计快照的组成记录",
             object(
@@ -123,9 +146,34 @@ pub fn catalog() -> Vec<ToolDefinition> {
             schema::<scorebook_core::api::history_catalog::HistoryEstimateInput>(),
         ),
         (
+            "create_history_plan",
+            "按明确市场、周期、日期范围创建有界历史索引任务；只能报告实际发布范围",
+            schema::<scorebook_core::api::history_plans::HistoryPlanRequest>(),
+        ),
+        (
+            "get_history_plan",
+            "读取历史索引计划进度和缺口",
+            ident.clone(),
+        ),
+        (
+            "create_history_subscription",
+            "用户确认容量预算后订阅持续增量历史；须先估算",
+            schema::<scorebook_core::api::history_catalog::HistorySubscriptionInput>(),
+        ),
+        (
+            "get_history_subscription",
+            "读取订阅范围、容量阻塞与进度",
+            ident.clone(),
+        ),
+        (
+            "knowledge_index_status",
+            "读取知识库覆盖与待索引数量",
+            object(json!({}), vec![]),
+        ),
+        (
             "get_market_summary",
             "内存读取币安行情并返回计算摘要，不返回原始K线",
-            schema::<scorebook_core::api::dto::MarketRequest>(),
+            schema::<scorebook_core::domain::chart::ChartRequest>(),
         ),
         (
             "chart_reference",
@@ -188,6 +236,12 @@ pub async fn execute(
     if !catalog().iter().any(|t| t.name == call.name) {
         return Err(Error::bad("unknown_chat_tool"));
     }
+    if matches!(
+        call.name.as_str(),
+        "create_history_plan" | "create_history_subscription"
+    ) {
+        p.require("history.build")?;
+    }
     let args = call.arguments.clone();
     let key = format!("chat:{}:{}", j.id, call.id);
     if effect(&call.name) == "mutation" {
@@ -240,6 +294,18 @@ pub async fn execute(
             .await?;
             json!({"record":super::super::calls::get(s,p.owner,id).await?,"source":source})
         }
+        "list_account_ledger" => {
+            super::super::trades::cycle_detail::ledger(s, p.owner, parse(args)?).await?
+        }
+        "read_trade_cycle" => {
+            super::super::trades::cycle_detail::get(
+                s,
+                p.owner,
+                id(&args)?,
+                parse(args["filter"].clone())?,
+            )
+            .await?
+        }
         "list_trades" => super::super::trades::fills(s, p.owner, parse(args)?).await?,
         "list_trade_cycles" => {
             super::super::trades::projection::list(s, p.owner, parse(args)?).await?
@@ -247,6 +313,15 @@ pub async fn execute(
         "list_imports" => super::super::trades::imports(s, p.owner, None, parse(args)?).await?,
         "list_exchange_connections" => {
             super::super::trades::connections(s, p.owner, parse(args)?).await?
+        }
+        "statistics_groups" => {
+            super::super::statistics::groups(
+                s,
+                p.owner,
+                id(&call.arguments)?,
+                parse(call.arguments["filter"].clone())?,
+            )
+            .await?
         }
         "get_statistics" => {
             let id = id(&args)?;
@@ -283,6 +358,18 @@ pub async fn execute(
         "history_catalog" => super::super::history_catalog::catalog(s, parse(args)?).await?,
         "history_coverage" => super::super::history::coverage(s, parse(args)?).await?,
         "estimate_history" => super::super::history_catalog::estimate(s, parse(args)?).await?,
+        "create_history_plan" => {
+            super::super::history_plans::create(s, p.owner, &key, parse(args)?).await?
+        }
+        "get_history_plan" => super::super::history_plans::get(s, p.owner, id(&args)?).await?,
+        "create_history_subscription" => {
+            super::super::history_catalog::subscriptions::create(s, p.owner, &key, parse(args)?)
+                .await?
+        }
+        "get_history_subscription" => {
+            super::super::history_catalog::subscriptions::get(s, p.owner, id(&args)?).await?
+        }
+        "knowledge_index_status" => super::super::knowledge_index::status(s, p.owner).await?,
         "get_market_summary" => {
             p.require("search.compute")?;
             let v = super::super::market::data(s, &parse(args)?).await?;

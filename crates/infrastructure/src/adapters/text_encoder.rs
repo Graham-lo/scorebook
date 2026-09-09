@@ -33,6 +33,9 @@ impl LocalTextEncoder {
     }
 }
 impl TextEncoder for LocalTextEncoder {
+    fn configured(&self) -> bool {
+        self.url.is_some()
+    }
     fn encode(&self, texts: Vec<String>) -> AppFuture<'_, TextEncoding> {
         Box::pin(async move {
             let url = self.url.as_ref().ok_or_else(|| {

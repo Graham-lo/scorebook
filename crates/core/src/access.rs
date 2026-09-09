@@ -38,6 +38,7 @@ pub fn route_permission(method: &str, path: &str) -> &'static str {
         || path.starts_with("/v1/exports")
         || path.starts_with("/v1/deletions")
         || path.ends_with("/retry")
+        || path.ends_with("/assessment-source")
     {
         "maintenance"
     } else if path.starts_with("/v1/chat/")
@@ -54,7 +55,7 @@ pub fn route_permission(method: &str, path: &str) -> &'static str {
     } else if path.starts_with("/v1/history/plans")
         || path.starts_with("/v1/history/subscriptions")
         || path == "/v1/history/catalog/refresh"
-        || path == "/v1/history/indexes"
+        || path.starts_with("/v1/history/indexes")
         || path == "/v1/history/archive-catalog"
     {
         "history.build"

@@ -268,3 +268,5 @@ pub async fn control(
 
 mod csv_mapping;
 pub mod historical_export;
+
+pub mod cycle_detail;

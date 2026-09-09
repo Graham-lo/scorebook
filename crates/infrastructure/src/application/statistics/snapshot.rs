@@ -19,7 +19,6 @@ pub async fn build(s: &Services, j: &Job) -> Result<Value> {
             .execute(&mut *tx)
             .await?;
         sqlx::query("WITH ranked AS(SELECT ordinal,row_number() OVER(PARTITION BY COALESCE(episode_id,call_id),signature ORDER BY submitted_at,call_id,claim_no) AS n FROM set_sample_members WHERE owner_id=$1 AND run_id=$2 AND eligible) UPDATE set_sample_members m SET representative=true FROM ranked r WHERE m.owner_id=$1 AND m.run_id=$2 AND m.ordinal=r.ordinal AND r.n=1").bind(j.owner).bind(j.id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE set_runs SET status='frozen',source_snapshot_at=statement_timestamp() WHERE owner_id=$1 AND id=$2").bind(j.owner).bind(j.id).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO job_targets SELECT DISTINCT owner_id,run_id,'call',call_id FROM set_sample_members WHERE owner_id=$1 AND run_id=$2 ON CONFLICT DO NOTHING").bind(j.owner).bind(j.id).execute(&mut *tx).await?;
         tx.commit().await?;
     }
@@ -27,16 +26,27 @@ pub async fn build(s: &Services, j: &Job) -> Result<Value> {
     let counts:Value=sqlx::query_scalar("SELECT jsonb_build_object('call_count',count(DISTINCT call_id),'claim_count',count(*),'episode_count',count(DISTINCT COALESCE(episode_id,call_id)),'representative_count',count(*) FILTER(WHERE representative),'excluded_count',count(*) FILTER(WHERE NOT eligible),'result_filter_excluded_count',count(*) FILTER(WHERE NOT selected),'voided_count',count(*) FILTER(WHERE exclusion_reason='voided'),'deleted_count',0) FROM set_sample_members WHERE owner_id=$1 AND run_id=$2").bind(j.owner).bind(j.id).fetch_one(&mut *tx).await?;
     let states:Value=sqlx::query_scalar("WITH names(state) AS(VALUES('realized'),('unrealized'),('not_triggered'),('pending'),('no_criteria'),('insufficient_data')) SELECT jsonb_object_agg(n.state,(SELECT count(*) FROM set_sample_members m WHERE m.owner_id=$1 AND m.run_id=$2 AND m.state=n.state)) FROM names n").bind(j.owner).bind(j.id).fetch_one(&mut *tx).await?;
     let processing:Value=sqlx::query_scalar("SELECT COALESCE(jsonb_object_agg(state,n),'{}') FROM(SELECT COALESCE(processing_state,'absent') AS state,count(*) AS n FROM set_sample_members WHERE owner_id=$1 AND run_id=$2 GROUP BY processing_state) p").bind(j.owner).bind(j.id).fetch_one(&mut *tx).await?;
-    let groups: Vec<Value> = sqlx::query_scalar(include_str!("groups.sql"))
+    let insert = format!(
+        "INSERT INTO set_group_metrics(owner_id,run_id,signature,body) SELECT $1,$2,v->>'signature',v FROM ({}) AS computed(v) ON CONFLICT(owner_id,run_id,signature) DO UPDATE SET body=EXCLUDED.body",
+        include_str!("groups.sql")
+    );
+    sqlx::query(&insert)
         .bind(j.owner)
         .bind(j.id)
-        .fetch_all(&mut *tx)
+        .execute(&mut *tx)
         .await?;
-    let stats = json!({"set_snapshot_id":j.id,"counts":counts,"states":states,"processing_states":processing,"groups":groups,"result_policy":"current_formal_head","comparison_policy":input.comparison_policy,"calendar":input.calendar,"selection":if input.filters.result_states.is_empty(){"unconditioned"}else{"result_conditioned"},"members_url":format!("/v1/statistics/runs/{}/members",j.id),"wilson_interval":null,"wilson_reason":"independence_not_established"});
+    let group_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM set_group_metrics WHERE owner_id=$1 AND run_id=$2",
+    )
+    .bind(j.owner)
+    .bind(j.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let groups:Vec<Value>=sqlx::query_scalar("SELECT body FROM set_group_metrics WHERE owner_id=$1 AND run_id=$2 ORDER BY signature LIMIT 100").bind(j.owner).bind(j.id).fetch_all(&mut *tx).await?;
+    let stats = json!({"set_snapshot_id":j.id,"counts":counts,"states":states,"processing_states":processing,"groups":groups,"group_count":group_count,"groups_complete":group_count<=100,"groups_url":format!("/v1/statistics/runs/{}/groups",j.id),"result_policy":"current_formal_head","comparison_policy":input.comparison_policy,"calendar":input.calendar,"selection":if input.filters.result_states.is_empty(){"unconditioned"}else{"result_conditioned"},"members_url":format!("/v1/statistics/runs/{}/members",j.id),"wilson_interval":null,"wilson_reason":"independence_not_established"});
     sqlx::query("UPDATE set_runs SET status='ready',stats=$3,completed_at=now() WHERE owner_id=$1 AND id=$2").bind(j.owner).bind(j.id).bind(&stats).execute(&mut *tx).await?;
     if input.filters.result_states.is_empty() {
-        super::verdicts::schedule(&mut tx, j.owner, j.id, row.get("definition_id"), &groups)
-            .await?;
+        super::verdicts::schedule(&mut tx, j.owner, j.id, row.get("definition_id")).await?;
     }
     tx.commit().await?;
     Ok(json!({"set_snapshot_id":j.id,"status":"ready","stats":stats}))

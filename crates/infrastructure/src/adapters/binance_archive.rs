@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 #[derive(Clone)]
 pub struct BinanceArchive {
+    trade_slots: std::sync::Arc<tokio::sync::Semaphore>,
     client: reqwest::Client,
 }
 #[derive(Default, Deserialize, Serialize)]
@@ -43,8 +44,9 @@ pub struct ArchiveBars {
 impl BinanceArchive {
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
+            trade_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
+                .timeout(std::time::Duration::from_secs(180))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
         })
@@ -233,3 +235,5 @@ pub fn parse_klines(bytes: Vec<u8>, start: DateTime<Utc>, end: DateTime<Utc>) ->
     }
     Ok(bars)
 }
+
+mod trades;

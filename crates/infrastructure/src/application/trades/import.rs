@@ -1,7 +1,7 @@
 use super::*;
 use scorebook_core::domain::trade_ledger::{number, text, validate_fill};
 use sqlx::{Postgres, Transaction};
-fn canonical(f: &mut FillInput) -> Result<()> {
+pub(super) fn canonical(f: &mut FillInput) -> Result<()> {
     validate_fill(f)?;
     f.price = text(&number(&f.price)?);
     f.quantity = text(&number(&f.quantity)?);
@@ -141,18 +141,7 @@ async fn apply(
         }
     }
     for entry in &mut input.ledger_entries {
-        entry.amount = text(&number(&entry.amount)?);
-        if entry.transaction_id.is_empty()
-            || entry.transaction_id.len() > 100
-            || entry.kind.is_empty()
-            || entry.kind.len() > 64
-            || entry.asset.is_empty()
-            || entry.asset.len() > 20
-            || entry.occurred_at < input.start_at
-            || entry.occurred_at >= input.end_at
-        {
-            return Err(Error::bad("invalid_ledger_entry"));
-        }
+        canonical_entry(entry, input.start_at, input.end_at)?;
     }
     input.fills.sort_by(|a, b| {
         a.symbol
@@ -212,7 +201,21 @@ async fn apply(
         entries+=sqlx::query("INSERT INTO account_ledger_entries(id,owner_id,connection_id,import_id,transaction_id,kind,symbol,asset,amount,occurred_at,trade_id,body) SELECT gen_random_uuid(),$1,$2,$3,payload->>'transaction_id',payload->>'kind',payload->>'symbol',payload->>'asset',(payload->>'amount')::numeric,(payload->>'occurred_at')::timestamptz,payload->>'trade_id',payload FROM trade_stage ON CONFLICT(owner_id,connection_id,kind,transaction_id) DO NOTHING").bind(owner).bind(input.connection_id).bind(id).execute(&mut *tx).await?.rows_affected();
     }
     sqlx::query("INSERT INTO trade_books SELECT DISTINCT owner_id,connection_id,symbol,position_side,settlement_asset FROM trade_fills WHERE owner_id=$1 AND import_id=$2 ON CONFLICT DO NOTHING").bind(owner).bind(id).execute(&mut *tx).await?;
-    let revision:i64=sqlx::query_scalar("UPDATE exchange_connections SET ledger_revision=ledger_revision+$3 WHERE owner_id=$1 AND id=$2 RETURNING ledger_revision").bind(owner).bind(input.connection_id).bind(if fills+entries>0{1i64}else{0}).fetch_one(&mut *tx).await?;
+    // Update account aggregates only from rows inserted by this batch, never from
+    // replayed duplicates. Knowledge citations now read O(assets), not full ledgers.
+    sqlx::query("INSERT INTO account_asset_totals SELECT owner_id,connection_id,'fill_realized_pnl',settlement_asset,COALESCE(sum(realized_pnl),0),count(*),count(*) FILTER(WHERE realized_pnl IS NULL) FROM trade_fills WHERE owner_id=$1 AND import_id=$2 GROUP BY owner_id,connection_id,settlement_asset UNION ALL SELECT owner_id,connection_id,'fill_commission',commission_asset,sum(commission),count(*),0 FROM trade_fills WHERE owner_id=$1 AND import_id=$2 GROUP BY owner_id,connection_id,commission_asset UNION ALL SELECT owner_id,connection_id,'income:'||kind,asset,sum(amount),count(*),0 FROM account_ledger_entries WHERE owner_id=$1 AND import_id=$2 GROUP BY owner_id,connection_id,kind,asset ON CONFLICT(owner_id,connection_id,kind,asset) DO UPDATE SET amount=account_asset_totals.amount+EXCLUDED.amount,entry_count=account_asset_totals.entry_count+EXCLUDED.entry_count,missing_count=account_asset_totals.missing_count+EXCLUDED.missing_count").bind(owner).bind(id).execute(&mut *tx).await?;
+    let revision: i64 = if fills + entries > 0 {
+        sqlx::query_scalar("UPDATE exchange_connections SET ledger_revision=ledger_revision+1 WHERE owner_id=$1 AND id=$2 RETURNING ledger_revision").bind(owner).bind(input.connection_id).fetch_one(&mut *tx).await?
+    } else {
+        sqlx::query_scalar(
+            "SELECT ledger_revision FROM exchange_connections WHERE owner_id=$1 AND id=$2",
+        )
+        .bind(owner)
+        .bind(input.connection_id)
+        .fetch_one(&mut *tx)
+        .await?
+    };
+
     sqlx::query("UPDATE trade_imports SET status='complete',inserted_fills=$2,inserted_entries=$3,completed_at=now() WHERE id=$1").bind(id).bind(fills as i64).bind(entries as i64).execute(&mut *tx).await?;
     let job = if checkpoint.project(fills + entries > 0) {
         Some(
@@ -295,4 +298,27 @@ pub async fn csv(s: &Services, owner: Uuid, key: &str, input: CsvImportInput) ->
         "user_declared_csv",
     )
     .await
+}
+
+pub(super) fn canonical_entry(
+    entry: &mut LedgerEntryInput,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<()> {
+    entry.amount = text(&number(&entry.amount)?);
+    if entry.transaction_id.is_empty()
+        || entry.transaction_id.len() > 100
+        || entry.kind.is_empty()
+        || entry.kind.len() > 64
+        || entry.asset.is_empty()
+        || entry.asset.len() > 20
+        || entry.occurred_at < start
+        || entry.occurred_at >= end
+    {
+        return Err(Error::bad("invalid_ledger_entry"));
+    }
+    if let Some(symbol) = entry.symbol.as_deref().filter(|s| !s.is_empty()) {
+        super::super::history_catalog::validate_symbol(symbol)?;
+    }
+    Ok(())
 }

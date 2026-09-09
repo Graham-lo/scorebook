@@ -9,12 +9,14 @@ pub async fn data(s: &super::Services, input: &ChartRequest) -> Result<Value> {
         return Err(Error::bad("contract_market_required"));
     }
     let seconds = super::history::interval_seconds(&input.interval)?;
-    if (input.end_at - input.start_at).num_seconds() / seconds > 2000 {
+    if input.start_at >= input.end_at
+        || (input.end_at - input.start_at).num_seconds() / seconds > 2000
+    {
         return Err(Error::bad("interactive_market_limit_2000_bars"));
     }
-    let mut result = s
-        .market
-        .klines(
+    let mut result = if input.source == scorebook_core::market::HistorySource::MonthlyArchive {
+        let (bars, sources) = super::history_catalog::archives::fetch_range(
+            s,
             &input.market,
             &input.symbol,
             &input.interval,
@@ -22,6 +24,21 @@ pub async fn data(s: &super::Services, input: &ChartRequest) -> Result<Value> {
             input.end_at,
         )
         .await?;
+        let complete = bars.first().is_some_and(|b| b.start == input.start_at)
+            && bars.last().is_some_and(|b| b.end == input.end_at)
+            && bars.windows(2).all(|w| w[0].end == w[1].start);
+        json!({"provider":"binance","source":"monthly_archive","market":input.market,"instrument":input.symbol,"interval":input.interval,"bars":bars,"coverage_complete":complete,"sources":sources})
+    } else {
+        s.market
+            .klines(
+                &input.market,
+                &input.symbol,
+                &input.interval,
+                input.start_at,
+                input.end_at,
+            )
+            .await?
+    };
     result["storage_policy"] = json!("ephemeral;not_persisted");
     Ok(result)
 }

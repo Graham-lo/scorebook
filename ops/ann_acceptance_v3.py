@@ -28,13 +28,13 @@ try:
     for i,vector in enumerate(arr):
      n=offset+i;encoded='['+','.join(format(float(x),'.6g') for x in vector)+']'
      start=epoch+datetime.timedelta(seconds=n*60);end=start+datetime.timedelta(hours=64)
-     copy.write_row((uuid.UUID(int=n+1),'usd_m','BTCUSDT' if n%10 else 'ETHUSDT','1h',start,end,64,'candle-geometry-v2',encoded,'synthetic-'+str(n),'chart-raster-v1',True))
+     copy.write_row((uuid.UUID(int=n+1),'usd_m','BTCUSDT' if n%10 else 'ETHUSDT','1h',start,end,64,'candle-profile-v1',encoded,'synthetic-'+str(n),'chart-raster-v1',True))
      if n in {i*19997 for i in range(40)}:probes.append(encoded)
     if offset%100000==0:print(json.dumps({'phase':'insert','rows':offset+length}),flush=True)
   result['copy_seconds']=round(time.monotonic()-started,2)
   c.execute("SET maintenance_work_mem='512MB'");c.execute('SET max_parallel_maintenance_workers=0');started=time.monotonic()
   print(json.dumps({'phase':'build_hnsw','rows':N}),flush=True)
-  c.execute("CREATE INDEX public_profile_ann ON public_market.features USING hnsw ((embedding::vector(192)) vector_cosine_ops) WHERE model_id='candle-geometry-v2' AND published")
+  c.execute("CREATE INDEX public_profile_ann ON public_market.features USING hnsw ((embedding::vector(192)) vector_cosine_ops) WHERE model_id='candle-profile-v1' AND published")
   result['index_seconds']=round(time.monotonic()-started,2);c.execute('ANALYZE public_market.features')
   configure(c)
   plan=c.execute('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) '+query,params(probes[0])).fetchone()[0]

@@ -36,3 +36,10 @@ pub struct ArchiveCatalogInput {
     pub interval: String,
     pub cursor: Option<String>,
 }
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionBudget {
+    pub expected_revision: i64,
+    pub max_vectors: u64,
+}

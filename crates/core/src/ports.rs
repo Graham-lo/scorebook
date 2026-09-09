@@ -6,6 +6,7 @@ use uuid::Uuid;
 pub type AppFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
+    AssessmentSourcePlan,
     KnowledgeSourceSlice,
     ImageReindex,
     ImageIndexStatus,
@@ -33,6 +34,7 @@ pub enum Action {
     StatisticsCreate,
     StatisticsGet,
     StatisticsMembers,
+    StatisticsGroups,
     BaselineCreate,
     BaselineGet,
     BaselineSamples,
@@ -47,6 +49,8 @@ pub enum Action {
     TradeFills,
     TradeSeed,
     TradeCycles,
+    TradeCycleDetail,
+    AccountLedger,
     TradeReconcile,
     ExecutionLink,
     ExchangeSync,
@@ -57,6 +61,7 @@ pub enum Action {
     HistorySubscribe,
     HistorySubscriptionGet,
     HistorySubscriptionControl,
+    HistorySubscriptionBudget,
     ArchiveCatalog,
     ChartAnalyze,
     ChartSearchCreate,
@@ -92,6 +97,7 @@ pub enum Action {
     MarketData,
     MarketChart,
     HistoryIndex,
+    HistoryRevalidate,
     HistorySearch,
     HistoryIndexes,
     HistoryCoverage,

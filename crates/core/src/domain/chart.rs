@@ -6,6 +6,8 @@ use utoipa::ToSchema;
 #[derive(Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChartRequest {
+    #[serde(default)]
+    pub source: crate::market::HistorySource,
     pub symbol: String,
     #[serde(default = "market")]
     pub market: String,

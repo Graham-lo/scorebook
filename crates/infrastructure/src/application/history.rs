@@ -297,6 +297,16 @@ async fn publish_index(
         if changed.rows_affected() != 1 {
             return Err(Error::conflict("generation_lease_lost"));
         }
+        // Serialize publication for an instrument/interval, then replace active
+        // exact-window versions atomically. Saved historical IDs remain resolvable.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,12))")
+            .bind(format!(
+                "{}:{}:{}",
+                coverage["market"], coverage["symbol"], coverage["interval"]
+            ))
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE public_market.features old SET published=false FROM public_market.features fresh JOIN public_market.generation_features l ON l.feature_id=fresh.id AND l.generation_id=$1 WHERE old.published AND old.id<>fresh.id AND old.market=fresh.market AND old.symbol=fresh.symbol AND old.timeframe=fresh.timeframe AND old.start_at=fresh.start_at AND old.end_at=fresh.end_at AND old.bars_count=fresh.bars_count AND old.model_id=fresh.model_id AND old.render_version=fresh.render_version").bind(generation).execute(&mut *tx).await?;
         sqlx::query("UPDATE public_market.features f SET published=true WHERE NOT published AND EXISTS(SELECT 1 FROM public_market.generation_features l WHERE l.generation_id=$1 AND l.feature_id=f.id)").bind(generation).execute(&mut *tx).await?;
     }
     sqlx::query("INSERT INTO public_market.coverage_segments(generation_id,market,symbol,timeframe,start_at,end_at,actual_start,actual_end,status) VALUES($1,$2->>'market',$2->>'symbol',$2->>'interval',($2->>'requested_start')::timestamptz,($2->>'requested_end')::timestamptz,($2->>'actual_start')::timestamptz,($2->>'actual_end')::timestamptz,CASE WHEN ($2->>'source_range_complete')::boolean THEN 'complete' ELSE 'partial' END) ON CONFLICT(generation_id) DO NOTHING").bind(generation).bind(coverage).execute(&mut *tx).await?;
@@ -377,6 +387,7 @@ pub async fn search_mode(
             break;
         }
     }
+    attach_market_sources(&mut tx, &mut selected).await?;
     let coverage:Vec<Value>=sqlx::query_scalar("SELECT coverage FROM public_market.generations WHERE status='ready' AND ($1::text IS NULL OR body->>'symbol'=$1) AND ($2::text IS NULL OR body->>'market'=$2) AND ($3::text IS NULL OR body->>'interval'=$3) AND body->'models' ? $4 AND (body->>'start_at')::timestamptz<$5 ORDER BY published_at DESC,id DESC LIMIT 100").bind(&input.symbol).bind(&input.market).bind(&input.interval).bind(&input.model_id).bind(cutoff).fetch_all(&mut *tx).await?;
     let corpus_version: Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT max(published_at) FROM public_market.generations WHERE status='ready'",
@@ -427,4 +438,61 @@ pub async fn coverage(s: &Services, input: CoverageFilter) -> Result<Value> {
     Ok(
         json!({"items":items,"next_cursor":next,"order":"generation_id_asc","scope":"published_derived_market_only","cutoff_at":input.cutoff_at}),
     )
+}
+
+/// Explicit source revision: a fresh producer must refetch/reverify the same scope.
+/// Cached generations remain historical evidence and cannot silently be rewritten.
+pub async fn revalidate(s: &Services, owner: Uuid, id: Uuid, key: &str) -> Result<Value> {
+    let body = json!({"index_id":id});
+    let (mut tx, cached) = s.db.write(owner, "history.revalidate", key, &body).await?;
+    if let Some(v) = cached {
+        return Ok(v);
+    }
+    let (request,prior):(Value,Uuid)=sqlx::query_as("SELECT body,generation_id FROM history_indexes WHERE owner_id=$1 AND id=$2 AND status='ready'").bind(owner).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(Error::not_found)?;
+    let next = jobs::enqueue_tx(
+        &mut tx,
+        owner,
+        "history.index",
+        &format!("revalidate:{key}"),
+        request.clone(),
+    )
+    .await?;
+    let generation = Uuid::new_v4();
+    sqlx::query("INSERT INTO public_market.generations(id,request_hash,body,supersedes) VALUES($1,$2,$3,$4)").bind(generation).bind(digest(&json!([request,generation]))).bind(&request).bind(prior).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO history_indexes(id,owner_id,body,generation_id,status) VALUES($1,$2,$3,$4,'queued')").bind(next).bind(owner).bind(request).bind(generation).execute(&mut *tx).await?;
+    let result = json!({"index_id":next,"job_id":next,"generation_id":generation,"supersedes_generation":prior,"status":"queued","source_policy":"explicit_refetch_and_checksum_verification"});
+    Database::finish(&mut tx, owner, "history.revalidate", key, &body, &result).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub async fn attach_market_sources(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    items: &mut [Value],
+) -> Result<()> {
+    if items.len() > 50 {
+        return Err(Error::bad("market_source_lookup_budget"));
+    }
+    let ids: Vec<Uuid> = items
+        .iter()
+        .map(|v| {
+            serde_json::from_value(v["id"].clone())
+                .map_err(|_| Error::bad("invalid_window_identity"))
+        })
+        .collect::<Result<_>>()?;
+    let rows:Vec<(Uuid,String)>=sqlx::query_as("SELECT DISTINCT ON(l.feature_id) l.feature_id,g.body->>'source' FROM public_market.generation_features l JOIN public_market.generations g ON g.id=l.generation_id WHERE l.feature_id=ANY($1) AND g.status='ready' ORDER BY l.feature_id,g.published_at DESC,g.id DESC").bind(ids).fetch_all(&mut **tx).await?;
+    let sources: std::collections::HashMap<_, _> = rows.into_iter().collect();
+    for item in items {
+        let id: Uuid = serde_json::from_value(item["id"].clone())
+            .map_err(|_| Error::bad("invalid_window_identity"))?;
+        let source = sources
+            .get(&id)
+            .filter(|v| matches!(v.as_str(), "rest" | "monthly_archive"))
+            .ok_or_else(|| Error::bad("indexed_window_source_unproven"))?;
+        item["market_source"] = json!(source);
+        if let Some(chart) = item.get_mut("chart_request") {
+            chart["source"] = json!(source);
+        }
+    }
+    Ok(())
 }

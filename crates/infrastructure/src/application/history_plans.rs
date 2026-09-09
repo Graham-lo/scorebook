@@ -27,6 +27,11 @@ fn validate(input: &HistoryPlanRequest) -> Result<()> {
     {
         return Err(Error::bad("invalid_history_plan"));
     }
+    for (symbol, start) in &input.symbol_start_at {
+        if !input.symbols.contains(symbol) || *start < input.start_at || *start >= input.end_at {
+            return Err(Error::bad("invalid_symbol_continuation"));
+        }
+    }
     for symbol in &input.symbols {
         for interval in &input.intervals {
             let seconds = history::interval_seconds(interval)?;
@@ -141,14 +146,25 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
             }
         }
     }
+    let mut scope_end = input.end_at;
     while symbol < input.symbols.len() {
+        let scope = super::history_catalog::boundaries::resolve(
+            s,
+            j,
+            &input,
+            &input.symbols[symbol],
+            &input.intervals[interval],
+        )
+        .await?;
+        start = start.max(scope.start_at);
+        scope_end = scope.end_at;
         let seconds = history::interval_seconds(&input.intervals[interval])?;
         start = DateTime::from_timestamp(
             (start.timestamp() + seconds - 1).div_euclid(seconds) * seconds,
             0,
         )
         .ok_or_else(|| Error::bad("invalid_plan_time"))?;
-        let available = (input.end_at - start).num_seconds() / seconds;
+        let available = (scope_end - start).num_seconds() / seconds;
         if available >= input.window_bars as i64 {
             break;
         }
@@ -182,7 +198,7 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
         );
     }
     let seconds = history::interval_seconds(&input.intervals[interval])?;
-    let available = (input.end_at - start).num_seconds() / seconds;
+    let available = (scope_end - start).num_seconds() / seconds;
     let starts = ((available - input.window_bars as i64) / input.stride_bars as i64 + 1).min(512);
     let end = start
         + Duration::seconds(

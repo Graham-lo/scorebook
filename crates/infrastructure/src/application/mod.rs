@@ -95,3 +95,5 @@ pub mod knowledge_index;
 pub mod chat;
 
 pub mod backups;
+
+pub mod capabilities;

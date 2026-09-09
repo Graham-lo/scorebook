@@ -5,6 +5,7 @@ pub fn routes() -> Router<Services> {
         .route("/v1/statistics/runs", post(create))
         .route("/v1/statistics/runs/{id}", get(run))
         .route("/v1/statistics/runs/{id}/members", get(members))
+        .route("/v1/statistics/runs/{id}/groups", get(groups))
         .route("/v1/baseline-runs", post(baseline))
         .route("/v1/baseline-runs/{id}", get(baseline_get))
         .route("/v1/baseline-runs/{id}/samples", get(samples))
@@ -62,4 +63,13 @@ async fn requests(
     Query(v): Query<VerdictFilter>,
 ) -> Result<Json<Value>> {
     invoke(&s, o, Action::VerdictRequests, None, None, json!(v)).await
+}
+
+async fn groups(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+    Query(v): Query<GroupFilter>,
+) -> Result<Json<Value>> {
+    invoke(&s, o, Action::StatisticsGroups, Some(id), None, json!(v)).await
 }

@@ -49,6 +49,9 @@ pub async fn public_candidates(
             break;
         }
     }
+    let mut tx = s.db.pool.begin().await?;
+    super::super::history::attach_market_sources(&mut tx, &mut selected).await?;
+    tx.commit().await?;
     Ok(selected)
 }
 pub async fn private_candidates(

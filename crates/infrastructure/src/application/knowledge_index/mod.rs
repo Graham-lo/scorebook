@@ -16,9 +16,10 @@ use scorebook_core::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 pub mod index;
+pub mod repair;
 pub async fn source(s: &Services, owner: Uuid, input: SourceRequest) -> Result<Value> {
     let row: Option<(DateTime<Utc>, Value)> = sqlx::query_as(
-        "SELECT occurred_at,body FROM knowledge_sources WHERE owner_id=$1 AND kind=$2 AND id=$3",
+        "SELECT occurred_at,body FROM knowledge_sources WHERE owner_id=$1 AND kind=$2 AND id=$3 UNION ALL SELECT occurred_at,body FROM chat_tool_evidence WHERE owner_id=$1 AND $2='tool_result' AND id=$3",
     )
     .bind(owner)
     .bind(&input.source_kind)
@@ -37,7 +38,7 @@ pub async fn source(s: &Services, owner: Uuid, input: SourceRequest) -> Result<V
     )
 }
 pub async fn status(s: &Services, owner: Uuid) -> Result<Value> {
-    let row:Value=sqlx::query_scalar("SELECT jsonb_build_object('pending_sources',(SELECT count(*) FROM knowledge_dirty WHERE owner_id=$1),'oldest_pending_at',(SELECT min(changed_at) FROM knowledge_dirty WHERE owner_id=$1),'indexed_sources',(SELECT count(*) FROM knowledge_documents WHERE owner_id=$1),'watermark',(SELECT to_jsonb(w)-'owner_id' FROM knowledge_index_watermarks w WHERE owner_id=$1))").bind(owner).fetch_one(&s.db.pool).await?;
+    let row:Value=sqlx::query_scalar("SELECT jsonb_build_object('pending_sources',(SELECT count(*) FROM knowledge_dirty WHERE owner_id=$1),'oldest_pending_at',(SELECT min(changed_at) FROM knowledge_dirty WHERE owner_id=$1),'indexed_sources',(SELECT count(*) FROM knowledge_documents d WHERE owner_id=$1 AND NOT EXISTS(SELECT 1 FROM knowledge_dirty q WHERE q.owner_id=d.owner_id AND q.source_kind=d.source_kind AND q.source_id=d.source_id)),'watermark',(SELECT to_jsonb(w)-'owner_id' FROM knowledge_index_watermarks w WHERE owner_id=$1))").bind(owner).fetch_one(&s.db.pool).await?;
     Ok(row)
 }
 pub async fn request(s: &Services, owner: Uuid, key: &str) -> Result<Value> {

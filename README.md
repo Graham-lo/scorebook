@@ -1,65 +1,30 @@
 # Scorebook Backend
 
-交易判断、截图与复盘知识库的模块化 Rust 后端。当前为 **v3 可靠性与性能改造实现**，不是原任务书全部 P1/P2/P3 已验收的声明。前端不在本项目中修改。
+面向交易员长期记录、复盘和按图找走势的模块化 Rust 后端。当前分支实现 v4 的六个模块：截图检索、币安历史索引、真实交易账本、正式复盘统计、知识与 Chat 工具、加密备份。P6、前端和多用户产品功能不做。
 
-- Rust / Axum / Tokio / SQLx；PostgreSQL 17 + pgvector。
-- 用户数据隔离，Bearer 密钥哈希存储；单独的模型只读密钥。
-- 不可变原话、图片附件、追加复盘/更正事件、幂等写入及修订冲突。
-- 中文子串与标签别名找回；情境关联、打法版本、固定集合与样本身份。
-- 默认 **币安 USDⓈ-M 合约**；美股相关合约、加密、商品等共用数据适配器。COIN-M 可显式指定。
-- **K 线、逐笔行情、系统绘图不持久化**。REST 请求后在内存中解析、计算、重绘。保留用户上传图片、原话、复盘、特征向量及窗口位置。
-- 图片复盘库搜索：结构描述子、独立本地 DINOv2、两者排名融合。
-- 币安历史窗口搜索：有界后台索引 → 只存向量与时间位置 → 截图搜索 → 按命中区间重新取行情绘图。
-- 大模型工具层与具体厂商无关；暂不实现 Chat 生成或自动理解用户意图。
+Rust / Axum / Tokio / SQLx；PostgreSQL 17 + pgvector。公共行情只在内存取数、计算与重绘；用户原图、原话和真实交易是持久资产。只使用币安实际存在的 USD-M/COIN-M 合约，实际成交价与参考市场价分开。
 
-## 启动
+**主服务仍为 v3，未部署本分支。真实 Chat 供应商、真实账户和独立备份目的地尚未接通。** 已通过的测试与未通过的验收逐项见 [实施状态](docs/status.md)，不以接口数量表示完成率。
 
-已创建的本机 `.env` 含独立数据库凭证，文件权限 0600，不在 Git 中。新环境复制 `.env.example` 并生成新密码。
+- [部署与恢复](docs/deployment-v4.md)
+- [前端对接说明](docs/claude-frontend-handoff-v4.md)
+- [复盘状态与交互协议](docs/review-experience.md)
+- [实施计划](docs/implementation-v4.md)
+- [数据字典](docs/data-dictionary.md)
 
-```sh
-docker compose up -d postgres
-cargo build --release
-ops/run.sh migrate
-ops/run.sh refresh-instruments
-mkdir -p data
-ops/run.sh create-user local --token-file data/local-token
-ops/run.sh serve
-# 第二个终端
-ops/run.sh worker
-```
+接口以 `GET /openapi.json` 和 [静态契约](contracts/openapi.yaml) 为准。UTC 时间戳、Decimal 字符串、Bearer 认证和幂等键保持统一。每次有状态修改按对应 revision/generation 校验。
 
-API 默认 `127.0.0.1:8787`，数据库默认 `127.0.0.1:55432`。前台启动模式会随终端结束；macOS 自启动脚本见 `ops/install-launchd.py`。不要把本地开发部署当作公网多用户生产部署。
-
-本地视觉模型独立运行；未配置时只接受用户明确选择的结构检索，不把视觉/融合请求自动换成结构模式：
-
-```sh
-python3 -m venv vision/.venv
-vision/.venv/bin/pip install -r vision/requirements.lock
-vision/.venv/bin/python vision/setup.py
-vision/.venv/bin/python vision/server.py
-```
-
-模型运行时只加载本地文件；setup 下载固定 revision 的权重。`.env` 配置 `SCOREBOOK_VISION_URL=http://127.0.0.1:8790` 后，图片后台任务同时提取视觉特征。模型源、权重 SHA-256、预处理固定在 `vision/server.py` 和 Rust 适配器中。
-
-复盘的完整交互和状态规范见 [docs/review-experience.md](docs/review-experience.md)。自动保存、恢复、发布、放弃草稿和结果变化确认都使用独立版本保护。
-
-## 接口入口
-
-`GET /openapi.json`；静态契约见 [contracts/openapi.yaml](contracts/openapi.yaml)。所有业务接口需 `Authorization: Bearer <token>`。持久化写入需 `Idempotency-Key`；追加复盘、作废、补图等还需 `expected_revision`。
-
-| 动作 | 接口 |
+| 能力 | 入口 |
 |---|---|
-| 记录、找回、详情 | `POST/GET /v1/calls`、`GET /v1/calls/{id}` |
-| 上传用户图片、下载原图 | `POST /v1/attachments`、`GET /v1/attachments/{id}` |
-| 复盘、标签、打法、行情段 | `/v1/reviews`、`/v1/tags`、`/v1/playbooks`、`/v1/episodes` |
-| 复盘库按图搜索 | `POST /v1/similarity/search` |
-| 历史行情特征建库、覆盖 | `/v1/history/indexes`、`/v1/history/coverage`、`/v1/history/plans` |
-| 从币安历史窗口按图搜索 | `POST /v1/history/search` |
-| 临时行情、临时 SVG 图 | `POST /v1/market/data`、`POST /v1/market/chart` |
-| 模型工具发现与调用 | `GET /v1/knowledge/tools`、`POST /v1/knowledge/tools/call` |
-| 任务、事件、导出、删除 | `/v1/jobs/{id}`、`/v1/events`、`/v1/exports`、`/v1/deletions` |
-
-HTTP 示例使用占位密钥，不应把真实密钥复制进 Git。参见 [docs/api-workflows.md](docs/api-workflows.md)。
+| 原话、附件与复盘草稿 | `/v1/calls`、`/v1/attachments`、`/v1/calls/{id}/review-draft` |
+| 截图分析与统一搜图任务 | `/v1/chart-analyses`、`/v1/chart-search/runs` |
+| 历史目录、计划、订阅 | `/v1/history/catalog`、`/v1/history/plans`、`/v1/history/subscriptions` |
+| 真实成交、周期与资金流水 | `/v1/imports`、`/v1/trades`、`/v1/trade-cycles`、`/v1/account-ledger` |
+| 只读账户同步与历史账单 | `/v1/exchange-connections`、`/v1/exchange-syncs`、`/v1/exchange-exports` |
+| 正式统计、B1、人工裁决 | `/v1/statistics/runs`、`/v1/baseline-runs`、`/v1/verdict-requests` |
+| 中文知识与 Chat | `/v1/knowledge/search`、`/v1/knowledge/source/slice`、`/v1/chat/runs` |
+| 即时重绘与能力状态 | `/v1/market/data`、`/v1/market/chart`、`/v1/capabilities` |
+| 加密备份、恢复与删除 | `/v1/backups`、CLI `recover-backup` / `restore`、`/v1/deletions` |
 
 ## 代码边界
 

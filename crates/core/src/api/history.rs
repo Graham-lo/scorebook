@@ -22,13 +22,7 @@ pub struct HistoryIndexRequest {
     pub models: Vec<String>,
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, ToSchema, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum HistorySource {
-    #[default]
-    Rest,
-    MonthlyArchive,
-}
+pub use crate::market::HistorySource;
 
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
