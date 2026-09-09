@@ -1,0 +1,22 @@
+{
+  "checked_at": "2026-09-09T06:46:00.245634+00:00",
+  "provider": "binance_usd_m",
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "requested_hours": 96,
+  "bars_received": 96,
+  "market_fetch_ms": 590.57,
+  "svg_bytes": 13816,
+  "svg_valid_xml": true,
+  "cache_control": "private, no-store",
+  "historical_index_seconds": 3.04,
+  "feature_rows": 6,
+  "models": [
+    "candle-profile-v1",
+    "dinov2-small-v1"
+  ],
+  "historical_index_id": "e33dfcfc-ebe8-4dac-8557-ddfa5d29ae70",
+  "raw_market_storage": "none",
+  "chart_storage": "none",
+  "quality_claim": "connectivity_and_dataflow_only_not_relevance_accuracy"
+}

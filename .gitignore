@@ -1,0 +1,7 @@
+/target/
+/.env
+/data/
+/vision/.venv/
+/vision/models/
+__pycache__/
+/ops/local-secrets.env
