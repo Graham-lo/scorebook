@@ -29,7 +29,7 @@
 
 再次打开时并排呈现“当时的判断 / 这次补充”，不要改写历史复盘。`current_outcomes` 是当前正式结果，`outcomes` 包含历史版本和规则回放，不能直接取列表最后一项当正式结果。复盘发布时附带的结果引用也是解释历史页面的依据。
 
-`POST /v1/calls/{id}/review-reminder` 使用 `expected_revision,until`。`until` 是未来一年内的 UTC 时间；null 清除提醒。队列返回独立的 `preference_revision`。发布复盘自动清除稍后提醒并推进其版本；旧页面不能悄悄恢复它。提醒到期后回到相应队列，目前没有系统推送通知。
+`POST /v1/calls/{id}/review-reminder` 使用 `expected_revision,until`。`until` 是未来一年内的 UTC 时间；null 清除提醒。队列返回独立的 `preference_revision`。发布复盘自动清除稍后提醒并推进其版本；旧页面不能悄悄恢复它。提醒到期后回到相应队列，目前没有系统推送通知。保存提醒的网络重试复用原键；即使重试时提醒已到期，也返回原保存回执，不会重新延后提醒。
 
 ## 长期历史不阻塞详情
 

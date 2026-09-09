@@ -111,16 +111,17 @@ pub async fn snooze(
     key: &str,
     input: SnoozeInput,
 ) -> Result<Value> {
+    let body = json!({"call_id":id,"preference":input});
+    let (mut tx, cached) = s.db.write(owner, "review.snooze", key, &body).await?;
+    if let Some(v) = cached {
+        return Ok(v);
+    }
+    // A network retry must replay its receipt even if the reminder has since become due.
     if input
         .until
         .is_some_and(|v| v <= Utc::now() || v > Utc::now() + chrono::Duration::days(365))
     {
         return Err(Error::bad("invalid_review_reminder_time"));
-    }
-    let body = json!({"call_id":id,"preference":input});
-    let (mut tx, cached) = s.db.write(owner, "review.snooze", key, &body).await?;
-    if let Some(v) = cached {
-        return Ok(v);
     }
     sqlx::query("SELECT revision FROM call_state WHERE owner_id=$1 AND call_id=$2 FOR UPDATE")
         .bind(owner)

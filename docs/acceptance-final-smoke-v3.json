@@ -1,54 +1,54 @@
 {
   "duration_requested_seconds": 60,
   "dataset": "100000 synthetic calls; 1000000 synthetic events; no market source data",
-  "database": "scorebook_accept_0740d39ddcb3",
-  "release_sha256": "2b8f24c51edc32fb175ca8187892227ae64e04be19ff1d0783fb59c68d904e5f",
+  "database": "scorebook_accept_c015790fa22d",
+  "release_sha256": "8326dbc57d00b49d553e94eac2132ad7ca1f271fac3604b1071501f5ce953248",
   "limits": "Local mixed-load acceptance; not production sizing or human chart-quality validation.",
   "cold_first_request": {
-    "list": 9.19,
-    "common": 2.48,
-    "rare": 2.42,
-    "zero": 2.29,
-    "cjk_zero": 3.13
+    "list": 8.71,
+    "common": 2.61,
+    "rare": 2.45,
+    "zero": 2.23,
+    "cjk_zero": 3.06
   },
   "warm_api_20_concurrent": {
     "list": {
       "samples": 200,
-      "p50_ms": 6.44,
-      "p95_ms": 15.23,
-      "max_ms": 18.75
+      "p50_ms": 6.11,
+      "p95_ms": 14.28,
+      "max_ms": 17.62
     },
     "common": {
       "samples": 200,
-      "p50_ms": 6.71,
-      "p95_ms": 7.8,
-      "max_ms": 8.58
+      "p50_ms": 6.81,
+      "p95_ms": 7.84,
+      "max_ms": 8.98
     },
     "rare": {
       "samples": 200,
-      "p50_ms": 8.23,
-      "p95_ms": 10.45,
-      "max_ms": 11.86
+      "p50_ms": 8.04,
+      "p95_ms": 10.5,
+      "max_ms": 12.42
     },
     "zero": {
       "samples": 200,
-      "p50_ms": 7.96,
-      "p95_ms": 10.18,
-      "max_ms": 11.85
+      "p50_ms": 8.41,
+      "p95_ms": 11.0,
+      "max_ms": 14.6
     },
     "cjk_zero": {
       "samples": 200,
-      "p50_ms": 11.6,
-      "p95_ms": 15.39,
-      "max_ms": 17.73
+      "p50_ms": 12.48,
+      "p95_ms": 16.86,
+      "max_ms": 19.45
     }
   },
   "million_row_export": {
-    "seconds": 12.95,
+    "seconds": 12.83,
     "rows": 1200033,
-    "baseline_rss_bytes": 10665984,
-    "peak_rss_bytes": 14680064,
-    "growth_bytes": 4014080,
+    "baseline_rss_bytes": 10715136,
+    "peak_rss_bytes": 14630912,
+    "growth_bytes": 3915776,
     "verified": "verified"
   },
   "faults": [
@@ -56,45 +56,45 @@
     "worker SIGKILL and same-release restart"
   ],
   "last_draft_revision": 30,
-  "elapsed_seconds": 60.31,
+  "elapsed_seconds": 60.18,
   "mixed_load": {
     "list": {
-      "samples": 371,
-      "p50_ms": 5.62,
-      "p95_ms": 10.1,
-      "max_ms": 23.6
-    },
-    "common": {
-      "samples": 372,
-      "p50_ms": 6.18,
-      "p95_ms": 10.17,
-      "max_ms": 17.74
-    },
-    "rare": {
-      "samples": 372,
-      "p50_ms": 5.29,
-      "p95_ms": 9.78,
-      "max_ms": 23.92
-    },
-    "cjk_zero": {
       "samples": 370,
-      "p50_ms": 5.76,
-      "p95_ms": 9.91,
-      "max_ms": 21.93
+      "p50_ms": 5.94,
+      "p95_ms": 9.33,
+      "max_ms": 20.0
     },
     "zero": {
-      "samples": 371,
-      "p50_ms": 5.64,
-      "p95_ms": 9.45,
-      "max_ms": 17.3
+      "samples": 369,
+      "p50_ms": 5.86,
+      "p95_ms": 8.94,
+      "max_ms": 19.97
+    },
+    "common": {
+      "samples": 370,
+      "p50_ms": 6.78,
+      "p95_ms": 10.22,
+      "max_ms": 19.23
+    },
+    "rare": {
+      "samples": 369,
+      "p50_ms": 5.79,
+      "p95_ms": 9.29,
+      "max_ms": 19.72
+    },
+    "cjk_zero": {
+      "samples": 369,
+      "p50_ms": 5.9,
+      "p95_ms": 9.44,
+      "max_ms": 16.32
     }
   },
   "totals": {
-    "list": 371,
-    "common": 372,
-    "rare": 372,
-    "cjk_zero": 370,
-    "zero": 371,
+    "list": 370,
+    "zero": 369,
+    "common": 370,
+    "rare": 369,
+    "cjk_zero": 369,
     "draft_saves": 30
   },
   "errors": {},

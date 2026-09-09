@@ -1622,3 +1622,54 @@ async fn ann_capacity_is_shared_across_pools_and_released_with_transactions() {
         tx.rollback().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn due_reminder_retry_replays_receipt_without_snoozing_the_record_again() {
+    use scorebook::application::review_workflow as w;
+    let (s, o, _, _tmp) = setup().await;
+    let c = calls::create(&s, o, "reminder", call("到点后继续复盘"))
+        .await
+        .unwrap();
+    let id = serde_json::from_value(c["id"].clone()).unwrap();
+    let until = chrono::Utc::now() + chrono::Duration::seconds(1);
+    let input = || w::SnoozeInput {
+        expected_revision: 0,
+        until: Some(until),
+    };
+    let receipt = w::snooze(&s, o, id, "same-reminder", input())
+        .await
+        .unwrap();
+    assert_eq!(
+        w::queue(
+            &s,
+            o,
+            w::QueueFilter {
+                bucket: Some("snoozed".into()),
+                ..Default::default()
+            }
+        )
+        .await
+        .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert_eq!(
+        w::snooze(&s, o, id, "same-reminder", input())
+            .await
+            .unwrap(),
+        receipt
+    );
+    assert_eq!(
+        w::snooze(&s, o, id, "new-expired-reminder", input())
+            .await
+            .unwrap_err()
+            .code,
+        "invalid_review_reminder_time"
+    );
+    let queue = w::queue(&s, o, w::QueueFilter::default()).await.unwrap();
+    assert_eq!(queue["items"][0]["id"], json!(id));
+    assert_eq!(queue["items"][0]["preference_revision"], 1);
+}
