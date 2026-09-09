@@ -28,16 +28,35 @@ impl Principal {
     }
 }
 pub fn route_permission(method: &str, path: &str) -> &'static str {
-    if path.starts_with("/v1/sessions") {
+    if matches!(
+        path,
+        "/v1/knowledge/search" | "/v1/knowledge/source" | "/v1/knowledge/source/slice"
+    ) || path.starts_with("/v1/sessions")
+    {
         "knowledge.read"
-    } else if path.starts_with("/v1/exports")
+    } else if path.starts_with("/v1/backups")
+        || path.starts_with("/v1/exports")
         || path.starts_with("/v1/deletions")
         || path.ends_with("/retry")
     {
         "maintenance"
+    } else if path.starts_with("/v1/chat/")
+        || path.starts_with("/v1/chart-search/")
+        || path == "/v1/chart-analyses"
+    {
+        if method == "GET" {
+            "knowledge.read"
+        } else {
+            "search.save"
+        }
     } else if method == "GET" || path == "/v1/knowledge/tools/call" {
         "knowledge.read"
-    } else if path.starts_with("/v1/history/plans") || path == "/v1/history/indexes" {
+    } else if path.starts_with("/v1/history/plans")
+        || path.starts_with("/v1/history/subscriptions")
+        || path == "/v1/history/catalog/refresh"
+        || path == "/v1/history/indexes"
+        || path == "/v1/history/archive-catalog"
+    {
         "history.build"
     } else if path.starts_with("/v1/similarity/") || path == "/v1/history/search" {
         "search.save"

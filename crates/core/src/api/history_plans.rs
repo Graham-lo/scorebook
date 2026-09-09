@@ -4,6 +4,8 @@ use utoipa::ToSchema;
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryPlanRequest {
+    #[serde(default)]
+    pub source: super::history::HistorySource,
     pub symbols: Vec<String>,
     pub market: String,
     pub intervals: Vec<String>,

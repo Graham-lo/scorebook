@@ -34,6 +34,20 @@ enum Command {
         #[arg(long)]
         token_file: std::path::PathBuf,
     },
+    UpgradeExport {
+        source: std::path::PathBuf,
+        destination: std::path::PathBuf,
+    },
+    /// Read a bounded secret from redirected stdin into macOS Keychain; never accept it in argv.
+    StoreSecret {
+        reference: String,
+    },
+    RecoverBackup {
+        owner: uuid::Uuid,
+        configuration: uuid::Uuid,
+        snapshot: String,
+        destination: std::path::PathBuf,
+    },
     VerifyExport {
         path: std::path::PathBuf,
     },
@@ -51,11 +65,39 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let cli = Cli::parse();
     match &cli.command {
+        Command::StoreSecret { reference } => {
+            use scorebook_core::secrets::{SecretBytes, SecretStore};
+            use std::io::IsTerminal;
+            use tokio::io::AsyncReadExt;
+            anyhow::ensure!(
+                !std::io::stdin().is_terminal(),
+                "redirect protected stdin; interactive echo is forbidden"
+            );
+            let mut bytes = zeroize::Zeroizing::new(Vec::new());
+            tokio::io::stdin()
+                .take(16 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .await?;
+            anyhow::ensure!(bytes.len() <= 16 * 1024, "secret too large");
+            scorebook::adapters::keychain::Keychain
+                .store(reference.clone(), SecretBytes(bytes))
+                .await
+                .map_err(|e| anyhow::anyhow!(e.code))?;
+            println!("Secret stored in Keychain.");
+            return Ok(());
+        }
         Command::Openapi => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&scorebook::http::openapi())?
             );
+            return Ok(());
+        }
+        Command::UpgradeExport {
+            source,
+            destination,
+        } => {
+            println!("{}", exports::upgrade::v19(source, destination).await?);
             return Ok(());
         }
         Command::VerifyExport { path } => {
@@ -87,6 +129,23 @@ async fn main() -> anyhow::Result<()> {
             scorebook::application::instruments::refresh(&s)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.code))?
+        ),
+        Command::RecoverBackup {
+            owner,
+            configuration,
+            snapshot,
+            destination,
+        } => println!(
+            "{}",
+            scorebook::application::backups::restore_snapshot(
+                &s,
+                owner,
+                configuration,
+                &snapshot,
+                &destination
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e.code))?
         ),
         Command::Restore { path } => println!("{}", exports::restore(&s, &path).await?),
         Command::CreateReadKey { owner, token_file } | Command::CreateKey { owner, token_file } => {
@@ -135,7 +194,10 @@ async fn main() -> anyhow::Result<()> {
                     let mut next_gc=tokio::time::Instant::now();
                     loop {
                         if queue=="maintenance" && tokio::time::Instant::now()>=next_gc {
+                            if let Err(e)=scorebook::application::backups::schedule(&services).await {tracing::warn!(code=%e.code,"backup scheduling failed");}
                             if let Err(e)=scorebook::application::gc::schedule(&services).await {tracing::warn!(code=%e.code,"cleanup scheduling failed");}
+                            if let Err(e)=scorebook::application::knowledge_index::index::schedule(&services).await {tracing::warn!(code=%e.code,"knowledge index scheduling failed");}
+                            if let Err(e)=scorebook::application::history_catalog::schedule(&services).await {tracing::warn!(code=%e.code,"history subscription scheduling failed");}
                             next_gc=tokio::time::Instant::now()+std::time::Duration::from_secs(60);
                         }
                         if *rx.borrow(){break;}

@@ -223,7 +223,7 @@ async fn vector_search_works_cross_theme_and_excludes_other_users_and_later_imag
     let mut c = call("上涨结构");
     c.attachments = vec![aid];
     calls::create(&s, o, "case", c).await.unwrap();
-    similarity::embed(&s, o, aid, None, "candle-profile-v1")
+    similarity::embed(&s, o, aid, None, "candle-geometry-v2")
         .await
         .unwrap();
     let q = calls::upload(&s, o, "q", chart(true, false), "query".into(), None)
@@ -233,7 +233,7 @@ async fn vector_search_works_cross_theme_and_excludes_other_users_and_later_imag
     let query = |cutoff| SimilarityQuery {
         attachment_id: qid,
         region: None,
-        model_id: "candle-profile-v1".into(),
+        model_id: "candle-geometry-v2".into(),
         instrument: Some("BTCUSDT".into()),
         market: Some("usd_m".into()),
         timeframe: Some("4h".into()),
@@ -256,7 +256,7 @@ async fn vector_search_works_cross_theme_and_excludes_other_users_and_later_imag
     assert_eq!(past["items"], json!([]));
     let (other, _) = s.db.create_user("other").await.unwrap();
     assert!(
-        similarity::embed(&s, other, aid, None, "candle-profile-v1")
+        similarity::embed(&s, other, aid, None, "candle-geometry-v2")
             .await
             .is_err()
     );
@@ -489,6 +489,7 @@ async fn historical_index_keeps_only_vectors_and_positions() {
     let end = chrono::DateTime::from_timestamp(Utc::now().timestamp() / 3600 * 3600, 0).unwrap();
     let start = end - Duration::hours(96);
     let input = HistoryIndexRequest {
+        source: Default::default(),
         symbol: format!("TEST{}", Uuid::new_v4().simple().to_string().to_uppercase()),
         market: "usd_m".into(),
         interval: "1h".into(),
@@ -496,7 +497,7 @@ async fn historical_index_keeps_only_vectors_and_positions() {
         end_at: end,
         window_bars: 64,
         stride_bars: 16,
-        models: vec!["candle-profile-v1".into()],
+        models: vec!["candle-geometry-v2".into()],
     };
     let requested = request(&s, o, "history", input.clone()).await.unwrap();
     let j = jobs::claim_for(&s, Some(o)).await.unwrap().unwrap();
@@ -517,7 +518,7 @@ async fn historical_index_keeps_only_vectors_and_positions() {
     sqlx::query("UPDATE public_market.generations SET status='running',producer_job=$2,producer_lease=$3 WHERE id=$1").bind(generation).bind(j.id).bind(j.lease).execute(&s.db.pool).await.unwrap();
     // Four bounded blocks simulate interrupted work. They must remain invisible and must not leak into the resumed snapshot.
     for batch in 0..4 {
-        let staged:Vec<Value>=(0..500).map(|n|json!({"market":"usd_m","symbol":input.symbol,"timeframe":"1h","start_at":start+Duration::hours(batch*500+n),"end_at":start+Duration::hours(batch*500+n+64),"bars_count":64,"model_id":"candle-profile-v1","embedding":format!("{:?}",vec![0.1_f32;192]),"input_hash":format!("abandoned-checkpoint-{batch}-{n}"),"render_version":"candles-raster-v1"})).collect();
+        let staged:Vec<Value>=(0..500).map(|n|json!({"market":"usd_m","symbol":input.symbol,"timeframe":"1h","start_at":start+Duration::hours(batch*500+n),"end_at":start+Duration::hours(batch*500+n+64),"bars_count":64,"model_id":"candle-geometry-v2","embedding":format!("{:?}",vec![0.1_f32;192]),"input_hash":format!("abandoned-checkpoint-{batch}-{n}"),"render_version":"candles-raster-v1"})).collect();
         write_feature_block(&s, &j, generation, &staged)
             .await
             .unwrap();
@@ -543,7 +544,7 @@ async fn historical_index_keeps_only_vectors_and_positions() {
         HistorySearch {
             attachment_id: serde_json::from_value(a["id"].clone()).unwrap(),
             region: None,
-            model_id: "candle-profile-v1".into(),
+            model_id: "candle-geometry-v2".into(),
             symbol: Some(input.symbol.clone()),
             market: Some("usd_m".into()),
             interval: Some("1h".into()),
@@ -895,6 +896,7 @@ async fn outcome_revision_has_frozen_target_and_cas_head() {
 #[tokio::test]
 async fn not_due_and_t3_are_processing_states() {
     let (s, o, _, _tmp) = setup().await;
+    let s = s.with_market(std::sync::Arc::new(FixtureMarket { retry: None }));
     let mut input = call("以后再核对");
     input.criteria = serde_json::from_value(
         json!([{"template":"T1","selected_by":"explicit","horizon_hours":24,"direction":"L"}]),
@@ -902,7 +904,7 @@ async fn not_due_and_t3_are_processing_states() {
     .unwrap();
     let saved = calls::create(&s, o, "future", input).await.unwrap();
     let id = serde_json::from_value(saved["id"].clone()).unwrap();
-    assert!(jobs::claim_for(&s, Some(o)).await.unwrap().is_none());
+    assert!(jobs::run_filtered(&s, Some(o), None).await.unwrap());
     assert_eq!(
         calls::get(&s, o, id).await.unwrap()["assessments"][0]["state"],
         "waiting_due"
@@ -919,7 +921,7 @@ async fn not_due_and_t3_are_processing_states() {
     let saved = calls::create(&s, o, "t3", input).await.unwrap();
     let id = serde_json::from_value(saved["id"].clone()).unwrap();
     let state = calls::get(&s, o, id).await.unwrap();
-    assert_eq!(state["assessments"][0]["state"], "blocked_capability");
+    assert_eq!(state["assessments"][0]["state"], "queued");
     assert_eq!(state["outcomes"], json!([]));
 }
 
@@ -1126,7 +1128,7 @@ async fn model_image_compute_is_ephemeral_and_hybrid_never_downgrades() {
     let a = calls::upload(&s, o, "query", chart(false, false), "query".into(), None)
         .await
         .unwrap();
-    let q = json!({"attachment_id":a["id"],"model_id":"candle-profile-v1"});
+    let q = json!({"attachment_id":a["id"],"model_id":"candle-geometry-v2"});
     let result = knowledge::tool(
         &s,
         o,
@@ -1157,7 +1159,7 @@ async fn model_image_compute_is_ephemeral_and_hybrid_never_downgrades() {
     .unwrap();
     assert_eq!(count, 0);
     let mut hybrid = q;
-    hybrid["model_id"] = json!("hybrid-v1");
+    hybrid["model_id"] = json!("hybrid-v2");
     assert_eq!(
         similarity::search(&s, o, "hybrid", serde_json::from_value(hybrid).unwrap())
             .await
@@ -1306,7 +1308,7 @@ async fn cleanup_protects_saved_searches_and_removes_expired_staging() {
     let query = SimilarityQuery {
         attachment_id: aid,
         region: None,
-        model_id: "candle-profile-v1".into(),
+        model_id: "candle-geometry-v2".into(),
         instrument: None,
         market: None,
         timeframe: None,
@@ -1358,7 +1360,7 @@ async fn cleanup_protects_saved_searches_and_removes_expired_staging() {
 async fn history_plan_is_bounded_and_pause_fences_old_producer() {
     use scorebook::application::history_plans::{self, HistoryPlanRequest, PlanControl};
     let (s, o, _, _tmp) = setup().await;
-    let input:HistoryPlanRequest=serde_json::from_value(json!({"symbols":["BTCUSDT","ETHUSDT"],"market":"usd_m","intervals":["1h"],"start_at":"2024-01-01T00:00:00Z","end_at":"2024-04-01T00:00:00Z","window_bars":64,"stride_bars":16,"models":["candle-profile-v1"]})).unwrap();
+    let input:HistoryPlanRequest=serde_json::from_value(json!({"symbols":["BTCUSDT","ETHUSDT"],"market":"usd_m","intervals":["1h"],"start_at":"2024-01-01T00:00:00Z","end_at":"2024-04-01T00:00:00Z","window_bars":64,"stride_bars":16,"models":["candle-geometry-v2"]})).unwrap();
     let v = history_plans::create(&s, o, "plan", input).await.unwrap();
     let id: Uuid = serde_json::from_value(v["plan_id"].clone()).unwrap();
     let j = jobs::claim_filtered(&s, Some(o), Some("batch"))

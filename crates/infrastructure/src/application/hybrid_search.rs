@@ -29,7 +29,7 @@ pub async fn search(
     let limit = input.limit.unwrap_or(10).clamp(1, 50) as usize;
     let mut fused = HashMap::<String, (f64, Value)>::new();
     let mut components = vec![];
-    for model in ["candle-profile-v1", "dinov2-small-v1"] {
+    for model in ["candle-geometry-v2", "dinov2-small-v1"] {
         let query = SimilarityQuery {
             model_id: model.into(),
             cutoff_at: Some(cutoff),
@@ -66,7 +66,7 @@ pub async fn search(
             item
         })
         .collect();
-    let mut v = json!({"model_id":"hybrid-v1","cutoff_at":cutoff,"items":items,"components":components,"retrieval":"reciprocal_rank_fusion_k60_v2","quality_validated":false,"score_meaning":"ranking_only_not_probability"});
+    let mut v = json!({"model_id":"hybrid-v2","cutoff_at":cutoff,"items":items,"components":components,"retrieval":"reciprocal_rank_fusion_k60_v2","quality_validated":false,"score_meaning":"ranking_only_not_probability"});
     if !persist {
         v["storage"] = json!("ephemeral");
         return Ok(v);

@@ -34,6 +34,7 @@ fn validate(input: &HistoryPlanRequest) -> Result<()> {
                 return Err(Error::bad("history_plan_range_too_short"));
             }
             history::validate(&history::HistoryIndexRequest {
+                source: input.source.clone(),
                 symbol: symbol.clone(),
                 market: input.market.clone(),
                 interval: interval.clone(),
@@ -59,17 +60,28 @@ pub async fn create(
     if let Some(v) = cached {
         return Ok(v);
     }
-    let id = jobs::enqueue_tx(&mut tx, owner, "history.plan", key, body.clone()).await?;
-    sqlx::query("INSERT INTO history_plans(id,owner_id,body,next_start) VALUES($1,$2,$3,$4)")
+    let v = create_tx(&mut tx, owner, key, input).await?;
+    Database::finish(&mut tx, owner, "history.plan", key, &body, &v).await?;
+    tx.commit().await?;
+    Ok(v)
+}
+pub async fn create_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owner: Uuid,
+    key: &str,
+    input: HistoryPlanRequest,
+) -> Result<Value> {
+    validate(&input)?;
+    let body = json!(input);
+    let id = jobs::enqueue_tx(tx, owner, "history.plan", key, body.clone()).await?;
+    sqlx::query("INSERT INTO history_plans(id,owner_id,body,next_start) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING")
         .bind(id)
         .bind(owner)
         .bind(&body)
         .bind(input.start_at)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     let v = json!({"plan_id":id,"job_id":id,"status":"running","scope":"requested_symbols_intervals_and_dates","raw_market_storage":"none","revision":0});
-    Database::finish(&mut tx, owner, "history.plan", key, &body, &v).await?;
-    tx.commit().await?;
     Ok(v)
 }
 pub async fn get(s: &Services, owner: Uuid, id: Uuid) -> Result<Value> {
@@ -177,6 +189,7 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
             (input.window_bars as i64 + (starts - 1) * input.stride_bars as i64) * seconds,
         );
     let child = history::HistoryIndexRequest {
+        source: input.source.clone(),
         symbol: input.symbols[symbol].clone(),
         market: input.market.clone(),
         interval: input.intervals[interval].clone(),

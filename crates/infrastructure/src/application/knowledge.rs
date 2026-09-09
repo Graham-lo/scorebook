@@ -96,16 +96,51 @@ pub async fn tag(s: &Services, owner: Uuid, key: &str, input: TagInput) -> Resul
     if let Some(v) = cached {
         return Ok(v);
     }
+    let id = create_tag_tx(
+        &mut tx,
+        owner,
+        &input.name,
+        &input.definition,
+        &input.aliases,
+    )
+    .await?;
+    let version: i64 = sqlx::query_scalar("SELECT version FROM tags WHERE owner_id=$1 AND id=$2")
+        .bind(owner)
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let prior:Option<(Uuid,Uuid)>=sqlx::query_as("SELECT t.id,r.root_id FROM tags t JOIN tag_revisions r ON r.owner_id=t.owner_id AND r.tag_id=t.id WHERE t.owner_id=$1 AND t.name=$2 AND t.id<>$3 ORDER BY t.version DESC LIMIT 1").bind(owner).bind(&input.name).bind(id).fetch_optional(&mut *tx).await?;
+    sqlx::query("INSERT INTO tag_revisions(owner_id,tag_id,root_id,parent_id,reason) VALUES($1,$2,$3,$4,'explicit_tag_definition')").bind(owner).bind(id).bind(prior.map(|v|v.1).unwrap_or(id)).bind(prior.map(|v|v.0)).execute(&mut *tx).await?;
+    let v = json!({"id":id,"version":version});
+    Database::finish(&mut tx, owner, "tags.create", key, &body, &v).await?;
+    tx.commit().await?;
+    Ok(v)
+}
+pub async fn create_tag_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owner: Uuid,
+    name: &str,
+    definition: &str,
+    aliases: &[String],
+) -> Result<Uuid> {
+    if name.trim().is_empty()
+        || name.len() > 200
+        || definition.len() > 100000
+        || aliases.len() > 100
+        || aliases.iter().any(|a| a.is_empty() || a.len() > 200)
+    {
+        return Err(Error::bad("invalid_tag"));
+    }
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,3))")
-        .bind(format!("{owner}:{}", input.name))
-        .execute(&mut *tx)
+        .bind(format!("{owner}:{name}"))
+        .execute(&mut **tx)
         .await?;
     let version: i64 = sqlx::query_scalar(
         "SELECT COALESCE(max(version),0)+1 FROM tags WHERE owner_id=$1 AND name=$2",
     )
     .bind(owner)
-    .bind(&input.name)
-    .fetch_one(&mut *tx)
+    .bind(name)
+    .fetch_one(&mut **tx)
     .await?;
     let id = Uuid::new_v4();
     sqlx::query(
@@ -113,16 +148,13 @@ pub async fn tag(s: &Services, owner: Uuid, key: &str, input: TagInput) -> Resul
     )
     .bind(id)
     .bind(owner)
-    .bind(input.name)
-    .bind(input.definition)
-    .bind(input.aliases)
+    .bind(name)
+    .bind(definition)
+    .bind(aliases)
     .bind(version)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    let v = json!({"id":id,"version":version});
-    Database::finish(&mut tx, owner, "tags.create", key, &body, &v).await?;
-    tx.commit().await?;
-    Ok(v)
+    Ok(id)
 }
 pub async fn tag_link(s: &Services, owner: Uuid, key: &str, input: TagLink) -> Result<Value> {
     let body = json!(input);
@@ -195,6 +227,12 @@ pub async fn link(s: &Services, owner: Uuid, key: &str, input: EpisodeLink) -> R
     }
     calls::require_call(&mut tx, owner, input.call_id).await?;
     calls::bump(&mut tx, owner, input.call_id, input.expected_revision).await?;
+    sqlx::query("SELECT id FROM episodes WHERE owner_id=$1 AND id=$2 FOR UPDATE")
+        .bind(owner)
+        .bind(input.episode_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(Error::not_found)?;
     let compatible:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM episodes e JOIN calls c ON c.owner_id=e.owner_id AND c.instrument=e.instrument AND c.market=e.market WHERE e.owner_id=$1 AND e.id=$2 AND c.id=$3)").bind(owner).bind(input.episode_id).bind(input.call_id).fetch_one(&mut *tx).await?;
     if !compatible {
         return Err(Error::bad("incompatible_episode"));
@@ -265,7 +303,7 @@ pub async fn episode(s: &Services, owner: Uuid, id: Uuid) -> Result<Value> {
     .fetch_optional(&s.db.pool)
     .await?
     .ok_or_else(Error::not_found)?;
-    let links:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(l)-'owner_id' FROM episode_links l WHERE owner_id=$1 AND episode_id=$2 ORDER BY created_at,id").bind(owner).bind(id).fetch_all(&s.db.pool).await?;
+    let links:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(l)-'owner_id' FROM episode_links l WHERE owner_id=$1 AND episode_id=$2 ORDER BY created_at DESC,id DESC LIMIT 101").bind(owner).bind(id).fetch_all(&s.db.pool).await?;
     Ok(json!({"episode":e,"links":links}))
 }
 // Kept as a stable application entry point; all model tool logic has its own module.

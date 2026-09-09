@@ -51,6 +51,10 @@ pub async fn confirm(s: &Services, owner: Uuid, key: &str, input: DeleteConfirm)
     if pinned {
         return Err(Error::conflict("export_in_progress"));
     }
+    let backup_pinned:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM backup_protections p JOIN export_refs r ON r.owner_id=p.owner_id AND r.export_id=p.export_id WHERE p.owner_id=$1 AND p.lease_until>now() AND r.entity_type='call' AND r.entity_id=$2)").bind(owner).bind(id).fetch_one(&mut *tx).await?;
+    if backup_pinned {
+        return Err(Error::conflict("backup_copy_in_progress"));
+    }
     calls::bump(&mut tx, owner, id, request.get("expected_revision")).await?;
     let images: Vec<Uuid> = sqlx::query_scalar(
         "SELECT attachment_id FROM call_attachments WHERE owner_id=$1 AND call_id=$2",
@@ -96,6 +100,7 @@ pub async fn confirm(s: &Services, owner: Uuid, key: &str, input: DeleteConfirm)
         .bind(&export_ids)
         .execute(&mut *tx)
         .await?;
+    sqlx::query("DELETE FROM episode_reviews WHERE owner_id=$1 AND id IN(SELECT review_id FROM episode_review_refs WHERE owner_id=$1 AND call_id=$2)").bind(owner).bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM calls WHERE owner_id=$1 AND id=$2")
         .bind(owner)
         .bind(id)

@@ -96,7 +96,18 @@ pub async fn create(s: &Services, owner: Uuid, key: &str, input: CreateCall) -> 
     let parsed: Vec<Value> = if input.criteria.is_empty() {
         vec![json!({"claim_no":0,"state":"queued","reason":"no_explicit_criteria"})]
     } else {
-        input.criteria.iter().enumerate().map(|(n,c)|match criteria::validate(c){Err(e)=>json!({"claim_no":n,"state":"awaiting_input","reason":e}),Ok(()) if c.template==criteria::Template::T0=>json!({"claim_no":n,"state":"queued"}),Ok(()) if c.template==criteria::Template::T3=>json!({"claim_no":n,"state":"blocked_capability","reason":"conditional_provider_monitor_not_implemented"}),_=>json!({"claim_no":n,"state":"waiting_due"})}).collect()
+        input
+            .criteria
+            .iter()
+            .enumerate()
+            .map(|(n, c)| match criteria::validate(c) {
+                Err(e) => json!({"claim_no":n,"state":"awaiting_input","reason":e}),
+                Ok(()) if c.template == criteria::Template::T0 => {
+                    json!({"claim_no":n,"state":"queued"})
+                }
+                _ => json!({"claim_no":n,"state":"queued","reason":"monitor_initializing"}),
+            })
+            .collect()
     };
     // A fixed episode anchor; suggestions are never treated as confirmation.
     if let (Some(inst), Some(market)) = (&input.instrument, &input.market) {
@@ -117,6 +128,11 @@ pub async fn create(s: &Services, owner: Uuid, key: &str, input: CreateCall) -> 
                 .execute(&mut *tx)
                 .await?;
         }
+        sqlx::query("SELECT id FROM episodes WHERE owner_id=$1 AND id=$2 FOR UPDATE")
+            .bind(owner)
+            .bind(episode)
+            .fetch_one(&mut *tx)
+            .await?;
         sqlx::query("INSERT INTO episode_links(id,owner_id,episode_id,call_id,status) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(owner).bind(episode).bind(id).bind(if previous.is_none(){"explicit"}else{"suggested"}).execute(&mut *tx).await?;
     }
     event(
@@ -152,18 +168,6 @@ pub async fn create(s: &Services, owner: Uuid, key: &str, input: CreateCall) -> 
                     Some("criteria_need_confirmation"),
                     submitted,
                 )
-            } else if c.template == criteria::Template::T3 {
-                (
-                    "blocked_capability",
-                    Some("conditional_provider_monitor_not_implemented"),
-                    submitted,
-                )
-            } else if c.template != criteria::Template::T0 {
-                (
-                    "queued",
-                    None,
-                    submitted + chrono::Duration::hours(c.horizon_hours.unwrap_or(72).into()),
-                )
             } else {
                 ("queued", None, submitted)
             };
@@ -188,6 +192,7 @@ pub async fn create(s: &Services, owner: Uuid, key: &str, input: CreateCall) -> 
         }
     }
     event(&mut tx,owner,Some(id),"instrument.frozen",json!({"contract":instrument_snapshot,"status":if instrument_snapshot.is_some(){"registered_contract"}else{"unverified_symbol"}})).await?;
+    super::knowledge_workflow::submission(&mut tx, owner, id, input.playbook_id).await?;
     super::review_projection::refresh(&mut tx, owner, id).await?;
     let response = json!({"id":id,"display_id":format!("C-{}-{}",submitted.format("%Y%m%d"),&id.simple().to_string()[..8]),"submitted_at":submitted,"revision":0,"criteria_status":parsed,"evidence_identity":if input.original_claimed_at.is_some(){"historical_unverified"}else{"submitted_now"}});
     Database::finish(&mut tx, owner, "calls.create", key, &body, &response).await?;
@@ -229,6 +234,7 @@ pub async fn get(s: &Services, owner: Uuid, id: Uuid) -> Result<Value> {
         'assessments',(SELECT COALESCE(jsonb_agg(to_jsonb(a)-'owner_id' ORDER BY claim_no),'[]') FROM assessments a WHERE a.owner_id=c.owner_id AND a.call_id=c.id),
         'episode_links',(SELECT COALESCE(jsonb_agg(to_jsonb(e)-'owner_id' ORDER BY created_at,id),'[]') FROM episode_links e WHERE e.owner_id=c.owner_id AND e.call_id=c.id),
         'tags',(SELECT COALESCE(jsonb_agg(to_jsonb(t)-'owner_id' ORDER BY t.name,t.id),'[]') FROM tags t JOIN call_tags l ON t.id=l.tag_id AND t.owner_id=l.owner_id WHERE l.owner_id=c.owner_id AND l.call_id=c.id),
+        'submission_feedback',(SELECT body FROM submission_feedback WHERE owner_id=c.owner_id AND call_id=c.id),
         'adoptions',(SELECT COALESCE(jsonb_agg(to_jsonb(a)-'owner_id'),'[]') FROM adoptions a WHERE a.owner_id=c.owner_id AND a.call_id=c.id)
     ) FROM calls c JOIN call_state st ON st.owner_id=c.owner_id AND st.call_id=c.id WHERE c.owner_id=$1 AND c.id=$2"#).bind(owner).bind(id).fetch_optional(&s.db.pool).await?.ok_or_else(Error::not_found)?;
     let mut pages = json!({});
@@ -362,12 +368,12 @@ pub async fn upload(
             &mut tx,
             owner,
             "embed",
-            &format!("{id}:candle-profile-v1"),
-            json!({"attachment_id":id,"model_id":"candle-profile-v1"}),
+            &format!("{id}:candle-geometry-v2"),
+            json!({"attachment_id":id,"model_id":"candle-geometry-v2"}),
         )
         .await?;
     }
-    if kind != "query" && s.vision.url.is_some() {
+    if kind != "query" {
         crate::application::jobs::enqueue_tx(
             &mut tx,
             owner,

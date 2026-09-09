@@ -25,6 +25,15 @@ impl ProviderBudget {
         })
     }
     pub async fn reserve(&self, market: &str, weight: i32) -> Result<()> {
+        if weight <= 0 {
+            return Err(Error::bad("invalid_provider_weight"));
+        }
+        if weight > self.limit {
+            return Err(Error::deferred(
+                "capability_configuration_required",
+                RetryDirective::AwaitCapability,
+            ));
+        }
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO provider_budgets(egress_id,market) VALUES($1,$2) ON CONFLICT DO NOTHING",

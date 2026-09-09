@@ -18,3 +18,5 @@ scorebook-core = { path = "../core" }
 
 tracing = "0.1"
 tower = { version = "0.5", features = ["util", "limit", "load-shed"] }
+
+futures-util = "0.3"

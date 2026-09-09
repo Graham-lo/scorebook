@@ -123,7 +123,7 @@ pub struct SimilarityQuery {
     pub limit: Option<i64>,
 }
 fn model() -> String {
-    "candle-profile-v1".into()
+    "candle-geometry-v2".into()
 }
 #[derive(Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]

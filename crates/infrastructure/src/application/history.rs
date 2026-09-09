@@ -57,7 +57,7 @@ pub fn validate(input: &HistoryIndexRequest) -> Result<()> {
         || input
             .models
             .iter()
-            .any(|m| !matches!(m.as_str(), "candle-profile-v1" | "dinov2-small-v1"))
+            .any(|m| !matches!(m.as_str(), "candle-geometry-v2" | "dinov2-small-v1"))
     {
         return Err(Error::bad("invalid_models"));
     }
@@ -104,6 +104,9 @@ pub async fn build(s: &Services, j: &Job) -> Result<Value> {
     if let Some((generation, coverage)) = ready {
         publish_index(s, j, generation, &coverage, None).await?;
         return Ok(coverage);
+    }
+    if input.source == HistorySource::MonthlyArchive {
+        return super::history_catalog::archives::build(s, j, &input).await;
     }
     let payload = s
         .market
@@ -196,16 +199,23 @@ pub async fn index_bars(
             if work.is_empty() {
                 continue;
             }
-            let images = tokio::task::spawn_blocking(move || {
-                work.iter()
-                    .map(|w| chart::raster(w).map_err(Error::bad))
-                    .collect::<Result<Vec<_>>>()
-            })
-            .await
-            .map_err(|_| Error::bad("chart_render_failed"))??;
-            let features = s.vision.extract_batch(images, model).await?;
+            let features = if model == scorebook_core::domain::chart_match::MODEL {
+                tokio::task::spawn_blocking(move || work.iter().map(|w| {
+                    let candles=scorebook_core::domain::chart_match::from_bars(w)?;
+                    Ok(crate::adapters::vision::Features{vector:scorebook_core::domain::chart_match::descriptor(&candles)?,quality:json!({"protocol":"chart-match-v2","source":"direct_ohlc","quality_validated":false}),model_id:"candle-geometry-v2".into()})
+                }).collect::<Result<Vec<_>>>()).await.map_err(|_|Error::bad("geometry_processing_failed"))??
+            } else {
+                let images = tokio::task::spawn_blocking(move || {
+                    work.iter()
+                        .map(|w| chart::raster(w).map_err(Error::bad))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .await
+                .map_err(|_| Error::bad("chart_render_failed"))??;
+                s.vision.extract_batch(images, model).await?
+            };
             for ((start, end, hash), feature) in coordinates.into_iter().zip(features) {
-                pending.push(json!({"market":input.market,"symbol":input.symbol,"timeframe":input.interval,"start_at":start,"end_at":end,"bars_count":input.window_bars,"model_id":model,"embedding":format!("{:?}",feature.vector),"input_hash":hash,"render_version":"candles-raster-v1"}));
+                pending.push(json!({"market":input.market,"symbol":input.symbol,"timeframe":input.interval,"start_at":start,"end_at":end,"bars_count":input.window_bars,"model_id":model,"embedding":format!("{:?}",feature.vector),"input_hash":hash,"render_version":if model=="candle-geometry-v2"{"ohlc-geometry-resample64-v2"}else{"candles-raster-v1"}}));
                 if pending.len() == 500 {
                     write_feature_block(s, j, generation, &pending).await?;
                     pending.clear();
@@ -256,6 +266,8 @@ pub async fn write_feature_block(
     sqlx::query(r#"WITH source AS MATERIALIZED (
       SELECT md5(jsonb_build_array(market,symbol,timeframe,start_at,end_at,bars_count,model_id,input_hash,render_version)::text)::uuid AS id,r.*
       FROM jsonb_to_recordset($1) AS r(market text,symbol text,timeframe text,start_at timestamptz,end_at timestamptz,bars_count int,model_id text,embedding vector,input_hash text,render_version text)
+    ), located AS (
+      INSERT INTO public_market.feature_locator SELECT id,market,timeframe FROM source ON CONFLICT DO NOTHING RETURNING id
     ), inserted AS (
       INSERT INTO public_market.features(id,market,symbol,timeframe,start_at,end_at,bars_count,model_id,embedding,input_hash,render_version)
       SELECT * FROM source ON CONFLICT DO NOTHING RETURNING id
@@ -287,6 +299,7 @@ async fn publish_index(
         }
         sqlx::query("UPDATE public_market.features f SET published=true WHERE NOT published AND EXISTS(SELECT 1 FROM public_market.generation_features l WHERE l.generation_id=$1 AND l.feature_id=f.id)").bind(generation).execute(&mut *tx).await?;
     }
+    sqlx::query("INSERT INTO public_market.coverage_segments(generation_id,market,symbol,timeframe,start_at,end_at,actual_start,actual_end,status) VALUES($1,$2->>'market',$2->>'symbol',$2->>'interval',($2->>'requested_start')::timestamptz,($2->>'requested_end')::timestamptz,($2->>'actual_start')::timestamptz,($2->>'actual_end')::timestamptz,CASE WHEN ($2->>'source_range_complete')::boolean THEN 'complete' ELSE 'partial' END) ON CONFLICT(generation_id) DO NOTHING").bind(generation).bind(coverage).execute(&mut *tx).await?;
     sqlx::query("UPDATE history_indexes SET status='ready',completed_at=now(),coverage=$3 WHERE owner_id=$1 AND id=$2").bind(j.owner).bind(j.id).bind(coverage).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())

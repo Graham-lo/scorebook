@@ -379,6 +379,140 @@ fn evaluate_valid(i: &EvaluationInput) -> Result<Evaluation, String> {
             lowest = lowest.min(p);
         }
     }
+    evaluate_aggregate(&AggregateInput {
+        criteria: c.clone(),
+        start,
+        evaluated_at: i.evaluated_at,
+        base: base.to_string(),
+        atr0: i.atr0.clone(),
+        path: PathAggregate {
+            highest: highest.to_string(),
+            lowest: lowest.to_string(),
+            first_threshold_interval: first_threshold,
+        },
+        coverage_complete: i.coverage_complete && !endpoint_crossed,
+        endpoint_proven: i.endpoint_proven,
+        end_price: i.end_price.clone(),
+        trigger_at,
+        trigger_price,
+    })
+}
+/// Constant-space business reduction for one assessment window. This is never a
+/// bar store: no per-candle time series can be reconstructed from a checkpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathAggregate {
+    pub highest: String,
+    pub lowest: String,
+    pub first_threshold_interval: Option<(DateTime<Utc>, DateTime<Utc>)>,
+}
+impl PathAggregate {
+    pub fn new(base: &str) -> Result<Self, String> {
+        if dec(base)? <= D::zero() {
+            return Err("invalid_base".into());
+        }
+        Ok(Self {
+            highest: base.into(),
+            lowest: base.into(),
+            first_threshold_interval: None,
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe(
+        &mut self,
+        c: &Criteria,
+        base: &str,
+        atr0: &Option<String>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        high: &str,
+        low: &str,
+    ) -> Result<(), String> {
+        let hi = dec(high)?;
+        let lo = dec(low)?;
+        if end < start || lo <= D::zero() || hi < lo {
+            return Err("invalid_path_interval".into());
+        }
+        self.highest = dec(&self.highest)?.max(hi.clone()).to_string();
+        self.lowest = dec(&self.lowest)?.min(lo.clone()).to_string();
+        let base = dec(base)?;
+        if let Ok(Some(t)) = threshold_for(c, &base, atr0) {
+            let reached = if c.direction.as_deref() == Some("S") {
+                base - lo >= t
+            } else {
+                hi - base >= t
+            };
+            if reached && self.first_threshold_interval.is_none() {
+                self.first_threshold_interval = Some((start, end));
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateInput {
+    pub criteria: Criteria,
+    pub start: DateTime<Utc>,
+    pub evaluated_at: DateTime<Utc>,
+    pub base: String,
+    pub atr0: Option<String>,
+    pub path: PathAggregate,
+    pub coverage_complete: bool,
+    pub endpoint_proven: bool,
+    pub end_price: Option<String>,
+    pub trigger_at: Option<DateTime<Utc>>,
+    pub trigger_price: Option<String>,
+}
+fn atr_value(atr0: &Option<String>) -> Result<D, String> {
+    let v = dec(atr0.as_ref().ok_or("atr_missing")?)?;
+    if v <= D::zero() {
+        return Err("invalid_atr".into());
+    }
+    Ok(v)
+}
+fn threshold_for(c: &Criteria, base: &D, atr0: &Option<String>) -> Result<Option<D>, String> {
+    if matches!(c.template, Template::T1 | Template::T2 | Template::T3) {
+        Ok(Some(if let Some(p) = &c.threshold_ratio {
+            q(base * dec(p)?)
+        } else {
+            q(atr_value(atr0)? * dec(c.atr_multiple.as_deref().unwrap_or("1"))?)
+        }))
+    } else {
+        Ok(None)
+    }
+}
+/// Same frozen criteria evaluator used for batch replay and live checkpoints.
+pub fn evaluate_aggregate(i: &AggregateInput) -> Result<Evaluation, String> {
+    use OutcomeState::*;
+    let c = &i.criteria;
+    validate(c)?;
+    if c.template == Template::T0 {
+        return Ok(out(NoCriteria, "no_explicit_criteria"));
+    }
+    let base = dec(&i.base)?;
+    if base <= D::zero() {
+        return Err("invalid_base".into());
+    }
+    if i.evaluated_at < i.start {
+        return Err("invalid_evaluation_time".into());
+    }
+    let end = i.start + Duration::hours(c.horizon_hours.unwrap().into());
+    let highest = dec(&i.path.highest)?;
+    let lowest = dec(&i.path.lowest)?;
+    if highest < base || lowest > base || lowest <= D::zero() {
+        return Err("invalid_aggregate".into());
+    }
+    let first_threshold = i.path.first_threshold_interval;
+    let directional = matches!(c.template, Template::T1 | Template::T2 | Template::T3);
+    let threshold = threshold_for(c, &base, &i.atr0).ok().flatten();
+    let atr0 = &i.atr0;
+    let coverage_complete = i.coverage_complete;
+    let evaluated_at = i.evaluated_at;
+    let endpoint_proven = i.endpoint_proven;
+    let end_price = &i.end_price;
+    let trigger_at = i.trigger_at;
+    let trigger_price = i.trigger_price.clone();
     let invalidation = if let Some(s) = &c.invalidation {
         let s = dec(s)?;
         Some(if c.direction.as_deref() == Some("S") {
@@ -411,13 +545,13 @@ fn evaluate_valid(i: &EvaluationInput) -> Result<Evaluation, String> {
         r.reason = "boundary_or_invalidation_touched".into();
         return Ok(r);
     }
-    if !i.coverage_complete || endpoint_crossed {
+    if !coverage_complete {
         r.state = InsufficientData;
         r.reason = "path_coverage_unproven".into();
         r.invalidation_hit = None;
         return Ok(r);
     }
-    threshold_result?;
+    threshold_for(c, &base, atr0)?;
     if directional {
         let (mf, ma) = if c.direction.as_deref() == Some("S") {
             (
@@ -433,15 +567,15 @@ fn evaluate_valid(i: &EvaluationInput) -> Result<Evaluation, String> {
         r.mfe = Some(fmt(ratio(mf, base.clone()).max(D::zero())));
         r.mae = Some(fmt(ratio(ma, base.clone()).min(D::zero())));
     }
-    if i.evaluated_at < end {
+    if evaluated_at < end {
         return Ok(r);
     }
     let realized = match c.template {
         Template::T1 | Template::T2 | Template::T3 => {
-            if !i.endpoint_proven {
+            if !endpoint_proven {
                 return Err("endpoint_unproven".into());
             }
-            let p = dec(i.end_price.as_ref().ok_or("end_price_missing")?)?;
+            let p = dec(end_price.as_ref().ok_or("end_price_missing")?)?;
             if p <= D::zero() {
                 return Err("invalid_endpoint".into());
             }
@@ -455,7 +589,8 @@ fn evaluate_valid(i: &EvaluationInput) -> Result<Evaluation, String> {
         }
         Template::T4 => true,
         Template::T5 => {
-            highest - lowest >= q(atr()? * dec(c.atr_multiple.as_deref().unwrap_or("1.5"))?)
+            highest - lowest
+                >= q(atr_value(atr0)? * dec(c.atr_multiple.as_deref().unwrap_or("1.5"))?)
         }
         Template::T0 => unreachable!(),
     };

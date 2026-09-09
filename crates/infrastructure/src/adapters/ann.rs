@@ -3,7 +3,7 @@ use crate::error::{Error, Result, RetryDirective};
 use sqlx::{Postgres, Transaction};
 pub fn space(model: &str) -> Result<(&'static str, usize)> {
     match model {
-        "candle-profile-v1" => Ok(("candle-profile-v1", 192)),
+        "candle-geometry-v2" => Ok(("candle-geometry-v2", 192)),
         "dinov2-small-v1" => Ok(("dinov2-small-v1", 384)),
         _ => Err(Error::bad("unknown_embedding_model")),
     }

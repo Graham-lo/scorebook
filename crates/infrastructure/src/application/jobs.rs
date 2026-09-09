@@ -15,8 +15,16 @@ pub async fn enqueue_tx(
     body: Value,
 ) -> Result<Uuid> {
     let queue = match kind {
-        "history.index" | "history.plan" => "batch",
-        "export" | "purge_files" | "purge_staging" | "maintenance.gc" => "maintenance",
+        "history.index"
+        | "history.plan"
+        | "history.subscription"
+        | "trade.project"
+        | "trade.sync"
+        | "trade.export"
+        | "baseline.build"
+        | "statistics.build" => "batch",
+        "export" | "purge_files" | "purge_staging" | "maintenance.gc" | "history.catalog"
+        | "knowledge.index" | "backup.run" | "backup.retention" | "images.reindex" => "maintenance",
         _ => "interactive",
     };
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,8))")
@@ -269,7 +277,7 @@ pub async fn retry(
     }
     if !matches!(
         row.get::<String, _>("status").as_str(),
-        "failed" | "needs_attention"
+        "failed" | "needs_attention" | "blocked_capability" | "awaiting_input"
     ) {
         return Err(Error::conflict("job_not_retryable_in_current_state"));
     }
@@ -292,10 +300,23 @@ async fn execute(s: &Services, j: &Job) -> Result<Value> {
             let (_, quality, _) = super::similarity::embed(s, j.owner, id, None, m).await?;
             Ok(json!({"attachment_id":id,"model_id":m,"quality":quality}))
         }
+        "trade.export" => super::trades::historical_export::step(s, j).await,
+        "trade.sync" => super::trades::sync::step(s, j).await,
+        "trade.project" => super::trades::projection::build(s, j).await,
+        "images.reindex" => super::chart_search::reindex::step(s, j).await,
+        "chart.search" => super::chart_search::run(s, j).await,
         "history.index" => super::history::build(s, j).await,
         "history.plan" => super::history_plans::step(s, j).await,
+        "history.subscription" => super::history_catalog::subscriptions::step(s, j).await,
+        "history.catalog" => super::history_catalog::refresh(s).await,
+        "statistics.build" => super::statistics::snapshot::build(s, j).await,
+        "baseline.build" => super::statistics::baseline::build(s, j).await,
         "assess" | "assess_revision" => super::settlement::settle(s, j).await,
         "export" => super::exports::export_job(s, j).await,
+        "backup.run" => super::backups::step(s, j).await,
+        "backup.retention" => super::backups::retention(s, j).await,
+        "chat.run" => super::chat::runtime::run(s, j).await,
+        "knowledge.index" => super::knowledge_index::index::build(s, j).await,
         "maintenance.gc" => super::gc::owner(s, j.owner).await,
         "purge_staging" => {
             let runs: Vec<serde_json::Value> = serde_json::from_value(j.body["runs"].clone())
@@ -353,4 +374,18 @@ async fn execute(s: &Services, j: &Job) -> Result<Value> {
         }
         _ => Err(Error::bad("unknown_job_kind")),
     }
+}
+
+/// Shared owner maintenance lock plus a live row-locked job lease.
+pub async fn fence<'a>(s: &'a Services, j: &Job) -> Result<Transaction<'a, Postgres>> {
+    let mut tx = s.db.pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))")
+        .bind(j.owner.to_string())
+        .execute(&mut *tx)
+        .await?;
+    let active:Option<Uuid>=sqlx::query_scalar("SELECT id FROM jobs WHERE id=$1 AND owner_id=$2 AND lease_owner=$3 AND generation=$4 AND status='running' AND lease_until>now() FOR UPDATE").bind(j.id).bind(j.owner).bind(j.lease).bind(j.generation).fetch_optional(&mut *tx).await?;
+    if active.is_none() {
+        return Err(Error::conflict("lease_lost"));
+    }
+    Ok(tx)
 }

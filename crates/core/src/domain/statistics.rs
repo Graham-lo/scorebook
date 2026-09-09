@@ -36,7 +36,7 @@ pub fn summarize(samples: &[Sample], last_verdict_count: usize) -> Value {
             .entry(s.state.clone())
             .or_default()
             .push(json!({"call_id":s.call_id,"claim_no":s.claim_no}));
-        if s.eligible && !s.group_pending {
+        if s.eligible && !s.group_pending && !s.voided {
             representatives
                 .entry((
                     s.episode_id.unwrap_or(s.call_id).to_string(),

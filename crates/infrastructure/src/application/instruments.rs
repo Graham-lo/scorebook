@@ -16,9 +16,10 @@ pub async fn refresh(s: &Services) -> Result<Value> {
             let symbol = row["symbol"]
                 .as_str()
                 .ok_or_else(|| Error::bad("invalid_symbol"))?;
-            sqlx::query("INSERT INTO instrument_catalog(venue,market,symbol,body,refreshed_at) VALUES('binance',$1,$2,$3,now()) ON CONFLICT(venue,market,symbol) DO UPDATE SET body=EXCLUDED.body,refreshed_at=EXCLUDED.refreshed_at").bind(market).bind(symbol).bind(row).execute(&mut *tx).await?;
-            count += 1;
+            super::history_catalog::validate_symbol(symbol)?;
         }
+        sqlx::query("INSERT INTO instrument_catalog(venue,market,symbol,body,refreshed_at) SELECT 'binance',$1,x->>'symbol',x,now() FROM jsonb_array_elements($2) x ON CONFLICT(venue,market,symbol) DO UPDATE SET body=EXCLUDED.body,refreshed_at=EXCLUDED.refreshed_at").bind(market).bind(json!(symbols)).execute(&mut *tx).await?;
+        count += symbols.len();
         tx.commit().await?;
     }
     Ok(json!({"venue":"binance","contracts_refreshed":count,"default_market":"usd_m"}))

@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 anyhow = "1"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
@@ -22,3 +23,16 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 tracing = "0.1"
 scorebook-core = { path = "../core" }
+
+quick-xml = { version = "0.37", features = ["serialize"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+csv = "1"
+hmac = "0.12"
+bigdecimal = { version = "0.4.10", features = ["serde"] }
+
+zeroize = "1"
+
+utoipa = { version = "5", features = ["chrono", "uuid"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"

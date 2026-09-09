@@ -13,9 +13,13 @@ use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 // Foreign-key dependency order. Credentials and rebuildable public market vectors are excluded.
-const TABLES: &[&str] = &[
+pub(super) const TABLES: &[&str] = &[
     "rules",
     "embedding_models",
+    "public_market.catalog_versions",
+    "public_market.instrument_lifecycles",
+    "public_market.history_availability",
+    "public_market.source_revisions",
     "calls",
     "call_state",
     "attachments",
@@ -24,10 +28,15 @@ const TABLES: &[&str] = &[
     "reviews",
     "episodes",
     "episode_links",
+    "episode_reviews",
+    "episode_review_refs",
+    "submission_feedback",
     "playbooks",
     "playbook_events",
+    "playbook_transition_details",
     "adoptions",
     "tags",
+    "tag_revisions",
     "call_tags",
     "manifests",
     "outcomes",
@@ -35,17 +44,57 @@ const TABLES: &[&str] = &[
     "assessments",
     "manifest_migrations",
     "image_embeddings",
+    "image_index_status",
+    "chart_analyses",
     "similarity_sessions",
     "search_result_refs",
     "similarity_feedback",
     "set_snapshots",
     "set_members",
     "verdicts",
+    "exchange_connections",
+    "trade_imports",
+    "trade_fills",
+    "trade_books",
+    "account_ledger_entries",
+    "position_seeds",
+    "trade_projection_runs",
+    "trade_cycles",
+    "trade_cycle_allocations",
+    "trade_projection_heads",
+    "trade_projection_segments",
+    "trade_projection_checkpoints",
+    "trade_reconciliations",
+    "execution_links",
+    "execution_link_fills",
     "jobs",
+    "trigger_watches",
+    "trigger_checkpoints",
+    "trigger_events",
+    "chat_runs",
+    "chat_model_turns",
+    "chat_tool_calls",
+    "chat_events",
+    "chat_source_refs",
+    "set_definitions",
+    "set_runs",
+    "set_sample_members",
+    "verdict_requests",
+    "verdict_events",
+    "baseline_runs",
+    "baseline_samples",
     "job_attempts",
     "job_targets",
+    "chart_search_runs",
+    "image_reindex_runs",
+    "exchange_sync_runs",
+    "exchange_export_runs",
+    "exchange_export_reservations",
+    "exchange_export_resolutions",
     "history_indexes",
     "history_plans",
+    "history_subscriptions",
+    "history_subscription_plans",
     "review_drafts",
     "review_preferences",
     "review_outcome_refs",
@@ -53,6 +102,7 @@ const TABLES: &[&str] = &[
     "request_refs",
     "tombstones",
 ];
+pub const ARCHIVE_SCHEMA: i64 = 32;
 const CHUNK_BYTES: usize = 4 * 1024 * 1024;
 pub async fn request(s: &Services, owner: Uuid, key: &str) -> Result<Value> {
     let body = json!({});
@@ -72,7 +122,7 @@ pub async fn export(s: &Services, owner: Uuid, id: Uuid) -> Result<Value> {
 pub async fn export_job(s: &Services, j: &Job) -> Result<Value> {
     create(s, j.owner, j.id, Some(j)).await
 }
-fn directory(s: &Services, owner: Uuid, id: Uuid) -> PathBuf {
+pub(super) fn directory(s: &Services, owner: Uuid, id: Uuid) -> PathBuf {
     s.storage
         .root
         .join("exports")
@@ -164,7 +214,7 @@ async fn create(s: &Services, owner: Uuid, id: Uuid, job: Option<&Job>) -> Resul
     tokio::fs::create_dir_all(stage.join("attachments")).await?;
     tokio::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).await?;
     tokio::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o700)).await?;
-    let mut manifest = json!({"format":"scorebook-logical-v2","schema_version":19,"owner_id":owner,"export_id":id,"created_at":chrono::Utc::now(),"tables":{},"scope":"private_evidence_and_tasks;public_market_vectors_rebuildable;credentials_excluded"});
+    let mut manifest = json!({"format":"scorebook-logical-v2","schema_version":ARCHIVE_SCHEMA,"owner_id":owner,"export_id":id,"created_at":chrono::Utc::now(),"tables":{},"scope":"private_evidence_and_tasks;public_market_vectors_rebuildable;credentials_excluded"});
     let mut tx = s.db.pool.begin().await?;
     sqlx::query("SET LOCAL statement_timeout='30min'")
         .execute(&mut *tx)
@@ -176,6 +226,11 @@ async fn create(s: &Services, owner: Uuid, id: Uuid, job: Option<&Job>) -> Resul
         .bind(owner.to_string())
         .execute(&mut *tx)
         .await?;
+    manifest["source_snapshot_at"] = json!(
+        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>("SELECT transaction_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?
+    );
     sqlx::query("DELETE FROM export_refs WHERE owner_id=$1 AND export_id=$2")
         .bind(owner)
         .bind(id)
@@ -195,9 +250,18 @@ async fn create(s: &Services, owner: Uuid, id: Uuid, job: Option<&Job>) -> Resul
     .execute(&mut *tx)
     .await?;
     for table in TABLES {
-        let shared = matches!(*table, "rules" | "embedding_models");
+        let shared = shared_table(table);
+        let columns:Vec<String>=sqlx::query_scalar("SELECT a.attname FROM pg_constraint c CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY k(attnum,n) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum WHERE c.conrelid=$1::regclass AND c.contype='p' ORDER BY k.n").bind(table).fetch_all(&mut *tx).await?;
+        let order = columns
+            .iter()
+            .map(|c| format!("t.\"{}\"", c.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(",");
+        if order.is_empty() {
+            return Err(Error::bad("archive_table_requires_stable_identity"));
+        }
         let sql = format!(
-            "SELECT to_jsonb(t) FROM {table} t {}",
+            "SELECT to_jsonb(t) FROM {table} t {} ORDER BY {order}",
             if shared { "" } else { "WHERE owner_id=$1" }
         );
         let query = sqlx::query_scalar::<_, Value>(&sql);
@@ -350,7 +414,7 @@ async fn copy_reader(
     writer.sync_all().await?;
     Ok(hex::encode(hash.finalize()))
 }
-async fn hash_file(path: &Path) -> anyhow::Result<String> {
+pub(super) async fn hash_file(path: &Path) -> anyhow::Result<String> {
     let mut file = tokio::fs::File::open(path).await?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 65536];
@@ -363,7 +427,24 @@ async fn hash_file(path: &Path) -> anyhow::Result<String> {
     }
     Ok(hex::encode(hash.finalize()))
 }
-async fn read_manifest(path: &Path) -> anyhow::Result<Value> {
+async fn regular_file(path: &Path, max: u64) -> anyhow::Result<()> {
+    let meta = tokio::fs::symlink_metadata(path).await?;
+    anyhow::ensure!(
+        meta.file_type().is_file() && meta.len() <= max,
+        "archive requires bounded regular files"
+    );
+    Ok(())
+}
+pub(super) async fn read_manifest(path: &Path) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        tokio::fs::symlink_metadata(path)
+            .await?
+            .file_type()
+            .is_dir(),
+        "archive root must be a directory"
+    );
+    regular_file(&path.join("manifest.json"), 32 * 1024 * 1024).await?;
+    regular_file(&path.join("manifest.sha256"), 64).await?;
     anyhow::ensure!(
         tokio::fs::metadata(path.join("manifest.json")).await?.len() <= 32 * 1024 * 1024,
         "manifest too large"
@@ -386,18 +467,34 @@ fn chunk_path(dir: &Path, table: &str, index: usize, chunk: &Value) -> anyhow::R
 }
 pub async fn verify(path: &Path) -> anyhow::Result<Value> {
     let manifest = read_manifest(path).await?;
+    anyhow::ensure!(
+        manifest["schema_version"] == ARCHIVE_SCHEMA,
+        "archive schema requires explicit offline upgrade"
+    );
+    verify_layout(path, TABLES).await
+}
+async fn verify_layout(path: &Path, tables: &[&str]) -> anyhow::Result<Value> {
+    let manifest = read_manifest(path).await?;
+    let recorded = manifest["tables"]
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("missing tables"))?;
+    anyhow::ensure!(
+        recorded.len() == tables.len() && tables.iter().all(|t| recorded.contains_key(*t)),
+        "archive table catalog mismatch"
+    );
     let mut rows = 0usize;
     let mut files = 0usize;
     let mut manifests = 0usize;
     let mut unverifiable = 0usize;
     let owner: Uuid = serde_json::from_value(manifest["owner_id"].clone())?;
-    for table in TABLES {
+    for table in tables {
         let chunks = manifest["tables"][*table]["chunks"]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("missing table {table}"))?;
         let mut table_rows = 0usize;
         for (n, chunk) in chunks.iter().enumerate() {
             let chunk_file = chunk_path(path, table, n, chunk)?;
+            regular_file(&chunk_file, 32 * 1024 * 1024).await?;
             anyhow::ensure!(
                 tokio::fs::metadata(&chunk_file).await?.len() <= 32 * 1024 * 1024,
                 "archive chunk exceeds v2 size bound"
@@ -410,7 +507,7 @@ pub async fn verify(path: &Path) -> anyhow::Result<Value> {
             let mut count = 0usize;
             while let Some(line) = lines.next_line().await? {
                 let value: Value = serde_json::from_str(&line)?;
-                if !matches!(*table, "rules" | "embedding_models") {
+                if !shared_table(table) {
                     anyhow::ensure!(
                         value["owner_id"] == json!(owner),
                         "cross-tenant archive row"
@@ -418,6 +515,18 @@ pub async fn verify(path: &Path) -> anyhow::Result<Value> {
                 }
                 if *table == "attachments" {
                     let id: Uuid = serde_json::from_value(value["id"].clone())?;
+                    anyhow::ensure!(
+                        tokio::fs::symlink_metadata(path.join("attachments"))
+                            .await?
+                            .file_type()
+                            .is_dir(),
+                        "invalid attachment directory"
+                    );
+                    regular_file(
+                        &path.join("attachments").join(id.to_string()),
+                        20 * 1024 * 1024,
+                    )
+                    .await?;
                     anyhow::ensure!(
                         hash_file(&path.join("attachments").join(id.to_string())).await?
                             == value["sha256"],
@@ -581,8 +690,14 @@ pub async fn restore(s: &Services, path: &Path) -> anyhow::Result<Value> {
             }
         }
     }
+    if manifest.get("upgrade").is_some() {
+        sqlx::query("WITH ordered AS(SELECT owner_id,id,first_value(id) OVER(PARTITION BY owner_id,name ORDER BY version) AS root,lag(id) OVER(PARTITION BY owner_id,name ORDER BY version) AS parent FROM tags WHERE owner_id=$1) INSERT INTO tag_revisions SELECT owner_id,id,root,parent,'explicit_archive_v19_upgrade' FROM ordered ON CONFLICT DO NOTHING").bind(owner).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO submission_feedback(owner_id,call_id,body) SELECT owner_id,id,'{\"status\":\"not_captured_at_submission\",\"reason\":\"historical_v19_archive\"}'::jsonb FROM calls WHERE owner_id=$1 ON CONFLICT DO NOTHING").bind(owner).execute(&mut *tx).await?;
+    }
+    sqlx::query("UPDATE chat_runs SET status='restored_requires_new_run' WHERE owner_id=$1 AND status NOT IN ('completed','cancelled','source_removed','budget_exhausted')").bind(owner).execute(&mut *tx).await?;
+    sqlx::query("SELECT setval(pg_get_serial_sequence('chat_events','sequence'),GREATEST(COALESCE((SELECT max(sequence) FROM chat_events),0),1))").execute(&mut *tx).await?;
     // A restore is an explicit state transition: leases/exports are not resumed as successful work.
-    sqlx::query("UPDATE jobs SET status=CASE WHEN kind IN ('export','purge_files') THEN 'cancelled' ELSE 'queued' END,generation=generation+1,cycle_attempt=0,lease_owner=NULL,lease_until=NULL,run_after=now() WHERE owner_id=$1 AND status IN ('running','queued','retry_wait')").bind(owner).execute(&mut *tx).await?;
+    sqlx::query("UPDATE jobs SET status=CASE WHEN kind IN ('export','purge_files','chat.run','backup.run') THEN 'cancelled' ELSE 'queued' END,generation=generation+1,cycle_attempt=0,lease_owner=NULL,lease_until=NULL,run_after=now() WHERE owner_id=$1 AND status IN ('running','queued','retry_wait')").bind(owner).execute(&mut *tx).await?;
     sqlx::query("UPDATE assessments a SET state='queued' FROM jobs j WHERE a.owner_id=$1 AND a.job_id=j.id AND j.status='queued'").bind(owner).execute(&mut *tx).await?;
     sqlx::query("UPDATE history_indexes i SET status='queued',coverage=NULL,completed_at=NULL FROM public_market.generations g WHERE i.owner_id=$1 AND i.generation_id=g.id AND g.status<>'ready'").bind(owner).execute(&mut *tx).await?;
     sqlx::query("UPDATE jobs j SET status='queued',run_after=now(),generation=generation+1 FROM history_indexes i WHERE i.owner_id=$1 AND i.id=j.id AND i.status='queued'").bind(owner).execute(&mut *tx).await?;
@@ -615,7 +730,7 @@ async fn restore_block(
     table: &str,
     rows: &[Value],
 ) -> anyhow::Result<()> {
-    let shared = matches!(table, "rules" | "embedding_models");
+    let shared = shared_table(table);
     for row in rows {
         if !shared {
             anyhow::ensure!(
@@ -624,7 +739,7 @@ async fn restore_block(
             );
         }
     }
-    if shared {
+    if matches!(table, "rules" | "embedding_models") {
         let mismatch:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM jsonb_populate_recordset(NULL::{table},$1) x JOIN {table} t ON x.id=t.id WHERE to_jsonb(x)<>to_jsonb(t))")).bind(json!(rows)).fetch_one(&mut **tx).await?;
         anyhow::ensure!(!mismatch, "shared definition mismatch: {table}");
     }
@@ -651,7 +766,7 @@ async fn restore_block(
         .await?;
     copy.send(csv.as_bytes()).await?;
     copy.finish().await?;
-    sqlx::query(&format!("INSERT INTO {table} SELECT (jsonb_populate_record(NULL::{table},payload)).* FROM restore_stage{conflict}")).execute(&mut **tx).await?;
+    sqlx::query(&format!("INSERT INTO {table} OVERRIDING SYSTEM VALUE SELECT (jsonb_populate_record(NULL::{table},payload)).* FROM restore_stage{conflict}")).execute(&mut **tx).await?;
     Ok(())
 }
 pub async fn download_path(s: &Services, owner: Uuid, id: Uuid, name: &str) -> Result<PathBuf> {
@@ -684,3 +799,17 @@ pub async fn download_path(s: &Services, owner: Uuid, id: Uuid, name: &str) -> R
     }
     Err(Error::not_found())
 }
+
+fn shared_table(table: &str) -> bool {
+    matches!(
+        table,
+        "rules"
+            | "embedding_models"
+            | "public_market.catalog_versions"
+            | "public_market.instrument_lifecycles"
+            | "public_market.history_availability"
+            | "public_market.source_revisions"
+    )
+}
+
+pub mod upgrade;

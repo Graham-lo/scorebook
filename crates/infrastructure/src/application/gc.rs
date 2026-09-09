@@ -10,7 +10,7 @@ pub async fn owner(s: &Services, owner: Uuid) -> Result<Value> {
         .execute(&mut *tx)
         .await?;
     // An active snapshot protects its rows and files from GC as well as explicit deletion.
-    let pinned:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM export_artifacts WHERE owner_id=$1 AND state IN ('writing','copying') AND lease_until>now())").bind(owner).fetch_one(&mut *tx).await?;
+    let pinned:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM export_artifacts WHERE owner_id=$1 AND state IN ('writing','copying') AND lease_until>now()) OR EXISTS(SELECT 1 FROM backup_protections WHERE owner_id=$1 AND lease_until>now())").bind(owner).fetch_one(&mut *tx).await?;
     if pinned {
         return Ok(json!({"deferred":"export_in_progress"}));
     }

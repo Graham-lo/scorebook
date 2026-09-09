@@ -6,6 +6,8 @@ use uuid::Uuid;
 #[derive(Clone, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryIndexRequest {
+    #[serde(default)]
+    pub source: HistorySource,
     pub symbol: String,
     #[serde(default = "market")]
     pub market: String,
@@ -18,6 +20,14 @@ pub struct HistoryIndexRequest {
     pub stride_bars: usize,
     #[serde(default = "models")]
     pub models: Vec<String>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, ToSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum HistorySource {
+    #[default]
+    Rest,
+    MonthlyArchive,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -47,11 +57,11 @@ fn stride() -> usize {
 }
 
 fn models() -> Vec<String> {
-    vec!["candle-profile-v1".into()]
+    vec!["candle-geometry-v2".into()]
 }
 
 fn model() -> String {
-    "candle-profile-v1".into()
+    "candle-geometry-v2".into()
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Default)]

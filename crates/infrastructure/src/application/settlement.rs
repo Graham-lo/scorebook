@@ -2,10 +2,10 @@
 use super::{Services, jobs::Job};
 use crate::{
     adapters::db::{Database, digest},
-    domain::criteria::{self, Bar, Criteria, EvaluationInput, Template, Trade},
+    domain::criteria::{self, Criteria, EvaluationInput, Template},
     error::{Error, Result, RetryDirective},
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 pub use scorebook_core::api::settlement::*;
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -47,24 +47,6 @@ pub async fn request_revision(
     tx.commit().await?;
     Ok(v)
 }
-// Provider receipt times describe an attempt, not the historical evidence's identity.
-fn stable_evidence(mut value: Value) -> Value {
-    match &mut value {
-        Value::Object(map) => {
-            map.remove("received_at");
-            for child in map.values_mut() {
-                *child = stable_evidence(child.take());
-            }
-        }
-        Value::Array(values) => {
-            for child in values {
-                *child = stable_evidence(child.take());
-            }
-        }
-        _ => {}
-    }
-    value
-}
 pub async fn settle(s: &Services, j: &Job) -> Result<Value> {
     let id: Uuid =
         serde_json::from_value(j.body["call_id"].clone()).map_err(|_| Error::bad("invalid_job"))?;
@@ -94,54 +76,28 @@ pub async fn settle(s: &Services, j: &Job) -> Result<Value> {
             RetryDirective::AwaitInput,
         ));
     }
-    if c.template == Template::T3 {
-        return Err(Error::deferred(
-            "conditional_provider_monitor_not_implemented",
-            RetryDirective::AwaitCapability,
-        ));
-    }
-    let due = if c.template == Template::T0 {
-        submitted
+    let (result, input_hash, evidence_hash, due) = if c.template == Template::T0 {
+        let input = EvaluationInput {
+            criteria: c.clone(),
+            start: submitted,
+            evaluated_at: submitted,
+            base: None,
+            atr0: None,
+            bars: vec![],
+            trades: vec![],
+            coverage_complete: false,
+            endpoint_proven: false,
+            end_price: None,
+        };
+        (
+            criteria::evaluate(&input),
+            digest(&input),
+            digest(&json!({"criteria_only":true})),
+            submitted,
+        )
     } else {
-        submitted + Duration::hours(c.horizon_hours.unwrap_or(72).into())
+        super::assessment_monitor::advance(s, j, id, n, &body, c.clone(), submitted).await?
     };
-    if due > Utc::now() {
-        return Err(Error::deferred("not_due", RetryDirective::At(due)));
-    }
-    let mut input = EvaluationInput {
-        criteria: c.clone(),
-        start: submitted,
-        evaluated_at: due,
-        base: None,
-        atr0: None,
-        bars: vec![],
-        trades: vec![],
-        coverage_complete: false,
-        endpoint_proven: false,
-        end_price: None,
-    };
-    let evidence = if c.template != Template::T0 {
-        let market = body["market"]
-            .as_str()
-            .filter(|m| matches!(*m, "usd_m" | "coin_m"))
-            .ok_or_else(|| {
-                Error::deferred("contract_market_required", RetryDirective::AwaitInput)
-            })?;
-        let symbol = body["instrument"]
-            .as_str()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| Error::deferred("instrument_required", RetryDirective::AwaitInput))?;
-        assemble(s, market, symbol, &mut input).await?
-    } else {
-        json!({"criteria_only":true})
-    };
-    let result = criteria::evaluate(&input);
-    if result.state == criteria::OutcomeState::InsufficientData {
-        return Err(Error::deferred(
-            "market_evidence_incomplete",
-            RetryDirective::Backoff,
-        ));
-    }
     let supersedes: Option<Uuid> = if j.kind == "assess_revision" {
         Some(
             serde_json::from_value(j.body["expected_outcome_id"].clone())
@@ -150,7 +106,7 @@ pub async fn settle(s: &Services, j: &Job) -> Result<Value> {
     } else {
         None
     };
-    let manifest = json!({"assembly_version":"binance-boundary-v2","criteria":c,"start":submitted,"end":due,"evaluated_at":Utc::now(),"instrument":body["instrument"],"market":body["market"],"price_policy":"asof_last_eligible_trade","market_input_sha256":digest(&input),"provider_evidence_sha256":digest(&stable_evidence(evidence)),"market_input_storage":"not_persisted","replay_verification":"requires_provider_refetch","supersedes":supersedes,"revision_reason":j.body["reason"]});
+    let manifest = json!({"assembly_version":"assessment-stream-v1","criteria":c,"start":submitted,"end":due,"evaluated_at":Utc::now(),"instrument":body["instrument"],"market":body["market"],"price_policy":"asof_last_eligible_trade","market_input_sha256":input_hash,"provider_evidence_sha256":evidence_hash,"market_input_storage":"not_persisted","replay_verification":"requires_provider_refetch","supersedes":supersedes,"revision_reason":j.body["reason"]});
     let business_digest = digest(
         &json!({"input":manifest["market_input_sha256"],"provider":manifest["provider_evidence_sha256"],"result":result,"supersedes":supersedes}),
     );
@@ -195,95 +151,4 @@ pub async fn settle(s: &Services, j: &Job) -> Result<Value> {
     .await?;
     tx.commit().await?;
     Ok(json!({"outcome_id":j.id,"state":result.state,"reason":result.reason}))
-}
-async fn assemble(
-    s: &Services,
-    market: &str,
-    symbol: &str,
-    i: &mut EvaluationInput,
-) -> Result<Value> {
-    let provider = &s.market;
-    let c = &i.criteria;
-    let end = i.start + Duration::hours(c.horizon_hours.unwrap_or(72).into());
-    if c.template == Template::T3 {
-        return Err(Error::deferred(
-            "conditional_provider_monitor_not_implemented",
-            RetryDirective::AwaitCapability,
-        ));
-    }
-    if end > Utc::now() {
-        return Err(Error::deferred("not_due", RetryDirective::At(end)));
-    }
-    let base_data = provider
-        .trades(market, symbol, i.start - Duration::minutes(1), i.start)
-        .await?;
-    let end_data = provider
-        .trades(market, symbol, end - Duration::minutes(1), end)
-        .await?;
-    let end_ms = |v: &Value| {
-        v["raw"]
-            .as_array()
-            .and_then(|a| a.last())
-            .and_then(|x| x["p"].as_str())
-            .map(str::to_string)
-    };
-    i.base = end_ms(&base_data);
-    i.end_price = end_ms(&end_data);
-    i.endpoint_proven = base_data["coverage_complete"] == true
-        && end_data["coverage_complete"] == true
-        && i.base.is_some()
-        && i.end_price.is_some();
-    let minute_after =
-        DateTime::from_timestamp((i.start.timestamp().div_euclid(60) + 1) * 60, 0).unwrap();
-    let minute_before = DateTime::from_timestamp(end.timestamp().div_euclid(60) * 60, 0).unwrap();
-    let interior = provider
-        .klines(market, symbol, "1m", minute_after, minute_before)
-        .await?;
-    i.bars = serde_json::from_value(interior["bars"].clone())
-        .map_err(|_| Error::bad("invalid_provider_bars"))?;
-    let start_partial = provider
-        .trades(market, symbol, i.start, minute_after)
-        .await?;
-    let end_partial = if minute_before == end {
-        json!({"coverage_complete":true,"raw":[],"empty_interval":true})
-    } else {
-        provider.trades(market, symbol, minute_before, end).await?
-    };
-    for v in [&start_partial, &end_partial] {
-        for tr in v["raw"]
-            .as_array()
-            .ok_or_else(|| Error::bad("invalid_trades"))?
-        {
-            let at = DateTime::from_timestamp_millis(
-                tr["T"]
-                    .as_i64()
-                    .ok_or_else(|| Error::bad("invalid_trade_time"))?,
-            )
-            .ok_or_else(|| Error::bad("invalid_trade_time"))?;
-            i.trades.push(Trade {
-                at,
-                price: tr["p"]
-                    .as_str()
-                    .ok_or_else(|| Error::bad("invalid_trade_price"))?
-                    .into(),
-            });
-        }
-    }
-    i.coverage_complete = interior["coverage_complete"] == true
-        && start_partial["coverage_complete"] == true
-        && end_partial["coverage_complete"] == true;
-    let day = DateTime::from_timestamp(i.start.timestamp().div_euclid(86400) * 86400, 0).unwrap();
-    let daily = provider
-        .klines(market, symbol, "1d", day - Duration::days(121), day)
-        .await?;
-    let bars: Vec<Bar> = serde_json::from_value(daily["bars"].clone())
-        .map_err(|_| Error::bad("invalid_atr_bars"))?;
-    i.atr0 = if daily["coverage_complete"] == true {
-        criteria::atr14(&bars, i.start).ok()
-    } else {
-        None
-    };
-    Ok(
-        json!({"base":base_data,"end":end_data,"interior":interior,"start_boundary":start_partial,"end_boundary":end_partial,"atr_daily":daily}),
-    )
 }

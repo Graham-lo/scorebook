@@ -95,6 +95,154 @@ impl Facade {
                 .ok_or_else(|| Error::bad("idempotency_key_required"))
         };
         match action {
+            Action::KnowledgeSourceSlice => {
+                app::knowledge_index::source_slice(s, owner, parse(payload)?).await
+            }
+            Action::ImageReindex => app::chart_search::reindex::request(s, owner, key()?).await,
+            Action::ImageIndexStatus => app::chart_search::reindex::status(s, owner).await,
+            Action::ExchangeExportMapping => {
+                app::trades::historical_export::mapping(s, owner, id()?, key()?, parse(payload)?)
+                    .await
+            }
+            Action::ExchangeExportCreate => {
+                app::trades::historical_export::create(s, owner, key()?, parse(payload)?).await
+            }
+            Action::ExchangeExportGet => app::trades::historical_export::get(s, owner, id()?).await,
+            Action::ExchangeExportResolve => {
+                app::trades::historical_export::resolve(s, owner, id()?, key()?, parse(payload)?)
+                    .await
+            }
+            Action::ConnectionControl => {
+                app::trades::control(s, owner, id()?, key()?, parse(payload)?).await
+            }
+            Action::BackupConfigure => {
+                app::backups::create(s, owner, key()?, parse(payload)?).await
+            }
+            Action::BackupInitialize => {
+                app::backups::initialize(s, owner, id()?, parse(payload)?).await
+            }
+            Action::BackupRequest => app::backups::request(s, owner, id()?, key()?).await,
+            Action::BackupStatus => app::backups::status(s, owner).await,
+            Action::ChatCreate => {
+                app::chat::create(
+                    s,
+                    principal.ok_or_else(Error::unauthorized)?,
+                    key()?,
+                    parse(payload)?,
+                )
+                .await
+            }
+            Action::ChatGet => app::chat::get(s, owner, id()?).await,
+            Action::ChatEvents => app::chat::events(s, owner, id()?, parse(payload)?).await,
+            Action::ChatCancel => app::chat::cancel(s, owner, id()?, key()?, parse(payload)?).await,
+
+            Action::KnowledgeSemanticSearch => {
+                app::knowledge_index::search(s, owner, parse(payload)?).await
+            }
+            Action::KnowledgeSource => {
+                app::knowledge_index::source(s, owner, parse(payload)?).await
+            }
+            Action::KnowledgeIndexStatus => app::knowledge_index::status(s, owner).await,
+            Action::KnowledgeIndexRequest => app::knowledge_index::request(s, owner, key()?).await,
+
+            Action::PlaybookTransition => {
+                app::knowledge_workflow::transition(s, owner, id()?, key()?, parse(payload)?).await
+            }
+            Action::EpisodeReview => {
+                app::knowledge_workflow::review_episode(s, owner, id()?, key()?, parse(payload)?)
+                    .await
+            }
+            Action::EpisodeReviewContext => {
+                app::knowledge_workflow::episode_context(s, owner, id()?).await
+            }
+            Action::TagRevision => {
+                app::knowledge_workflow::revise_tag(s, owner, id()?, key()?, parse(payload)?).await
+            }
+
+            Action::StatisticsCreate => {
+                app::statistics::create(s, owner, key()?, parse(payload)?).await
+            }
+            Action::StatisticsGet => app::statistics::get(s, owner, id()?).await,
+            Action::StatisticsMembers => {
+                app::statistics::members(s, owner, id()?, parse(payload)?).await
+            }
+            Action::BaselineCreate => {
+                app::statistics::baseline::create(s, owner, key()?, parse(payload)?).await
+            }
+            Action::BaselineGet => app::statistics::baseline::get(s, owner, id()?).await,
+            Action::BaselineSamples => {
+                app::statistics::baseline::samples(s, owner, id()?, parse(payload)?).await
+            }
+            Action::VerdictRequests => {
+                app::statistics::verdicts::list(s, owner, parse(payload)?).await
+            }
+            Action::VerdictDecide => {
+                app::statistics::verdicts::decide(s, owner, key()?, parse(payload)?).await
+            }
+
+            Action::ExchangeConnect => {
+                app::trades::connection(s, owner, key()?, parse(payload)?).await
+            }
+            Action::ExchangeConnections => {
+                app::trades::connections(s, owner, parse(payload)?).await
+            }
+            Action::TradeImport => {
+                app::trades::import::import(s, owner, key()?, parse(payload)?).await
+            }
+            Action::TradeCsvImport => {
+                app::trades::import::csv(s, owner, key()?, parse(payload)?).await
+            }
+            Action::TradeImports => app::trades::imports(s, owner, None, parse(payload)?).await,
+            Action::TradeImportGet => {
+                app::trades::imports(s, owner, Some(id()?), Default::default()).await
+            }
+            Action::TradeFills => app::trades::fills(s, owner, parse(payload)?).await,
+            Action::TradeSeed => app::trades::seed(s, owner, key()?, parse(payload)?).await,
+            Action::TradeCycles => app::trades::projection::list(s, owner, parse(payload)?).await,
+            Action::TradeReconcile => {
+                app::trades::reconciliation::reconcile(s, owner, key()?, parse(payload)?).await
+            }
+            Action::ExecutionLink => app::trades::link(s, owner, key()?, parse(payload)?).await,
+            Action::ExchangeSync => {
+                app::trades::sync::create(s, owner, key()?, parse(payload)?).await
+            }
+            Action::ExchangeSyncGet => app::trades::sync::get(s, owner, id()?).await,
+
+            Action::HistoryCatalog => app::history_catalog::catalog(s, parse(payload)?).await,
+            Action::HistoryCatalogRefresh => {
+                app::history_catalog::request_refresh(s, owner, key()?).await
+            }
+            Action::HistoryEstimate => app::history_catalog::estimate(s, parse(payload)?).await,
+            Action::HistorySubscribe => {
+                app::history_catalog::subscriptions::create(s, owner, key()?, parse(payload)?).await
+            }
+            Action::HistorySubscriptionGet => {
+                app::history_catalog::subscriptions::get(s, owner, id()?).await
+            }
+            Action::HistorySubscriptionControl => {
+                app::history_catalog::subscriptions::control(
+                    s,
+                    owner,
+                    id()?,
+                    key()?,
+                    parse(payload)?,
+                )
+                .await
+            }
+            Action::ArchiveCatalog => {
+                app::history_catalog::archives::discover(s, parse(payload)?).await
+            }
+
+            Action::ChartAnalyze => {
+                app::chart_search::analyze(s, owner, key()?, parse(payload)?).await
+            }
+            Action::ChartSearchCreate => {
+                app::chart_search::create(s, owner, key()?, parse(payload)?).await
+            }
+            Action::ChartSearchGet => app::chart_search::get(s, owner, id()?).await,
+            Action::ChartSearchCancel => {
+                app::chart_search::cancel(s, owner, id()?, key()?, parse(payload)?).await
+            }
             Action::SessionCreate => {
                 app::sessions::create(
                     s,

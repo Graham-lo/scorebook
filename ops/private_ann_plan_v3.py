@@ -13,9 +13,9 @@ with psycopg.connect(url,autocommit=True) as c:
   c.execute("INSERT INTO attachments(id,owner_id,sha256,mime,size,width,height,kind) SELECT id,%s,'synthetic-'||id,'image/png',1,640,320,'scene' FROM public_market.features ORDER BY id LIMIT 20000",(o,))
   c.execute("INSERT INTO calls(id,owner_id,body,digest,original_text,instrument,market,timeframe) SELECT id,%s,'{}','synthetic','synthetic retrieval plan','BTCUSDT','usd_m','1h' FROM attachments WHERE owner_id=%s",(o,o))
   c.execute('INSERT INTO call_attachments SELECT owner_id,id,id FROM calls WHERE owner_id=%s',(o,))
- c.execute("INSERT INTO image_embeddings(id,owner_id,attachment_id,model_id,region,region_hash,embedding,quality) SELECT gen_random_uuid(),%s,a.id,'candle-profile-v1','null','full',f.embedding,'{}' FROM attachments a JOIN public_market.features f ON f.id=a.id WHERE a.owner_id=%s ON CONFLICT DO NOTHING",(o,o))
+ c.execute("INSERT INTO image_embeddings(id,owner_id,attachment_id,model_id,region,region_hash,embedding,quality) SELECT gen_random_uuid(),%s,a.id,'candle-geometry-v2','null','full',f.embedding,'{}' FROM attachments a JOIN public_market.features f ON f.id=a.id WHERE a.owner_id=%s ON CONFLICT DO NOTHING",(o,o))
  for table in ['attachments','calls','call_attachments','image_embeddings']:c.execute('ANALYZE '+table)
- query=re.search(r'r#"(WITH embedding_candidates AS MATERIALIZED .*?LIMIT \$9)"#',(ROOT/'crates/infrastructure/src/application/similarity.rs').read_text(),re.S).group(1).replace('{dimension}','192').replace('{model}','candle-profile-v1')
+ query=re.search(r'r#"(WITH embedding_candidates AS MATERIALIZED .*?LIMIT \$9)"#',(ROOT/'crates/infrastructure/src/application/similarity.rs').read_text(),re.S).group(1).replace('{dimension}','192').replace('{model}','candle-geometry-v2')
  query=re.sub(r'\$(\d+)',lambda m:'%(q'+m[1]+')s',query)
  vector=c.execute('SELECT embedding::text FROM public_market.features ORDER BY id LIMIT 1').fetchone()[0]
  params={'q1':o,'q2':uuid.uuid4(),'q3':'2030-01-01T00:00:00Z','q4':None,'q5':None,'q6':None,'q7':3000,'q8':vector,'q9':20}

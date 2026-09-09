@@ -5,3 +5,8 @@
 /vision/models/
 __pycache__/
 /ops/local-secrets.env
+
+/text_encoder/models/
+/text_encoder/__pycache__/
+
+/ops/bin/

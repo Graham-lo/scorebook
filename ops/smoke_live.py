@@ -14,7 +14,7 @@ q={'symbol':'BTCUSDT','market':'usd_m','interval':'1h','start_at':start.isoforma
 started=time.perf_counter();data=call('/v1/market/data',q);fetch_ms=(time.perf_counter()-started)*1000
 assert len(data['bars'])==96 and data['storage_policy']=='ephemeral;not_persisted'
 svg,cache=call('/v1/market/chart',q);ET.fromstring(svg);assert 'no-store' in cache
-job=call('/v1/history/indexes',{**q,'window_bars':64,'stride_bars':16,'models':['candle-profile-v1','dinov2-small-v1']})
+job=call('/v1/history/indexes',{**q,'window_bars':64,'stride_bars':16,'models':['candle-geometry-v2','dinov2-small-v1']})
 started=time.perf_counter()
 for _ in range(120):
  status=call('/v1/jobs/'+job['job_id'])

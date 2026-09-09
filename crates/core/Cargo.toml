@@ -14,3 +14,5 @@ bigdecimal = { version = "0.4.10", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 utoipa = { version = "5", features = ["chrono", "uuid"] }
 tokio = { version = "1", features = ["full"] }
+
+zeroize = "1"

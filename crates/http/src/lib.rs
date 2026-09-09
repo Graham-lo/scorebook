@@ -24,6 +24,14 @@ pub use contract::openapi;
 pub use scorebook_core::api::dto as types;
 pub fn router(s: Services) -> Router {
     let api = Router::new()
+        .merge(chart_routes::routes())
+        .merge(chat_routes::routes())
+        .merge(backup_routes::routes())
+        .merge(trade_routes::routes())
+        .merge(statistics_routes::routes())
+        .merge(knowledge_index_routes::routes())
+        .merge(knowledge_workflow_routes::routes())
+        .merge(history_catalog_routes::routes())
         .route("/v1/sessions", post(session_create))
         .route("/v1/sessions/{id}/revoke", post(session_revoke))
         .route("/v1/capabilities", get(capabilities))
@@ -276,3 +284,18 @@ async fn criteria_list() -> Json<Value> {
 
 mod sessions;
 use sessions::*;
+
+mod chart_routes;
+
+mod history_catalog_routes;
+
+mod trade_routes;
+
+mod statistics_routes;
+
+mod knowledge_workflow_routes;
+
+mod knowledge_index_routes;
+
+mod backup_routes;
+mod chat_routes;

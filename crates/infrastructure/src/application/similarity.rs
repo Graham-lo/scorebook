@@ -25,6 +25,7 @@ pub async fn embed_mode(
     model: &str,
     persist: bool,
 ) -> Result<(Vector, Value, String)> {
+    crate::adapters::ann::space(model)?;
     let rh = digest(&region);
     let region_json = json!(region);
     let existing=sqlx::query("SELECT embedding,quality FROM image_embeddings WHERE owner_id=$1 AND attachment_id=$2 AND model_id=$3 AND region_hash=$4").bind(owner).bind(id).bind(model).bind(&rh).fetch_optional(&s.db.pool).await?;
@@ -216,7 +217,7 @@ pub async fn search_mode(
     input: SimilarityQuery,
     persist: bool,
 ) -> Result<Value> {
-    if input.model_id == "hybrid-v1" {
+    if input.model_id == "hybrid-v2" {
         super::hybrid_search::search(s, owner, key, input, persist).await
     } else {
         search_single_mode(s, owner, key, input, persist).await
