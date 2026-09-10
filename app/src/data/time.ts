@@ -81,3 +81,59 @@ export function horizon(hours: number | null | undefined): string {
 export function isoOrNull(value: Date | null): string | null {
   return value ? value.toISOString() : null
 }
+
+/* ------------------------------------------------------------------
+   下面两个是 UTC 口径，只给公开行情用。
+   K 线图是后端画的，横轴刻度写的是 UTC；如果卡片上按本地时区写日期，同一段
+   行情会出现八小时的错位。所以跟图配套的那几处日期改成读 UTC，并且把「UTC」
+   写在旁边——不是只换句说法，是真的换了取值的时区。
+   记录、复盘这些属于用户自己的时间，仍然按读的人所在时区显示。
+   ------------------------------------------------------------------ */
+
+/** 2026-06-12 08:00 UTC。 */
+export function utcDateTime(iso: string | null | undefined): string {
+  const d = parse(iso)
+  if (!d) return DASH
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
+}
+
+/** 一段行情的起止，同一天就只写一次日期。 */
+export function utcRange(from: string | null | undefined, to: string | null | undefined): string {
+  const a = parse(from)
+  const b = parse(to)
+  if (!a || !b) return DASH
+  const sameDay = a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10)
+  return sameDay
+    ? `${utcDateTime(from)} – ${pad(b.getUTCHours())}:${pad(b.getUTCMinutes())}`
+    : `${utcDateTime(from)} – ${utcDateTime(to)}`
+}
+
+/**
+ * 两个时刻之间隔了多久，说成人话。
+ *
+ * 记录详情把一次判断按发生顺序摊开，两段之间要说清「中间等了多久」——判断
+ * 和答案之间隔了三天还是三个月，是这一条记录的分量本身。不满一分钟就说
+ * 「几乎同时」，不编一个 0 分钟出来。
+ */
+export function elapsed(from: string | null | undefined, to: string | null | undefined): string | null {
+  const a = parse(from)
+  const b = parse(to)
+  if (!a || !b) return null
+  const ms = b.getTime() - a.getTime()
+  if (ms < 60_000) return ms < 0 ? null : '几乎同时'
+  const minutes = Math.floor(ms / 60_000)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(ms / 3_600_000)
+  if (hours < 24) {
+    const rest = minutes - hours * 60
+    return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`
+  }
+  const days = Math.floor(ms / 86_400_000)
+  if (days < 60) {
+    const rest = hours - days * 24
+    return rest ? `${days} 天 ${rest} 小时` : `${days} 天`
+  }
+  const months = Math.floor(days / 30)
+  const rest = days - months * 30
+  return rest ? `${months} 个月 ${rest} 天` : `${months} 个月`
+}

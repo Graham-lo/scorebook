@@ -1,0 +1,140 @@
+/* ============================================================
+   外壳：顶栏、主导航、页框
+   ------------------------------------------------------------
+   顶栏是浅色半透明的，底下压一条青蓝的细光带。导航用胶囊，选中的那一个
+   由一块青蓝底滑过去——「我在哪一页」是靠颜色说的，不是靠一个小三角。
+   ============================================================ */
+.masthead{
+  position:sticky;top:0;z-index:60;
+  background:color-mix(in srgb,var(--paper) 78%,transparent);
+  backdrop-filter:blur(18px) saturate(1.5);
+  -webkit-backdrop-filter:blur(18px) saturate(1.5);
+}
+.masthead::after{
+  content:'';position:absolute;left:0;right:0;bottom:0;height:1px;
+  background:linear-gradient(90deg,
+    color-mix(in srgb,var(--blue) 42%,transparent),
+    color-mix(in srgb,var(--rule2) 90%,transparent) 42%,
+    color-mix(in srgb,var(--gold) 34%,transparent));
+}
+/* 左右的 padding 走 max(…, env(safe-area-inset-*))：iPhone 横过来的时候，
+   刘海那一侧会切掉一条，品牌名和右边的按钮不能压在那条黑边下面。竖屏时
+   两个 inset 都是 0，写法等价于原来的 22px。 */
+.mast{
+  max-width:var(--w);margin:0 auto;height:62px;display:flex;align-items:center;gap:22px;
+  padding:0 max(22px,env(safe-area-inset-right)) 0 max(22px,env(safe-area-inset-left));
+}
+.mast-right{margin-left:auto;display:flex;align-items:center;gap:9px}
+.brand{
+  display:flex;align-items:baseline;gap:9px;font-family:var(--serif);font-size:22px;font-weight:500;
+  color:var(--ink);letter-spacing:-.015em;flex:none;position:relative;padding-left:18px;
+}
+/* 静态品牌指示灯，避免持续改变阴影。 */
+.brand::before{
+  content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:9px;height:9px;border-radius:50%;background:var(--blue);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--blue) 18%,transparent),0 0 16px 2px var(--glow);
+
+}
+.brand small{font-family:var(--font);font-size:11px;font-weight:500;color:var(--ink3);letter-spacing:.14em}
+
+/* ---------- 主导航 ---------- */
+.tabs{display:flex;align-items:center;gap:3px;position:relative}
+.tabs::before{ /* 滑动指示器：一块青蓝底，跟着选中项走 */
+  content:'';position:absolute;left:0;top:var(--iy,50%);height:var(--ih,34px);width:var(--iw,0);
+  transform:translateX(var(--ix,0));border-radius:99px;
+  background:linear-gradient(135deg,color-mix(in srgb,var(--blue) 17%,transparent),color-mix(in srgb,var(--blue) 9%,transparent));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--blue) 30%,transparent);
+  transition:transform .42s var(--e-out),width .42s var(--e-out),opacity var(--t2);
+  opacity:var(--io,0);pointer-events:none;
+}
+.tabs>a,.tabs .more-tab{
+  position:relative;z-index:1;display:flex;align-items:center;gap:7px;height:34px;padding:0 14px;
+  border-radius:99px;font-size:13.5px;font-weight:500;color:var(--ink2);
+  white-space:nowrap;flex:none;transition:color var(--t1) var(--e);
+}
+.tabs>a:hover,.tabs .more-tab:hover{color:var(--ink)}
+.tabs>a.active,.tabs .more-tab.active{color:var(--blue-text);font-weight:600}
+.tabs>a svg,.tabs .more-tab svg{width:16px;height:16px;flex:none;transition:transform var(--t2) var(--e-spring)}
+.tabs>a:hover svg,.tabs .more-tab:hover svg{transform:translateY(-1px) scale(1.08)}
+.tabs>a.active svg,.tabs .more-tab.active svg{color:var(--blue);transform:none}
+.tabs>a .cnt{
+  min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--blue);color:#fff;
+  font-family:var(--mono);font-size:10.5px;font-weight:500;display:grid;place-items:center;
+  animation:pop .34s var(--e-spring) both;
+}
+/* 次级入口收在「更多」里：精简导航不等于删功能 */
+.tabs .more-wrap{position:relative;display:flex;align-items:center}
+.tabs .more-tab{cursor:pointer}
+.tabs .more-tab.open{color:var(--blue-text)}
+.tabs .more-tab.open svg{color:var(--blue);transform:rotate(90deg)}
+
+.searchbtn{
+  display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;border-radius:99px;
+  background:color-mix(in srgb,var(--sheet2) 85%,transparent);color:var(--ink3);font-size:13px;
+  box-shadow:inset 0 0 0 1px var(--rule);
+  transition:background var(--t1),color var(--t1),box-shadow var(--t1);max-width:240px;
+}
+.searchbtn:hover{background:var(--sheet2);color:var(--ink2);box-shadow:inset 0 0 0 1px var(--rule2)}
+.searchbtn span:first-of-type{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.searchbtn svg{width:15px;height:15px;flex:none}
+.iconbtn{
+  width:34px;height:34px;display:grid;place-items:center;border-radius:99px;color:var(--ink3);
+  transition:background var(--t1),color var(--t1),transform var(--t2) var(--e-spring);
+}
+.iconbtn svg{width:17px;height:17px}
+.iconbtn:hover{background:var(--sheet2);color:var(--ink);transform:rotate(32deg)}
+.iconbtn.active{color:var(--blue-text);background:var(--blue-soft)}
+.masthead .kbd{background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink3);border:0}
+
+/* ---------- 页框 ---------- */
+/* 底下留出 home indicator 那一条，不然最后一行内容会被它压住。 */
+.page{
+  max-width:var(--w);margin:0 auto;
+  padding:32px max(22px,env(safe-area-inset-right)) calc(100px + env(safe-area-inset-bottom)) max(22px,env(safe-area-inset-left));
+}
+.page.wide{max-width:1360px}
+.phead{display:flex;align-items:flex-end;gap:20px;padding-bottom:20px;margin-bottom:24px;position:relative}
+.phead::after{
+  content:'';position:absolute;left:0;right:0;bottom:0;height:1px;
+  background:linear-gradient(90deg,var(--blue-line),var(--rule) 34%,transparent 80%);
+}
+.phead>:last-child:not(:first-child){margin-left:auto;flex:none}
+
+/* ---------- 第二条：当前这一格里的几页 ----------
+   顶栏第一条说「我在这个产品的哪一步」，这一条说「这一步里我在看哪一页」。
+   窄屏上说明文字和那句话都收起来，只留一排可以横着滑的名字。 */
+.subbar{
+  border-top:1px solid color-mix(in srgb,var(--rule2) 70%,transparent);
+  background:color-mix(in srgb,var(--sheet) 62%,transparent);
+}
+.subin{
+  max-width:var(--w);margin:0 auto;
+  padding:0 max(22px,env(safe-area-inset-right)) 0 max(22px,env(safe-area-inset-left));
+  min-height:44px;display:flex;align-items:center;gap:18px;
+}
+.subline{
+  flex:none;font-family:var(--serif);font-size:13px;color:var(--ink3);
+  letter-spacing:.005em;white-space:nowrap;
+}
+.subline::after{
+  content:'';display:inline-block;width:14px;height:1px;margin:0 0 4px 10px;
+  background:color-mix(in srgb,var(--rule) 100%,transparent);vertical-align:middle;
+}
+.subtabs{display:flex;align-items:stretch;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.subtabs::-webkit-scrollbar{display:none}
+.subtabs>a{
+  flex:none;display:flex;flex-direction:column;justify-content:center;gap:1px;
+  padding:6px 12px;border-radius:9px;position:relative;
+  color:var(--ink2);transition:color var(--t2),background var(--t2);
+}
+.subtabs>a .l{font-size:13.5px;font-weight:500;letter-spacing:-.006em;white-space:nowrap}
+.subtabs>a .w{font-size:11px;color:var(--ink4);white-space:nowrap;transition:color var(--t2)}
+.subtabs>a:hover{color:var(--ink);background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.subtabs>a.on{color:var(--blue-text)}
+.subtabs>a.on .w{color:color-mix(in srgb,var(--blue-text) 62%,transparent)}
+.subtabs>a.on::after{
+  content:'';position:absolute;left:12px;right:12px;bottom:-1px;height:2px;border-radius:2px 2px 0 0;
+  background:var(--blue);animation:subUnder .34s var(--e-out) both;
+}
+@keyframes subUnder{from{transform:scaleX(.2);opacity:0}to{transform:scaleX(1);opacity:1}}

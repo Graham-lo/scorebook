@@ -31,7 +31,7 @@ export function needsPerson(job: JobRecord): boolean {
 }
 
 /** Only these two states let the backend accept a retry. */
-export function canRetry(job: JobRecord): boolean {
+export function canRetry(job: { status: JobStatus }): boolean {
   return job.status === 'failed' || job.status === 'needs_attention'
 }
 

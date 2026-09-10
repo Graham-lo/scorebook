@@ -25,13 +25,16 @@ import type {
   Criteria,
   EpisodeLinkRecord,
   Outcome,
+  ReviewDraftState,
   ReviewRecord,
+  Uuid,
 } from '../../api/types'
-import { PATHS, ruleRows, sentence } from '../../data/criteria'
+import { PATHS, STANCES, ruleRows, sentence } from '../../data/criteria'
+import { flowOf, fromCallDetail } from '../../data/flow'
 import { figures, head as headOutcome, original, pendingState, whyLine } from '../../data/outcome'
 import { INTERVALS, MARKET_LABELS } from '../../data/session'
 import { Gate, detail, invalidate, knownTags, tagIndex } from '../../data/store'
-import { dateTime, relative } from '../../data/time'
+import { dateTime, elapsed, horizon, relative } from '../../data/time'
 import { go } from '../../router'
 import {
   ATTACHMENT_IDENTITY,
@@ -45,6 +48,7 @@ import { append, clear, h } from '../../ui/dom'
 import { icon } from '../../ui/icons'
 import { lightbox } from '../../ui/lightbox'
 import { ChartView, attachmentImage } from '../../ui/media'
+import { flowBar, nextUp } from '../../ui/flow'
 import { stagger } from '../../ui/motion'
 import { openFileDialog } from '../../ui/pick'
 import { popChip } from '../../ui/pop'
@@ -52,7 +56,11 @@ import { empty, note as noteBox, spinner } from '../../ui/states'
 import { problem, toast } from '../../ui/toast'
 import { invalidateLedger } from '../find'
 import { displayId } from '../find/row'
-import { draftEditor, REVIEW_ACTIONS, type DraftEditor } from '../review/draft'
+import { locatePanel } from '../relive/locate'
+import { REVIEW_ACTIONS } from '../review/draft'
+import { tradeSummary } from '../review/trades'
+import { reviewImages } from '../../ui/image-picker'
+import { executionSection } from './execution'
 
 /** The system chart is drawn from the same intervals the backend accepts. */
 const INTERVAL_SECONDS: Record<string, number> = {
@@ -73,8 +81,11 @@ const CORRECTIONS: { value: 'metadata_evidence' | 'parser_error' | 'annotation';
 
 export function callPage(host: HTMLElement, arg: string): () => void {
   const id = arg.split('/')[0] ?? ''
+  const focusSection = arg.split('/')[1]
   let alive = true
   let data: CallDetail | null = null
+  /** 草稿状态只用来判断这条走到哪一步了；正文还是由复盘编辑区自己读写。 */
+  let draftState: ReviewDraftState | null | undefined
 
   const chart = new ChartView()
   const chartLane = new Latest()
@@ -87,7 +98,6 @@ export function callPage(host: HTMLElement, arg: string): () => void {
   const episodeAction = new WriteAction()
 
   /** 复盘编辑区活得比一次重绘长，写到一半重画页面不会把它清掉。 */
-  let form: DraftEditor | null = null
 
   const crumb = h(
     'div.crumb',
@@ -101,7 +111,7 @@ export function callPage(host: HTMLElement, arg: string): () => void {
   host.append(crumb, head, grid)
 
   if (!id) {
-    grid.replaceChildren(empty({ art: 'info', title: '没有指定记录', tip: '回到我的记录，从列表里打开一条。' }))
+    grid.replaceChildren(empty({ title: '没有指定记录', tip: '回到我的记录，从列表里打开一条。' }))
     return () => {
       alive = false
     }
@@ -112,15 +122,19 @@ export function callPage(host: HTMLElement, arg: string): () => void {
 
   async function load(refresh = false): Promise<void> {
     try {
-      const fresh = await detail(id, { refresh })
+      const [fresh, saved] = await Promise.all([
+        detail(id, { refresh }),
+        // 草稿读不出来不该挡住整页；读不到就是「不知道有没有」，不冒充「没有」。
+        reviews.draft(id).catch(() => undefined),
+      ])
       if (!alive) return
       data = fresh
+      draftState = saved
       render()
     } catch (error) {
       if (!alive) return
       grid.replaceChildren(
         empty({
-          art: 'info',
           title: error instanceof ApiError && error.status === 404 ? '没有这条记录' : '这条读不出来',
           tip: error instanceof Error ? error.message : '稍后再试一次。',
           action: h('a.btn.sm', { href: '#/find', text: '回到我的记录' }),
@@ -143,6 +157,7 @@ export function callPage(host: HTMLElement, arg: string): () => void {
     const claim = body.criteria[0] ?? null
     const now = headOutcome(d)
     const first = original(d.outcomes, 0)
+    const flow = flowOf(fromCallDetail(d, draftState))
 
     clear(crumb)
     append(crumb, [
@@ -176,44 +191,242 @@ export function callPage(host: HTMLElement, arg: string): () => void {
         h('span.dot'),
         h('span', { text: `第 ${d.revision} 版` }),
       ),
-      actionsRow(d),
+      actionsRow(d, flow),
     ])
+    head.appendChild(flowBar(flow, { lines: false }))
+    if (!d.voided) head.appendChild(
+      nextUp(flow, { why: false }, (href) => {
+        // 「去写复盘」交给引导流程，那边一步一页。
+        if (href.startsWith('#/review/')) {
+          writeReview(d.id)
+          return
+        }
+        const section = flow.next.kind === 'distill' ? 'distill' : 'result'
+        document.getElementById(`call-${section}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }),
+    )
 
-    const left = h('div.stack')
-    const right = h('div.stack')
-    append(left, [viewer(d), wordsSection(d), criteriaSection(d, claim), reviewSection(d)])
-    append(right, [
-      resultSection(d, now, first),
-      episodeSection(d),
-      factsSection(d),
-      maintenanceSection(d),
-    ])
-    if (d.instrument && d.market) left.appendChild(chartSection(d))
+    // 这一页是把一次判断从头到尾重放一遍，不是把功能摊成一张仪表盘。
+    // 顺序就是事情发生的顺序，中间隔了多久也照实写出来。
+    const story = h('div.relive')
+    const claimed = d.body.original_claimed_at ?? d.submitted_at
+    const answered = now?.created_at ?? null
+    const reviewed = d.reviews.length ? d.reviews[d.reviews.length - 1]!.created_at : null
 
-    grid.replaceChildren(left, right)
-    stagger([...left.children, ...right.children])
+    story.appendChild(
+      chapter({
+        n: 1,
+        state: 'done',
+        title: '当时',
+        when: dateTime(claimed),
+        parts: [viewer(d, ['scene', 'reference'], '这条没留图'), wordsSection(d), momentFacts(d)],
+      }),
+    )
+
+    if (claim) {
+      story.appendChild(
+        chapter({
+          n: 2,
+          state: 'done',
+          title: '定下的标准',
+          when: `观察 ${horizon(claim.horizon_hours)}`,
+          parts: [criteriaSection(d, claim)],
+        }),
+      )
+    } else {
+      story.appendChild(
+        chapter({
+          n: 2,
+          state: 'skipped',
+          title: '没有定标准',
+          when: '不判对错',
+          parts: [],
+        }),
+      )
+    }
+
+    // 没写标准的记录没有「等答案」这回事，别硬造一段等待出来。
+    const wait = claim ? elapsed(claimed, answered ?? new Date().toISOString()) : null
+    if (wait && wait !== '几乎同时') {
+      story.appendChild(
+        waitMark(
+          answered ? `等了 ${wait}，市场给出答案` : `到现在过去了 ${wait}，还在等`,
+          Boolean(answered),
+        ),
+      )
+    }
+
+    const answerParts = [resultSection(d, now, first)]
+    const later = viewer(d, ['supplement'], null)
+    if (later) answerParts.push(later)
+    if (d.instrument && d.market) answerParts.push(chartSection(d))
+    story.appendChild(
+      chapter({
+        n: 3,
+        state: claim ? (answered ? 'done' : 'now') : 'skipped',
+        title: '市场的答案',
+        when: claim ? (answered ? dateTime(answered) : '还没有结果') : '没有对错可算',
+        parts: answerParts,
+      }),
+    )
+
+    const think = reviewed ? elapsed(answered ?? claimed, reviewed) : null
+    if (think) story.appendChild(waitMark(`${think}之后，你回头看了一次`, true))
+
+    story.appendChild(
+      chapter({
+        n: 4,
+        state: d.reviews.length ? 'done' : answered ? 'now' : 'todo',
+        title: '你的复盘',
+        when: reviewed ? dateTime(reviewed) : '还没有写',
+        parts: [reviewSection(d)],
+      }),
+    )
+
+    story.appendChild(
+      chapter({
+        n: 5,
+        state: d.episode_links.length || d.adoptions.length ? 'done' : 'todo',
+        title: '这一条接到哪儿',
+        when: linkFacts(d),
+        parts: [episodeSection(d), executionSection(d)],
+      }),
+    )
+
+    story.appendChild(
+      h(
+        'details.aboutrec',
+        {},
+        h('summary', {}, '这条记录本身：编号、校验、更正与作废'),
+        h('div.stack', {}, factsSection(d), maintenanceSection(d)),
+      ),
+    )
+
+    grid.replaceChildren(story)
+    stagger([...story.children])
+    if (focusSection === 'distill' || focusSection === 'result') {
+      requestAnimationFrame(() => { if (alive) document.getElementById(`call-${focusSection}`)?.scrollIntoView({ block: 'center' }) })
+    }
+  }
+
+  /* --------------------------------------------------------- 重放的骨架 */
+
+  interface ChapterSpec {
+    n: number
+    state: 'done' | 'now' | 'todo' | 'skipped'
+    title: string
+    when: string
+    parts: (HTMLElement | null)[]
+  }
+
+  /** 一段。左边是编号和那根竖线，右边是这一段里真正发生的事。 */
+  function chapter(spec: ChapterSpec): HTMLElement {
+    const body = h('div.chap-in')
+    body.appendChild(
+      h(
+        'header.chap-h',
+        {},
+        h('span.chap-when', { text: spec.when }),
+        h('h2.chap-t', { text: spec.title }),
+      ),
+    )
+    for (const part of spec.parts) if (part) body.appendChild(part)
+    return h(
+      'article.chap',
+      { attrs: { 'data-state': spec.state } },
+      h('div.chap-rail', {}, h('span.n', { text: String(spec.n).padStart(2, '0') })),
+      body,
+    )
+  }
+
+  /** 两段之间的那段时间。重放的分量有一半在这儿。 */
+  function waitMark(text: string, done: boolean): HTMLElement {
+    return h('div.chap-wait', { class: done ? 'done' : '' }, h('span.d'), h('span.t', { text }))
+  }
+
+  /** 第五段的小字：连上了几段、几条做法。没连上就直说。 */
+  function linkFacts(d: CallDetail): string {
+    const bits: string[] = []
+    if (d.episode_links.length) bits.push(`${d.episode_links.length} 段行情`)
+    if (d.adoptions.length) bits.push(`${d.adoptions.length} 条做法`)
+    return bits.length ? bits.join(' · ') : '还没有连上'
+  }
+
+  /** 当时凭什么这么想——记录那一刻真正被记下来的几件事。 */
+  function momentFacts(d: CallDetail): HTMLElement {
+    const rows: { k: string; v: string; why: string }[] = [
+      {
+        k: '方向',
+        v: STANCES[d.body.stance] ?? '没写',
+        why: '方向永远来自你自己按下的那个按钮，系统不从中文里猜。',
+      },
+      {
+        k: '谁先触发谁',
+        v: PATHS[d.body.path] ?? '没记顺序',
+        why: '先看到图上的结构才有想法，还是先有想法再去图上找证据——这两种在你身上的可靠性要分开看。',
+      },
+      {
+        k: '当时的把握',
+        v: d.body.confidence === null || d.body.confidence === undefined ? '没写' : `${d.body.confidence} 分`,
+        why: '当时自己给的分，事后不许改。它和结果对起来，才知道你的把握准不准。',
+      },
+      {
+        k: '周期',
+        v: d.timeframe ?? '未标周期',
+        why: '看的是哪一张图上的结构。',
+      },
+    ]
+    const box = h('div.sec', {}, h('div.sh', {}, h('span.eyebrow.noline', { text: '当时凭什么' })))
+    const grid2 = h('div.momentgrid')
+    for (const row of rows) {
+      grid2.appendChild(
+        h(
+          'div.mf',
+          { title: row.why },
+          h('span.k', { text: row.k }),
+          h('span.v', { text: row.v }),
+        ),
+      )
+    }
+    box.appendChild(grid2)
+    return box
   }
 
   /* --------------------------------------------------------- 头部动作 */
 
-  function actionsRow(d: CallDetail): HTMLElement {
+  /** 写复盘不在这一页上，去那四步里写。 */
+  function writeReview(id: Uuid): void {
+    go(`review/${id}/step/1`)
+  }
+
+  /**
+   * 主行动交给上面那一条流程说了算，这一行只留随时可做的几件事——不再摆一排
+   * 同样重的按钮让人挑。
+   */
+  function actionsRow(d: CallDetail, flow: ReturnType<typeof flowOf>): HTMLElement {
     const row = h('div.actions-row')
-    if (!d.voided) {
+    // 有图才有得重温：一张图都没有就没法把这条记录定位到某一段真实行情上。
+    if (d.attachments.length) {
       row.appendChild(
         h('button.btn.primary', {
-          text: d.reviews.length ? '再写一条复盘' : '复盘这条',
-          on: {
-            click: () => {
-              document.querySelector('.rvform')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-              document.querySelector<HTMLTextAreaElement>('.rvform textarea')?.focus()
-            },
-          },
+          text: '重温一遍',
+          on: { click: () => go(`relive/${d.id}/1`) },
         }),
       )
+    }
+    if (!d.voided) {
+      if (flow.next.kind !== 'write' && flow.next.kind !== 'continue' && d.reviews.length) {
+        row.appendChild(
+          h('button.btn.ghost', {
+            text: '再写一条复盘',
+            on: { click: () => writeReview(d.id) },
+          }),
+        )
+      }
       row.appendChild(tagPicker(d).node)
       row.appendChild(
         h('button.btn.ghost', {
-          text: '补图',
+          text: '补后续走势',
           on: { click: () => addPicture(d, 'supplement') },
         }),
       )
@@ -222,10 +435,6 @@ export function callPage(host: HTMLElement, arg: string): () => void {
           text: '加参考图',
           on: { click: () => addPicture(d, 'reference') },
         }),
-      )
-    } else {
-      row.appendChild(
-        h('span.faint', { text: '这条已经作废，只能查看；作废不会删除任何内容。' }),
       )
     }
     return row
@@ -302,7 +511,7 @@ export function callPage(host: HTMLElement, arg: string): () => void {
             await supplement(d.id, payload, new WriteAction().keyFor(payload))
             supplementAction.reset()
             bar.remove()
-            toast(kind === 'supplement' ? '补图已经挂上，原图没有被改动。' : '参考图已经挂上。')
+            toast(kind === 'supplement' ? '后续走势已经挂上，当时那张没有被改动。' : '参考图已经挂上。')
             await afterWrite()
           } catch (error) {
             bar.remove()
@@ -325,9 +534,15 @@ export function callPage(host: HTMLElement, arg: string): () => void {
 
   /* ------------------------------------------------------------- 左栏 */
 
-  function viewer(d: CallDetail): HTMLElement {
-    const shots = [...d.attachments].sort(order)
+  /**
+   * 图看的时候要分开：当时那张是证据，后来那张是答案，它们属于这一页的两段。
+   * `kinds` 说这一格放哪几种；一张都没有时，`emptyLine` 有话就摆一句，
+   * 没话就整格不出现（后续走势本来就可以没有）。
+   */
+  function viewer(d: CallDetail, kinds: Attachment['kind'][], emptyLine: string | null): HTMLElement | null {
+    const shots = [...d.attachments].filter((a) => kinds.includes(a.kind)).sort(order)
     if (!shots.length) {
+      if (!emptyLine) return null
       return h(
         'div.viewer',
         {},
@@ -335,7 +550,7 @@ export function callPage(host: HTMLElement, arg: string): () => void {
         h(
           'div.stage.paper',
           {},
-          h('div.tip', { style: 'padding:34px 20px;text-align:center', text: '这条只有话，没有留下图。' }),
+          h('div.tip', { style: 'padding:34px 20px;text-align:center', text: emptyLine }),
         ),
       )
     }
@@ -344,7 +559,8 @@ export function callPage(host: HTMLElement, arg: string): () => void {
     const bar = h('div.bar')
     const stage = h('div.stage')
     const foot = h('div.foot')
-    const box = h('div.viewer', {}, bar, stage, foot)
+    const pinBox = h('div.viewer-pin', { hidden: true })
+    const box = h('div.viewer', {}, bar, stage, pinBox, foot)
 
     const paint = () => {
       const shot = shots[index] as Attachment
@@ -374,11 +590,16 @@ export function callPage(host: HTMLElement, arg: string): () => void {
           text: `${shot.width}×${shot.height} · ${Math.round(shot.size / 1024)} KB`,
         }),
       )
+      bar.appendChild(pinButton(d, shot, pinBox))
+      clear(pinBox)
+      pinBox.hidden = true
 
       clear(stage)
       const image = attachmentImage(shot.id, {
         alt: `${d.instrument ?? '未标品种'} ${identityLabel(shot)}`,
         ratio: { width: shot.width, height: shot.height },
+        // 这一张是证据本身，按原尺寸取；它也是这一页的主角，不等滚动。
+        lazy: false,
         onReady: (url, node) => {
           node.addEventListener('click', () => lightbox(url, `${identityLabel(shot)} · ${dateTime(shot.uploaded_at)}`))
         },
@@ -404,6 +625,37 @@ export function callPage(host: HTMLElement, arg: string): () => void {
     return box
   }
 
+  /**
+   * 把这张图钉到真实行情的哪一段上。钉过一次就长期存着，以后重温直接读它，
+   * 不再按图找，所以这里的按钮在钉过之后只报事实。
+   */
+  function pinButton(d: CallDetail, shot: Attachment, host: HTMLElement): HTMLElement {
+    const pinned = shot.location ?? null
+    const button = h('button.btn.sm.ghost', {
+      text: pinned ? `已钉到 ${pinned.symbol} · ${pinned.interval}` : '钉到真实行情',
+      on: {
+        click: () => {
+          if (!host.hidden) {
+            host.hidden = true
+            clear(host)
+            return
+          }
+          host.hidden = false
+          const panel = locatePanel({
+            call: d,
+            attachment: shot,
+            onChange: () => void afterWrite(),
+          })
+          host.replaceChildren(panel.node)
+          if (!pinned) panel.start()
+        },
+      },
+    })
+    // 这一段是后端自动匹配上的，不是人确认的：把这件事标在按钮上。
+    if (pinned?.matched_by === 'auto') button.appendChild(h('span.rlv-lauto', { text: '自动' }))
+    return button
+  }
+
   function wordsSection(d: CallDetail): HTMLElement {
     const tags = h('div.row', { style: 'flex-wrap:wrap' })
     if (d.tags.length) {
@@ -426,10 +678,10 @@ export function callPage(host: HTMLElement, arg: string): () => void {
         'div.sh',
         {},
         h('span.eyebrow.noline', { text: '原话' }),
-        h('span.faint', { text: `${[...d.original_text].length} 字 · 记下来就不再改动` }),
+        h('span.faint', { text: `${[...d.original_text].length} 字` }),
       ),
       // 原话是用户输入，按纯文本渲染。
-      h('div.quote.lg', { text: d.original_text || '（这条没有文字，只有图。）' }),
+      h('div.quote.lg', { text: d.original_text || '这条没有文字' }),
       tags,
     )
   }
@@ -440,7 +692,7 @@ export function callPage(host: HTMLElement, arg: string): () => void {
       rules.appendChild(h('div.r', {}, h('span', { text: row.key }), h('span', { text: row.value })))
     }
     const extra = d.body.criteria.length > 1
-      ? h('div.tip', { text: `这条记录写了 ${d.body.criteria.length} 条标准，下面显示的是第一条。` })
+      ? h('div.faint', { text: `共 ${d.body.criteria.length} 条标准，这里是第一条` })
       : null
     return h(
       'div.sec',
@@ -449,11 +701,6 @@ export function callPage(host: HTMLElement, arg: string): () => void {
       h('div.sentence', { text: sentence(claim) }),
       claim ? rules : null,
       extra,
-      h('div.tip', {
-        text: claim
-          ? '标准在记录那一刻就定下来了，之后不会因为行情变化而改动。'
-          : '没写标准的记录不判对错，它只保留你当时说的话和看到的画面。',
-      }),
     )
   }
 
@@ -508,24 +755,19 @@ export function callPage(host: HTMLElement, arg: string): () => void {
     for (const item of [...d.reviews].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
       box.appendChild(reviewRow(item))
     }
-    if (d.voided) {
-      box.appendChild(h('div.tip', { text: '已作废的记录不再接受新的复盘。' }))
-      return box
-    }
-    if (!form) {
-      form = draftEditor({
-        callId: d.id,
-        lead: d.reviews.length
-          ? '再看一次：这次和上一条复盘相比，判断变了没有？'
-          : '行情已经走完了，现在你怎么看当时那句话？',
-        reread: async () => detail(d.id, { refresh: true }),
-        outcomes: () => d.current_outcomes ?? [],
-        onPublished: () => {
-          void afterWrite()
-        },
-      })
-    }
-    box.appendChild(form.node)
+    if (d.voided) return box
+    // 这一页是重看，不是写字的地方。写复盘在引导流程里，这里只放一个入口，
+    // 怎么写、分几步，到了那边再说。
+    box.appendChild(
+      h(
+        'div.rvstart',
+        { style: 'margin-top:4px' },
+        h('a.btn.primary', {
+          href: `#/review/${d.id}/step/1`,
+          text: d.reviews.length ? '再写一条复盘' : '开始复盘',
+        }),
+      ),
+    )
     return box
   }
 
@@ -544,6 +786,8 @@ export function callPage(host: HTMLElement, arg: string): () => void {
         h('span.faint', { text: `${dateTime(item.created_at)} · ${relative(item.created_at)}` }),
       ),
       item.body.note ? h('div.quote.sm', { text: item.body.note }) : null,
+      reviewImages(item.body.attachment_ids),
+      tradeSummary(item.body.trades, item.body.trade_snapshots),
       item.body.better_play
         ? h(
             'div',
@@ -580,12 +824,9 @@ export function callPage(host: HTMLElement, arg: string): () => void {
         'div.sh',
         {},
         h('span.eyebrow.noline', { text: '这段行情' }),
-        h('span.faint', { text: `${request.interval} · ${dateTime(request.start_at)} 起` }),
+        h('span.faint', { text: `系统图 · ${request.interval} · ${dateTime(request.start_at)} 起` }),
       ),
       chart.node,
-      h('div.tip', {
-        text: '系统图按行情源的标准参数临时绘制，只在这个页面里存在，不代表你当时看到的画面。',
-      }),
     )
   }
 
@@ -602,7 +843,7 @@ export function callPage(host: HTMLElement, arg: string): () => void {
   function resultSection(d: CallDetail, now: Outcome | null, first: Outcome | null): HTMLElement {
     const box = h(
       'div.sec',
-      {},
+      { id: 'call-result' },
       h(
         'div.sh',
         {},
@@ -629,14 +870,6 @@ export function callPage(host: HTMLElement, arg: string): () => void {
     }
 
     box.appendChild(pastResults(d, now, first))
-
-    if (!now && d.body.criteria[0]) {
-      box.appendChild(
-        h('div.tip', {
-          text: '到期后按你当时写下的标准自动算一次，算完出现在这里。这一格只由市场填，你填不了。',
-        }),
-      )
-    }
     return box
   }
 
@@ -673,11 +906,6 @@ export function callPage(host: HTMLElement, arg: string): () => void {
     }) as HTMLButtonElement
     const olderRow = h('div', {}, older)
     if (cursor) wrap.appendChild(olderRow)
-    wrap.appendChild(
-      h('div.tip', {
-        text: '重算不会覆盖旧的一行，每一次算成什么样都留着，随时能对回去。',
-      }),
-    )
 
     async function loadOlder(): Promise<void> {
       if (!cursor) return
@@ -733,13 +961,11 @@ export function callPage(host: HTMLElement, arg: string): () => void {
   }
 
   function episodeSection(d: CallDetail): HTMLElement {
-    const box = h('div.sec', {}, h('div.sh', {}, h('span.eyebrow.noline', { text: '同一段行情' })))
+    const box = h('div.sec', { id: 'call-distill' }, h('div.sh', {}, h('span.eyebrow.noline', { text: '同一段行情' })))
     const link = d.episode_links[0] ?? null
     if (!link) {
       box.appendChild(
-        h('div.tip', {
-          text: '这条还没有和别的记录连成一段行情。写下品种后，同品种 120 小时内的记录会自动连在一起。',
-        }),
+        h('div.faint', { text: '还没有连成一段行情' }),
       )
       return box
     }
@@ -759,7 +985,6 @@ export function callPage(host: HTMLElement, arg: string): () => void {
             text: '不是一段',
             on: { click: () => void setLink(d, link, 'rejected') },
           }),
-          h('span.faint', { text: '这是系统的建议，没有确认之前不算数。' }),
         ),
       )
     }
@@ -775,29 +1000,45 @@ export function callPage(host: HTMLElement, arg: string): () => void {
   }
 
   const chainGate = new Gate(3)
+  /**
+   * 一段行情在 120 小时的窗口里可以攒下几十条记录。整段的样子归「看整段」那一页，
+   * 这里只要够看出前后文就行：取这条前后各几条，其余的用一句话说清楚还有多少。
+   * 顺带也不用为整段每一条都去读一次详情。
+   */
+  const CHAIN_MAX = 8
 
   async function fillChain(chain: HTMLElement, d: CallDetail, link: EpisodeLinkRecord): Promise<void> {
     try {
       const found = await fetchEpisode(link.episode_id)
       if (!alive) return
+      const kept = found.links
+        .filter((l) => l.status !== 'rejected')
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      const near = around(kept, d.id, CHAIN_MAX)
       const members = await Promise.all(
-        found.links
-          .filter((l) => l.status !== 'rejected')
-          .map((l) =>
-            chainGate.run(async () => {
-              try {
-                return { link: l, call: await detail(l.call_id) }
-              } catch {
-                return null
-              }
-            }),
-          ),
+        near.map((l) =>
+          chainGate.run(async () => {
+            try {
+              return { link: l, call: await detail(l.call_id) }
+            } catch {
+              return null
+            }
+          }),
+        ),
       )
       if (!alive) return
       const rows = members
         .filter((m): m is { link: EpisodeLinkRecord; call: CallDetail } => m !== null)
         .sort((a, b) => a.call.submitted_at.localeCompare(b.call.submitted_at))
       clear(chain)
+      if (kept.length > near.length) {
+        chain.appendChild(
+          h('div.faint', {
+            style: 'margin-bottom:6px',
+            text: `这一段里一共 ${kept.length} 条，下面是这一条前后的 ${near.length} 条。`,
+          }),
+        )
+      }
       for (const row of rows) {
         const isThis = row.call.id === d.id
         const words = row.call.original_text.trim() || '（只有图）'
@@ -833,6 +1074,15 @@ export function callPage(host: HTMLElement, arg: string): () => void {
     } catch {
       if (alive) chain.replaceChildren(h('div.tip', { text: '这一段暂时读不出来。' }))
     }
+  }
+
+  /** 以这条为中心截一段出来；它要是不在里面（理论上不会），就取最前面几条。 */
+  function around(links: EpisodeLinkRecord[], callId: Uuid, max: number): EpisodeLinkRecord[] {
+    if (links.length <= max) return links
+    const here = links.findIndex((l) => l.call_id === callId)
+    if (here < 0) return links.slice(0, max)
+    const start = Math.max(0, Math.min(here - Math.floor(max / 2), links.length - max))
+    return links.slice(start, start + max)
   }
 
   async function setLink(
@@ -915,17 +1165,8 @@ export function callPage(host: HTMLElement, arg: string): () => void {
 
   /* ------------------------------------------------- 更正 / 作废 */
 
-  function maintenanceSection(d: CallDetail): HTMLElement {
-    if (d.voided) {
-      return h(
-        'div.sec',
-        {},
-        h('div.sh', {}, h('span.eyebrow.noline', { text: '已作废' })),
-        h('div.tip', {
-          text: '作废只是标记，原话、图片和已经算出来的结果都还在，随时可以查阅。',
-        }),
-      )
-    }
+  function maintenanceSection(d: CallDetail): HTMLElement | null {
+    if (d.voided) return null
 
     let category: (typeof CORRECTIONS)[number]['value'] = 'metadata_evidence'
     const seg = h('span.seg')
@@ -961,9 +1202,6 @@ export function callPage(host: HTMLElement, arg: string): () => void {
       'div.sec',
       {},
       h('div.sh', {}, h('span.eyebrow.noline', { text: '更正与作废' })),
-      h('div.tip', {
-        text: '原话不能修改——能改的判断就不算判断了。写错的信息用更正追加说明；看法变了就另记一条，两条都留着，正好看出你是在哪一步改的主意。',
-      }),
       h(
         'details.disc',
         {},
@@ -1050,9 +1288,6 @@ export function callPage(host: HTMLElement, arg: string): () => void {
 
   return () => {
     alive = false
-    // 离开这一页之前把最后一次草稿补存掉，写到一半切走不算丢。
-    void form?.flush().catch(() => undefined)
-    form?.dispose()
     chart.cancel()
     chartLane.cancel()
   }

@@ -1,0 +1,266 @@
+/* ============================================================
+   窄一点的窗口，一直窄到手机
+   ------------------------------------------------------------
+   1440 / 1280 是常用宽度，两列布局在 1040 以下并成一列；
+   760 以下并排的两张图竖过来；640 以下顶栏只留图标，一行记录的三块竖着排；
+   520 以下按手机来排：面板占满宽度、输入框不小于 16px（不然 iOS 会自己放大
+   整页）、底部留出安全区。
+   ============================================================ */
+@media (max-width:1180px){
+  .review{grid-template-columns:308px 1fr}
+  .archive{grid-template-columns:256px 1fr}
+}
+@media (max-width:1040px){
+  .review,.archive{grid-template-columns:1fr}
+  .queue,.taglist{position:static;max-height:none}
+  .weekstrip{grid-template-columns:1fr 1fr}
+  .lrow .side{width:150px}
+}
+/* 五步流程尽量排成一条横线：那条线本身就是「记录→复盘」这件事的样子。
+   960 以上还塞得下五格（每格约 190px），到 960 以下才折成 3+2 两行。 */
+@media (max-width:960px){
+  .hero-flow{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:16px}
+}
+/* iPad 竖屏（大约 641–900）：这一档不并成一列。这个宽度还有 800 多像素，
+   五步流程排成一根竖柱子的话，右边一大半都是空的，「一步接一步」这件事反而
+   看不出来。所以流程留三列（第二行两格），三个数字仍然是一条横排，
+   最近记下的仍然两列，只把间距和内边距收一点。 */
+@media (max-width:900px){
+  .hero{padding:32px 24px 28px}
+  .hero-flow{gap:16px 20px;padding-top:16px}
+  .hstep{padding-right:0}
+  .hstep::before{top:-16px}
+  .hero-flow::after{display:none}
+  .flow{grid-auto-flow:row;grid-auto-columns:auto;gap:14px;padding-top:0;padding-left:20px}
+  .flow::before,.flow::after{left:5px;right:auto;top:0;bottom:0;width:3px;height:auto}
+  .flow::after{height:var(--fp,0%);width:3px}
+  .fstep{padding-right:0}
+  .fstep>i{left:-20px;top:3px}
+}
+/* 「参与匹配的片段｜之后的走势」这类并排的两张图，窄了就上下排，
+   横着挤成两条细缝什么都看不出来。 */
+/* 重放：窄屏上时间轴收窄，编号缩小，正文仍然跟着那根线走——把编号搬到
+   正文上面会让「一段一段往下走」这件事散掉。 */
+@media (max-width:640px){
+  .chap,.chap-wait{grid-template-columns:34px 1fr;gap:0 12px}
+  .chap-rail .n{width:30px;height:30px;font-size:11px}
+  .chap-in{padding-bottom:20px}
+  .aboutrec{padding-left:46px}
+  .momentgrid{grid-template-columns:1fr 1fr}
+}
+@media (max-width:760px){
+  .viewer .stage.duo{grid-template-columns:1fr}
+  .viewer .stage{min-height:180px}
+  .stats{grid-template-columns:repeat(auto-fit,minmax(96px,1fr))}
+}
+/* 顶栏排成两行：名字和右边的动作在上，导航自己占一整行。挤在一行里的时候，
+   五个入口加上搜索和主按钮一共要 950px，再窄就把自己顶出屏幕。 */
+@media (max-width:980px){
+  .mast{height:auto;row-gap:6px;flex-wrap:wrap;padding:9px max(22px,env(safe-area-inset-right)) 9px max(22px,env(safe-area-inset-left))}
+  /* 排不下就换行，不做横向滚动：这一条里装着「更多」那个浮层，
+     给它加 overflow 会把浮层裁掉。 */
+  .tabs{order:3;flex:1 1 100%;flex-wrap:wrap;row-gap:4px}
+}
+@media (max-width:640px){
+  .mast{gap:10px;padding:9px max(14px,env(safe-area-inset-right)) 9px max(14px,env(safe-area-inset-left))}
+  /* 第二条导航在手机上只留名字，横着滑；说明文字和那句引导话在这个宽度里
+     会把一排入口挤成两行，反而看不清自己在哪一页。 */
+  .subin{padding:0 max(14px,env(safe-area-inset-right)) 0 max(14px,env(safe-area-inset-left));min-height:38px;gap:0}
+  .subline{display:none}
+  .subtabs>a{padding:5px 11px}
+  .subtabs>a .w{display:none}
+  .searchbtn span:first-of-type,.btn .kbd,.brand small{display:none}
+  .tabs>a,.tabs .more-tab{padding:0 12px}
+  .page{padding:20px max(14px,env(safe-area-inset-right)) calc(84px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))}
+  .h1{font-size:27px}
+  /* 标题右边那颗次要按钮：手机上落到下一行左对齐。挤在一段长说明旁边的时候
+     它只剩两三个字宽，既点不准也看不出是干什么的。 */
+  .phead{flex-wrap:wrap;align-items:flex-start;gap:12px}
+  .phead>:last-child:not(:first-child){margin-left:0}
+  .lrow{flex-wrap:wrap;gap:12px}
+  .lrow .side{width:100%;flex-direction:row;align-items:center;justify-content:space-between;text-align:left}
+  .lrow .body{flex:1 1 100%;order:3}
+  .rimgs,.opts,.grid2,.symlist,.exnums,.hero-nums,.hero-flow,.hrecent{grid-template-columns:1fr}
+  .weekstrip{grid-template-columns:1fr 1fr}
+  .hero-acts .btn{flex:1;justify-content:center}
+  .ttask{flex-wrap:wrap}
+  .ttask .go{width:100%;justify-content:center}
+
+  .panel .ph{flex-direction:column;padding:18px 16px 0}
+  .panel .mini-hint{padding:0 16px 10px}
+  /* 位置还是靠 left:50% + 位移，动画里也是这么写的；这里只把它收窄，
+     不然横过来的位移和 left/right 会打架。 */
+  .toast{max-width:calc(100vw - 24px);bottom:calc(16px + env(safe-area-inset-bottom))}
+  .lightbox{padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left))}
+  .askbox{padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left))}
+}
+/* ---------- 手机 ---------- */
+@media (max-width:520px){
+  .brand{font-size:19px;padding-left:16px}
+  .h1{font-size:24px}
+  /* iOS 上聚焦一个小于 16px 的输入框会把整页放大，回不来。 */
+  .input,.textarea,input,textarea,select{font-size:16px}
+  .input{height:40px}
+  .btn.sm{height:32px}
+  .weekstrip{grid-template-columns:1fr 1fr}
+  .stats{grid-template-columns:1fr 1fr}
+  .bigs,.hcards,.tagwall,.vcard .body{grid-template-columns:1fr}
+  .hit{grid-template-columns:1fr}
+  .panel .ph .ctx .sym{font-size:16px}
+  .savedcard{padding:40px 18px}
+  /* 「下一步」这条：手机上把按钮放到第二行占满，别让说明文字被挤成一列窄字。 */
+  .nextup{flex-wrap:wrap;align-items:flex-start}
+  .nextup .acts{flex:1 1 100%}
+  .nextup .acts .btn{width:100%;justify-content:center}
+}
+@media (max-width:400px){
+  .tabs>a,.tabs .more-tab{padding:0 9px}
+  .mast{gap:8px;padding:9px max(11px,env(safe-area-inset-right)) 9px max(11px,env(safe-area-inset-left))}
+  /* 这么窄的屏幕上没有 ⌘K 可按，「记录」那一页本来就有搜索框；
+     把顶栏这颗让出来，名字和主按钮才排得进同一行。 */
+  .searchbtn{display:none}
+  .page{padding:16px max(11px,env(safe-area-inset-right)) calc(76px + env(safe-area-inset-bottom)) max(11px,env(safe-area-inset-left))}
+}
+
+/* ============================================================
+   手机：一样的配色和排布，去掉手机画不起的那几层
+   ------------------------------------------------------------
+   iPhone 上真正费电的不是页面复杂，是三件事：
+     一，整屏的实时模糊（backdrop-filter）要在每一帧重新做一遍；
+     二，一直在动的东西让屏幕永远刷新，GPU 一秒都闲不下来；
+     三，屏幕外的东西也照样排版和绘制。
+   下面把这三件事按住。看得见的样子不变——颜色、间距、层次都还在。
+   ============================================================ */
+@media (pointer: coarse), (max-width: 640px) {
+  body::before { inset:0; filter:none; }
+  body::after { display:none; }
+  *, *::before, *::after { -webkit-backdrop-filter:none!important; backdrop-filter:none!important; }
+  .masthead { background:var(--paper); }
+  .pop { background:var(--sheet); }
+  .queue .gh { background:var(--sheet2); }
+
+  /* 会一直动到天亮的那几处：手机上全停。状态还看得出来——等图的图标还在，
+     骨架还是骨架，草稿保存的那颗点还亮着，只是不再一帧一帧地动。
+     正在转的那圈（.btn.busy）留着：它只在请求还在路上时出现，是真的在等。 */
+  .stamp.st-pending::before,
+  .sync i,
+  .sk,
+  .shot-wait svg,
+  .prep::before,
+  .dstate.saving::after { animation:none; }
+  .sk { background:var(--sheet3); }
+  .prep::before { opacity:.5; }
+
+  /* 长列表：屏幕外的行先不排版也不绘制，滚到跟前再算。给一个预估高度，
+     滚动条和滚动位置才不会跳。 */
+  .lrow, .qitem, .hrec, .hcard, .hit, .vcard, .pbrow, .tagrow, .exrow {
+    content-visibility:auto;
+  }
+  .lrow { contain-intrinsic-size:auto 148px; }
+  .qitem, .hrec, .pbrow, .tagrow, .exrow { contain-intrinsic-size:auto 96px; }
+  .hcard, .vcard { contain-intrinsic-size:auto 140px; }
+  .hit { contain-intrinsic-size:auto 260px; }
+
+  /* 手指没有悬停。iOS 会把点一下当成停在上面，样式赖着不走，还白白重画一层。 */
+  a:hover, button:hover, .lrow:hover, .hcard:hover, .qitem:hover,
+  .vcard:hover, .pbrow:hover, .big:hover, .hrec:hover { transform:none; }
+  a.hcard:hover .ic::after, button.hcard:hover .ic::after { animation:none; }
+}
+
+/* 地址栏收起来的时候 100vh 会跟着变，整页重新排一次。dvh 说的就是「现在这么
+   高」，不会在滚动过程里来回改。 */
+@supports (height:100dvh) {
+  body { min-height:100dvh; }
+}
+
+/* 引导式复盘：窄屏上顶条只留编号和名字，底下那条按钮占满一行。 */
+@media (max-width:640px){
+  .wizrail{padding:12px 2px;margin-top:12px}
+  .wstep .wn{width:28px;height:28px;font-size:12px}
+  .wstep+.wstep::before{left:calc(-50% + 15px);right:calc(50% + 15px);top:13px}
+  .wstep .wt{font-size:11px}
+  .wizhead{margin:16px 0 14px}
+  .wizwho .btn{margin-left:0}
+  .wizfoot{gap:9px;padding-bottom:calc(13px + env(safe-area-inset-bottom))}
+  .wizfoot>.btn,.wizfoot>a.btn{flex:1 1 auto;justify-content:center}
+  .wizfoot .next{margin-left:0;flex:1 1 100%}
+  .wizfoot .dfoot{margin-left:0;flex:1 1 100%;flex-wrap:wrap}
+  .wizfoot .dfoot .btn.primary{flex:1 1 100%;justify-content:center}
+  .wizdone .dl{grid-template-columns:1fr;gap:4px}
+  .wizdone .dl .k{padding-top:0}
+}
+
+/* 引导式记录：窄屏上方向那排按钮铺满一行，字段并成一列。 */
+@media (max-width:640px){
+  .capsec{padding:15px 16px}
+  .cappanel .ph{padding:16px 16px 0}
+  .cappanel .pin{padding:13px 16px 0}
+  .cappanel .pin textarea{font-size:20px;min-height:58px}
+  .cappanel .parse{padding:10px 16px 0}
+  .cappanel .pf{padding:10px 16px 12px}
+  .capsec>.more-fields{grid-template-columns:1fr}
+  /* 五颗方向按钮要在一行里排完：字不换行，宽度平分，字号收一点。
+     换行的话「没写方向」会断成两行，整条 seg 高出一截。 */
+  .seg.big{width:100%}
+  .seg.big button{flex:1;padding:0 5px;font-size:13px;white-space:nowrap}
+}
+
+/* ============================================================
+   iPad：竖屏 834、横屏 1194、11 寸 1024、12.9 寸 1366
+   ------------------------------------------------------------
+   iPad 的问题不是「排不下」，是「排得太松」。上面那几档媒体查询是按手机的
+   思路一路收窄的，落到 800 多像素的屏上就会把本来能并排的东西拆开，
+   字号也还留着桌面那一套——离眼睛更近、屏更小，行长就显得过长。
+   这一档只做两件事：正文行长收一点，两栏的详情页在竖屏 iPad 上仍然并排。
+   ============================================================ */
+@media (min-width:641px) and (max-width:1180px){
+  .h1{font-size:30px}
+  .hstep .t{font-size:16.5px}
+  .hstep .l{font-size:12px;line-height:1.58}
+  .hnum .v{font-size:27px}
+  /* 行长：这块屏离眼睛比显示器近，一行排到七十多个字会读丢行，收到 60 上下。 */
+  .wizl,.tsh .why,.phead .sub{max-width:58ch}
+}
+
+/* ============================================================
+   手指：点得着
+   ------------------------------------------------------------
+   苹果自己的界限是 44pt。下面把所有会被点的东西垫到 44px 高——用
+   min-height 而不是 height，字号和内边距都不动，看上去还是原来那样，
+   只是可点的范围大了一圈。
+   ============================================================ */
+@media (pointer:coarse){
+  .btn,.btn.sm,.seg button,.seg.lg button,.chip,.input,
+  .subtabs>a,.tabs>a,.tabs .more-tab,.pop-list>button,.pop-more .mi{
+    min-height:44px;
+  }
+  .seg{padding:4px}
+  /* 图标那种只有一颗方块的按钮，撑高的同时也要撑宽。 */
+  .iconbtn,.searchbar .clr{min-width:40px;min-height:40px}
+  .chip .x{width:26px;height:26px}
+  /* 上面把导航垫高之后，顶栏自己的固定高度会把它挤出去。 */
+  .mast{height:auto;padding-top:5px;padding-bottom:5px}
+  .subin{min-height:52px}
+}
+
+/* ============================================================
+   手机横过来（高度不到 480）
+   ------------------------------------------------------------
+   横屏时可用高度只有三四百像素，顶栏 + 第二条导航 + 页面上边距加起来
+   就吃掉一半。这一档把纵向的东西全部压扁，并且不让顶栏再粘在上面——
+   粘住的顶栏在这个高度会一直挡着正文。
+   ============================================================ */
+@media (max-height:480px) and (orientation:landscape){
+  .masthead{position:static}
+  .mast{height:auto;padding-top:6px;padding-bottom:6px}
+  .subin{min-height:36px}
+  .page{padding-top:14px;padding-bottom:calc(48px + env(safe-area-inset-bottom))}
+  .hero{padding:20px 22px 18px}
+  .hero-flow{margin-top:16px;padding-top:12px}
+  .hero-nums{margin-top:16px}
+  .h1{font-size:23px}
+  .phead{padding-bottom:12px;margin-bottom:14px}
+  .lightbox img{max-height:74vh}
+  /* 底下这条按钮在矮屏上不粘：粘住会占掉本来就不多的可读高度。 */
+  .wizfoot{position:static}
+}

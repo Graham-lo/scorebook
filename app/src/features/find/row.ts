@@ -5,11 +5,13 @@
 // tags are stored on the row as ids. Those two pieces are read per record
 // through a narrow gate, so the ledger paints immediately and fills in.
 
-import type { CallListItem, Outcome, Uuid } from '../../api/types'
+import type { CallDetail, CallListItem, Outcome, Uuid } from '../../api/types'
 import { percent } from '../../data/decimal'
 import { primary } from '../../data/criteria'
 import { head, pendingState, reasonText, stateLook } from '../../data/outcome'
 import { Gate, cachedDetail, detail } from '../../data/store'
+import { flowOf, fromCallDetail } from '../../data/flow'
+import { flowMini } from '../../ui/flow'
 import { dateTime, DASH } from '../../data/time'
 import { MARKET_LABELS } from '../../data/session'
 import { critHL, dateColumn, stamp, stampPlaceholder, stanceBadge, tagChip, thumb } from '../../ui/bits'
@@ -31,6 +33,7 @@ export function ledgerRow(item: CallListItem, ctx: RowContext): HTMLElement {
   const sceneId: Uuid | null = body.attachments?.[0] ?? null
   const side = h('div.side')
   const tags = h('div.tags')
+  const track = h('div.track')
 
   const row = h(
     'div.lrow',
@@ -62,6 +65,7 @@ export function ledgerRow(item: CallListItem, ctx: RowContext): HTMLElement {
       ),
       h('div.q', {}, highlight(body.original_text, ctx.query)),
       tags,
+      track,
     ),
     side,
   )
@@ -73,6 +77,7 @@ export function ledgerRow(item: CallListItem, ctx: RowContext): HTMLElement {
   if (cached) {
     paintSide(side, item, head(cached), false)
     paintTags(tags, cached.tags.map((t) => t.name), ctx)
+    paintTrack(track, side, cached)
   } else {
     void gate.run(async () => {
       if (!ctx.alive()) return
@@ -81,6 +86,7 @@ export function ledgerRow(item: CallListItem, ctx: RowContext): HTMLElement {
         if (!ctx.alive()) return
         paintSide(side, item, head(full), false)
         paintTags(tags, full.tags.map((t) => t.name), ctx)
+        paintTrack(track, side, full)
       } catch {
         if (ctx.alive()) paintSide(side, item, null, false)
       }
@@ -92,6 +98,32 @@ export function ledgerRow(item: CallListItem, ctx: RowContext): HTMLElement {
   if (consumeFresh(item.id)) row.classList.add('flash')
 
   return row
+}
+
+/**
+ * 这一条走到哪儿了，以及还欠着的那一件事。进度用统一的五段小图，判断全部来自
+ * data/flow.ts，行里不自己解释状态。
+ *
+ * 这里不去问有没有草稿——那要为每一行再发一次请求。所以只有确实要动笔的几种
+ * 下一步才在行上给入口；「去看看行情」这种点开整行就是了，不再重复一个按钮。
+ */
+const WRITING = new Set(['write', 'recheck', 'distill'])
+
+function paintTrack(node: HTMLElement, side: HTMLElement, full: CallDetail): void {
+  const flow = flowOf(fromCallDetail(full, undefined))
+  clear(node)
+  node.appendChild(flowMini(flow))
+  const next = flow.next
+  if (next.href && WRITING.has(next.kind)) {
+    side.appendChild(
+      h('a.nx', {
+        href: next.href,
+        text: next.label,
+        // 行本身是个链接，点按钮时不要连着把整行的跳转也触发一次。
+        on: { click: (e: MouseEvent) => e.stopPropagation() },
+      }),
+    )
+  }
 }
 
 function paintTags(node: HTMLElement, names: string[], ctx: RowContext): void {

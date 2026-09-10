@@ -78,6 +78,33 @@ export interface CallList {
 }
 
 /**
+ * 一张截图被钉到公开行情上的那一段。确认过一次就长期保存：以后重温直接读它，
+ * 不再按图找。它和临时的回放缓存不是一回事——那份会过期，这份不会。
+ */
+export interface AttachmentLocation {
+  symbol: string
+  market: Market
+  interval: string
+  start_at: Instant
+  end_at: Instant
+  bars_count?: number | null
+  source: 'rest' | 'monthly_archive'
+  score?: Decimal | number | null
+  search_run_id?: Uuid | null
+  confirmed_at?: Instant
+  /** 人自己钉的，还是复盘走完之后后台自动匹配上的。 */
+  matched_by?: 'user' | 'auto' | string
+}
+
+/** 这条记录的图上要画哪几条线。后端只校验形状，不算指标。 */
+export interface ChartSetup {
+  ma: number[]
+  ema: number[]
+  boll: { n: number; k: string } | null
+  atr: { n: number } | null
+}
+
+/**
  * Rows come back as `to_jsonb(attachments) - owner_id`, so every column of the
  * table is present. `capture_time_proven` is extra on the upload response only:
  * the backend always sends it as false, meaning a claimed capture time is the
@@ -94,6 +121,8 @@ export interface Attachment {
   captured_at: Instant | null
   kind: AttachmentKind
   capture_time_proven?: boolean
+  /** 这张图钉在公开行情的哪一段。没钉过就是 null。 */
+  location?: AttachmentLocation | null
 }
 
 /**
@@ -112,7 +141,46 @@ export interface CallEvent {
 /** The four relations to the previous review the backend accepts. */
 export type ReviewAction = 'did' | 'did_not' | 'new' | 'keep'
 
+export interface ManualReviewTrade {
+  source: 'manual'
+  symbol: string
+  direction: 'long' | 'short' | null
+  opened_at: Instant | null
+  closed_at: Instant | null
+  quantity: string | null
+  quantity_unit: string | null
+  leverage: string | null
+  entry_price: string | null
+  exit_price: string | null
+  realized_pnl: string | null
+  settlement_asset: string | null
+  fees: string | null
+  margin_mode: 'cross' | 'isolated' | null
+  note: string | null
+}
+export interface ExchangeReviewTrade {
+  source: 'exchange'
+  connection_id: Uuid
+  cycle_id: Uuid
+  leverage: string | null
+  note: string | null
+}
+export type ReviewTrade = ManualReviewTrade | ExchangeReviewTrade
+export interface ReviewTradeSnapshot {
+  source: 'manual' | 'exchange_ledger'
+  trade?: ManualReviewTrade
+  cycle_id?: Uuid
+  cycle?: Cycle
+  account_name?: string
+  market?: Market
+  leverage?: string | null
+  totals?: { opened_quantity: string | null; closed_quantity: string | null; exit_price: string | null }
+}
+
 export interface ReviewBody {
+  trades?: ReviewTrade[]
+  trade_snapshots?: ReviewTradeSnapshot[]
+  attachment_ids?: Uuid[]
   note: string
   better_play: string | null
   vs_last: string
@@ -209,6 +277,8 @@ export interface CallDetail {
   episode_links: EpisodeLinkRecord[]
   tags: TagRecord[]
   adoptions: AdoptionRecord[]
+  /** 这条记录的图上画哪几条线。没设过就是 null。 */
+  chart_setup?: ChartSetup | null
 }
 
 export interface CreatedCall {
@@ -235,60 +305,26 @@ export interface Region {
   height: number
 }
 
-export interface SimilarityItem {
-  attachment_id: Uuid
-  call_id: Uuid
-  submitted_at: Instant
-  original_text: string
-  instrument: string | null
-  market: Market | null
-  timeframe: string | null
-  cosine_distance: number
-  group_id: string
-  source_uri: string
-  /** hybrid-v1 only. */
-  rank_sources?: string[]
-}
-
-export interface SimilarityResult {
-  session_id: Uuid
-  model_id: string
-  cutoff_at: Instant
-  items: SimilarityItem[]
-  retrieval: string
-  grouping: string
-  query_quality: unknown
-  score_meaning: string
-  quality_validated: boolean
-}
-
 export interface ChartRequest {
+  /** A visual divider only; subsequent candles never affect the search score. */
+  match_end_at?: Instant
   symbol: string
   market: Market
   interval: string
   start_at: Instant
   end_at: Instant
-}
-
-export interface HistoryItem {
-  id: Uuid
-  index_id: Uuid
-  source: string
-  source_uri: string
-  symbol: string
-  market: Market
-  interval: string
-  start_at: Instant
-  end_at: Instant
-  bars_count: number
-  cosine_distance: number
-  source_hash_at_index: string
-  chart_request: ChartRequest
-  chart_storage: string
+  /**
+   * 这一段行情该从哪里取：`rest` 是交易所接口，`monthly_archive` 是月度归档。
+   * 后端在候选里给什么就原样带回去——退市或早年的段落只有归档里有，前端把它
+   * 改成 REST 会得到一个空结果或者另一段行情。
+   */
+  source?: 'rest' | 'monthly_archive'
 }
 
 export interface HistoryCoverage {
-  index_id: Uuid
+  index_id?: Uuid
+  /** v4 的已发布覆盖按代次编号，不按索引编号。 */
+  generation_id?: Uuid
   symbol: string
   market: Market
   interval: string
@@ -303,18 +339,10 @@ export interface HistoryCoverage {
   window_bars: number
   stride_bars: number
   models: string[]
-}
-
-export interface HistoryResult {
-  session_id: Uuid
-  items: HistoryItem[]
-  model_id: string
-  cutoff_at: Instant
-  coverage: HistoryCoverage[]
-  scope: string
-  ranking: string
-  score_meaning: string
-  quality_validated: boolean
+  /** 原始 K 线有没有被留下来。后端一直是 `none`。 */
+  raw_market_storage?: string
+  /** 系统画出来的行情图有没有被留下来。后端一直是 `none`。 */
+  system_chart_storage?: string
 }
 
 export interface HistoryIndexRecord {
@@ -373,6 +401,19 @@ export type ReviewBucket = 'needs_review' | 'in_progress' | 'completed' | 'snooz
 /** Why this record is in the queue. Never shown as the identifier itself. */
 export type ReviewReason = 'first_review' | 'continue_draft' | 'new_outcome' | 'reviewed'
 
+/**
+ * 队列行里那一条 assessment 报的是「这次判分跑到哪一步了」，不是判分结果。它
+ * 和 OutcomeState 是两套词：结果的对错要去结果版本里读，这里只说算没算完。
+ * 后端的取值见 application/jobs.rs 的 finish 分支。
+ */
+export type AssessmentState =
+  | 'queued'
+  | 'running'
+  | 'waiting_due'
+  | 'awaiting_input'
+  | 'completed'
+  | 'needs_attention'
+
 export interface QueueItem {
   id: Uuid
   submitted_at: Instant
@@ -390,7 +431,7 @@ export interface QueueItem {
   reviewed_at: Instant | null
   bucket: ReviewBucket
   reason: ReviewReason
-  assessments: { claim_no: number; state: OutcomeState; due_at: Instant | null }[]
+  assessments: { claim_no: number; state: AssessmentState; due_at: Instant | null }[]
 }
 
 export interface ReviewQueue {
@@ -403,6 +444,9 @@ export interface ReviewQueue {
 
 /** The stored draft row. `body` is what the trader typed. */
 export interface ReviewDraftBody {
+  trades?: ReviewTrade[]
+  trade_snapshots?: ReviewTradeSnapshot[]
+  attachment_ids?: Uuid[]
   note: string
   better_play: string | null
   vs_last: ReviewAction | null
@@ -570,19 +614,312 @@ export interface HistoryPlanStarted {
   revision: number
 }
 
+/**
+ * `GET /v1/capabilities` in v4 no longer answers with a flat map of words. A
+ * value is either a sentence naming the shape of what was built, or an object
+ * that separates *implemented* from *configured on this machine*. Neither of
+ * them says the capability passed acceptance against real data — the backend
+ * says so itself in `configuration_status_is_not_live_acceptance`, and
+ * `image_structure_search.real_image_quality_validated` is the one place a
+ * quality verdict is reported at all.
+ */
 export interface Capabilities {
+  backend_version: string
   records: string
   reviews: string
-  image_structure_search: string
-  image_visual_search: string
-  chat_generation: string
-  exchange_accounts: string
+  market_binance: string
+  market_sources: string[]
+  raw_market_storage: string
+  vector_database: string
+  image_structure_search: { model: string; available: boolean; real_image_quality_validated: boolean }
+  image_visual_search: { model: string; configured: boolean }
+  screenshot_ocr: { configured: boolean; unknown_parameters: string }
+  historical_search: string
+  history_plans: string
+  conditional_monitor: { available: boolean; source_plans: string[]; source_change: string }
   formal_statistics: string
-  default_market: Market
-  [k: string]: string
+  baseline: string
+  trade_ledger: string
+  exchange_accounts: { adapter: string; configured: boolean }
+  knowledge_index: { model: string; configured: boolean }
+  chat_generation: { runtime: string; model_id: string; configured: boolean }
+  encrypted_backup: {
+    engine_configured: boolean
+    repository_configured: boolean
+    restore_policy: string
+  }
+  configuration_status_is_not_live_acceptance: boolean
+  [k: string]: unknown
 }
 
 export interface Page<T> {
   items: T[]
   next_cursor: string | null
+}
+
+// ——— 实盘账本（v4）———
+//
+// 这里的数字全是后端算好的十进制字符串。前端只排版，不重算：账本的口径由后端
+// 定，界面上再算一遍只会得到第二个答案。
+
+export type TradeSide = 'BUY' | 'SELL'
+export type PositionSide = 'BOTH' | 'LONG' | 'SHORT'
+
+export interface ExchangeConnection {
+  id: Uuid
+  venue: string
+  market: Market
+  name: string
+  account_label: string
+  ledger_revision: number
+  configuration_revision: number
+  disabled_at?: Instant | null
+  created_at: Instant
+  [k: string]: unknown
+}
+
+export interface CreatedConnection {
+  connection_id: Uuid
+  status: string
+  /** `referenced_not_yet_verified` 表示只登记了引用，还没有验过。 */
+  api_credentials: string
+  read_only_adapter: boolean
+}
+
+export interface ConnectionControlled {
+  connection_id: Uuid
+  revision: number
+  status: string
+  resume_policy: string
+  ledger_retained: boolean
+}
+
+/** 一笔成交，交易所怎么写就怎么存。 */
+export interface Fill {
+  trade_id: string
+  order_id?: string | null
+  symbol: string
+  side: TradeSide
+  position_side: PositionSide
+  price: Decimal
+  quantity: Decimal
+  realized_pnl?: Decimal | null
+  settlement_asset: string
+  commission: Decimal
+  commission_asset: string
+  traded_at: Instant
+  liquidation?: boolean | null
+}
+
+export interface FillRow {
+  id: Uuid
+  connection_id: Uuid
+  import_id: Uuid
+  fill: Fill
+  execution_venue: string
+}
+
+export interface FillPage {
+  items: FillRow[]
+  next_cursor?: string | null
+  /** 后端自报：这些价格是真实成交价，不是行情图上的价。 */
+  price_provenance: string
+}
+
+export interface LedgerEntry {
+  transaction_id: string
+  kind: string
+  symbol?: string | null
+  asset: string
+  amount: Decimal
+  occurred_at: Instant
+  trade_id?: string | null
+}
+
+export interface LedgerRow {
+  id: Uuid
+  connection_id: Uuid
+  import_id: Uuid
+  entry: LedgerEntry
+}
+
+export interface LedgerPage {
+  items: LedgerRow[]
+  next_cursor?: string | null
+  /** `original_asset_decimal_no_fx`：按原币种记，不折算。 */
+  amount_policy: string
+}
+
+/** 一轮持仓：从建仓到清零。`opening_unknown` 表示期初不明，不能当成零。 */
+export type CycleStatus = 'open' | 'closed' | 'opening_unknown'
+
+export interface Cycle {
+  ordinal: number
+  symbol: string
+  position_side: PositionSide
+  direction: 'long' | 'short'
+  status: CycleStatus
+  opened_at?: Instant | null
+  closed_at?: Instant | null
+  entry_price?: Decimal | null
+  remaining_quantity?: Decimal | null
+  computed_realized_pnl?: Decimal | null
+  exchange_realized_pnl?: Decimal | null
+  settlement_asset: string
+  /** 币种 → 手续费金额。多币种手续费不合并。 */
+  commissions: Record<string, Decimal>
+  fills: number
+  opening_evidence: string
+}
+
+export interface CycleRow {
+  id: Uuid
+  connection_id: Uuid
+  projection_run_id: Uuid
+  cycle: Cycle
+  ledger_revision: number
+  /** 这一轮是旧账算出来的，之后又导入过东西。 */
+  stale: boolean
+}
+
+export interface CyclePage {
+  items: CycleRow[]
+  next_cursor?: string | null
+  projection_run_ids: Uuid[]
+  time_filter: string
+  pagination: string
+}
+
+export interface Allocation {
+  fill_id: Uuid
+  allocation_quantity: Decimal
+  allocation_commission: Decimal
+  /** `open` / `close` / `opening_unknown`：这笔成交在这一轮里算什么。 */
+  portion: string
+  actual_fill: Fill
+}
+
+export interface CycleDetail {
+  cycle: {
+    id: Uuid
+    cycle: Cycle
+    connection_id: Uuid
+    projection_run_id: Uuid
+    ledger_revision: number
+  }
+  items: Allocation[]
+  next_cursor?: string | null
+  allocation_scope: string
+  funding: string
+}
+
+export interface ImportCoverage {
+  start_at: Instant
+  end_at: Instant
+  symbols: string[]
+  declared_complete: boolean
+  provenance: string
+  entire_account_history_verified: boolean
+}
+
+export interface ImportResult {
+  import_id: Uuid
+  connection_id: Uuid
+  status: string
+  inserted_fills: number
+  duplicate_fills: number
+  inserted_entries: number
+  ledger_revision: number
+  projection_job_id: Uuid
+  coverage: ImportCoverage
+}
+
+export interface ImportRow {
+  id: Uuid
+  connection_id: Uuid
+  source: string
+  dataset?: string | null
+  created_at: Instant
+  body?: Record<string, unknown>
+  [k: string]: unknown
+}
+
+export interface SeedResult {
+  seed_id: Uuid
+  connection_id: Uuid
+  ledger_revision: number
+  projection_job_id: Uuid
+}
+
+export interface ReconciliationDifference {
+  metric: 'realized_pnl' | 'commission' | 'funding'
+  /** 有成交缺已实现盈亏时为 null——那时候差额是算不出来的，不是零。 */
+  actual?: Decimal | null
+  actual_known_sum: Decimal
+  statement: Decimal
+  difference?: Decimal | null
+  within_tolerance: boolean
+}
+
+export interface ReconciliationAsset {
+  asset: string
+  items: ReconciliationDifference[]
+  fills_missing_realized_pnl: number
+  conversion_applied: boolean
+}
+
+export interface ReconciliationResult {
+  reconciliation_id: Uuid
+  ledger_revision: number
+  status: 'matched_declared_range' | 'differences' | 'unverified_coverage'
+  items: ReconciliationAsset[]
+  assets_missing_from_statement: string[]
+  funding_policy: string
+  declared_range_coverage_complete: boolean
+  entire_account_history_verified: boolean
+}
+
+export interface ExecutionLinkResult {
+  execution_link_id: Uuid
+  call_id?: Uuid | null
+  episode_id?: Uuid | null
+  playbook_id?: Uuid | null
+  relation: string
+  /** 后端自报：这是事后关联，不是入场前就采纳过。 */
+  timing: string
+}
+
+export interface SyncStarted {
+  sync_run_id: Uuid
+  job_id: Uuid
+  status: string
+  coverage: string
+  account_history_complete: boolean
+}
+
+export interface ExportStarted {
+  export_run_id: Uuid
+  job_id: Uuid
+  status: string
+  quota_scope: string
+  account_history_complete: boolean
+}
+
+export interface ExportRun {
+  id: Uuid
+  connection_id: Uuid
+  status: string
+  job_status: string
+  generation: number
+  error_code?: string | null
+  download_id?: string | null
+  imported_rows?: number | null
+  body?: Record<string, unknown>
+  [k: string]: unknown
+}
+
+export interface CsvMapping {
+  columns: Record<string, string>
+  constants?: Record<string, string>
+  timestamp_format: string
 }

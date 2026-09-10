@@ -65,3 +65,67 @@ export function remember(entry: PrepEntry): void {
 export function forget(id: string): void {
   write(read().filter((e) => e.id !== id))
 }
+
+// ——— 一直往前准备的那几条「跟进」———
+
+/**
+ * 跟进和「准备一段」不一样：它没有结束时间，后端会一轮一轮地往前追。同样地，
+ * 后端只能按编号查一条，所以编号要记在本机，否则页面一刷新就找不回来了。
+ */
+export interface FollowEntry {
+  id: string
+  market: string
+  symbols: string[]
+  intervals: string[]
+  start_at: string
+  source: string
+  started_at: string
+}
+
+const FOLLOW_KEY = 'scorebook.following.v1'
+
+function readFollows(): FollowEntry[] {
+  try {
+    const raw = localStorage.getItem(FOLLOW_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isFollow)
+  } catch {
+    return []
+  }
+}
+
+function isFollow(value: unknown): value is FollowEntry {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  return (
+    typeof v.id === 'string' &&
+    typeof v.market === 'string' &&
+    Array.isArray(v.symbols) &&
+    Array.isArray(v.intervals) &&
+    typeof v.start_at === 'string' &&
+    typeof v.source === 'string' &&
+    typeof v.started_at === 'string'
+  )
+}
+
+function writeFollows(entries: FollowEntry[]): void {
+  try {
+    localStorage.setItem(FOLLOW_KEY, JSON.stringify(entries.slice(-12)))
+  } catch {
+    // 存不下就算了，只是刷新之后要重新按编号找回来。
+  }
+}
+
+export function follows(): FollowEntry[] {
+  return readFollows().reverse()
+}
+
+export function rememberFollow(entry: FollowEntry): void {
+  writeFollows([...readFollows().filter((e) => e.id !== entry.id), entry])
+}
+
+export function forgetFollow(id: string): void {
+  writeFollows(readFollows().filter((e) => e.id !== id))
+}

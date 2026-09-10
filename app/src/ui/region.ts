@@ -14,11 +14,13 @@ export interface RegionPicker {
   node: HTMLElement
   region(): Region | null
   clear(): void
+  destroy(): void
 }
 
 export function regionPicker(
   image: HTMLImageElement,
   onChange: (region: Region | null) => void,
+  initialRegion: Region | null = null,
 ): RegionPicker {
   const marquee = h('div.marquee', { hidden: true })
   const hint = h('div.region-hint', { text: '在图上拖一个框，只搜这一块' })
@@ -26,6 +28,7 @@ export function regionPicker(
 
   let start: { x: number; y: number } | null = null
   let box: { x: number; y: number; w: number; h: number } | null = null
+  let selected = initialRegion
 
   const local = (e: PointerEvent) => {
     const rect = image.getBoundingClientRect()
@@ -36,6 +39,12 @@ export function regionPicker(
   }
 
   const paint = () => {
+    if (!start && selected && image.naturalWidth && image.naturalHeight) {
+      const rect = image.getBoundingClientRect()
+      box = { x: selected.x * rect.width / image.naturalWidth, y: selected.y * rect.height / image.naturalHeight,
+        w: selected.width * rect.width / image.naturalWidth, h: selected.height * rect.height / image.naturalHeight }
+      hint.hidden = true
+    }
     if (!box || box.w < 4 || box.h < 4) {
       marquee.hidden = true
       return
@@ -77,7 +86,8 @@ export function regionPicker(
       marquee.hidden = true
       hint.hidden = false
     }
-    onChange(current())
+    selected = current()
+    onChange(selected)
   }
 
   function current(): Region | null {
@@ -104,15 +114,22 @@ export function regionPicker(
   image.addEventListener('pointercancel', up)
   image.addEventListener('dragstart', (e) => e.preventDefault())
   window.addEventListener('resize', paint)
+  image.addEventListener('load', paint)
+  if (image.complete) paint()
 
   return {
     node,
     region: current,
     clear() {
+      selected = null
       box = null
       marquee.hidden = true
       hint.hidden = false
       onChange(null)
+    },
+    destroy() {
+      window.removeEventListener('resize', paint)
+      image.removeEventListener('load', paint)
     },
   }
 }

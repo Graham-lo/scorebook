@@ -1,0 +1,202 @@
+/* ============================================================
+   面：纸块、分组、提示、空态、进度、浮层
+   ------------------------------------------------------------
+   尽量少用「一个框里再套一个框」。分组靠留白和小标题，不靠再画一圈边；
+   需要强调的一段用淡色底和一条竖线，而不是又一张白卡片。
+   ============================================================ */
+.sheet{
+  background:var(--sheet);border-radius:var(--r2);position:relative;
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow);
+}
+.sheet.pad{padding:22px}
+.sheet.flat{box-shadow:inset 0 0 0 1px var(--rule)}
+.sheet.quiet{background:color-mix(in srgb,var(--sheet) 62%,transparent);box-shadow:inset 0 0 0 1px var(--rule)}
+.sheet .sh{display:flex;align-items:center;gap:10px;padding:15px 20px;border-bottom:1px solid var(--rule)}
+.sheet .sh .h3{font-size:14px}
+.sheet .sh svg,.callhead svg,.row>svg{width:16px;height:16px;flex:none}
+/* 分组：不画整圈边，只在顶上留一条小标题和一道极淡的线 */
+.sec{
+  background:var(--sheet);border-radius:var(--r2);padding:20px;margin-bottom:18px;
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 70%,transparent),var(--shadow);
+  display:flex;flex-direction:column;gap:15px;
+}
+.sec .sh{display:flex;align-items:center;gap:10px}
+.sec .sh>a{color:var(--blue-text);font-weight:500}
+.sec.open{background:transparent;box-shadow:none;padding:0}
+/* 强调段：淡青底 + 一道竖线。它比再套一张卡片轻得多。 */
+.inset{
+  background:color-mix(in srgb,var(--sheet2) 90%,transparent);border-radius:var(--r);
+  padding:13px 15px 13px 16px;position:relative;overflow:hidden;
+}
+.inset::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--rule2)}
+.inset.key{background:color-mix(in srgb,var(--blue-soft) 72%,transparent)}
+.inset.key::before{background:var(--blue)}
+.inset.warm{background:color-mix(in srgb,var(--hl) 66%,transparent)}
+.inset.warm::before{background:var(--gold)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+
+/* ---------- 键值 ---------- */
+.kv{display:grid;grid-template-columns:auto 1fr;gap:8px 18px;font-size:13.5px}
+.kv dt{color:var(--ink3);white-space:nowrap}
+.kvrow{display:contents}
+.kvrow .k{color:var(--ink3);white-space:nowrap}
+.kvrow .v{color:var(--ink)}
+
+/* ---------- 折叠：技术细节收在这里 ---------- */
+.disc{border-radius:var(--r);transition:background var(--t2)}
+.disc>summary{
+  display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;font-size:13px;color:var(--ink3);
+  padding:6px 0;transition:color var(--t1);
+}
+.disc>summary::-webkit-details-marker{display:none}
+.disc>summary:hover{color:var(--blue-text)}
+.disc>summary>svg{width:10px;height:10px;transition:transform var(--t2) var(--e-spring)}
+.disc[open]>summary>svg{transform:rotate(90deg)}
+.disc[open]>*:not(summary){animation:rise .3s var(--e-out) both}
+
+/* ---------- 缩略图 ---------- */
+.thumb{
+  width:92px;height:64px;object-fit:cover;border-radius:var(--r);flex:none;background:var(--sheet2);
+  box-shadow:inset 0 0 0 1px var(--rule2);transition:transform var(--t2) var(--e-out),box-shadow var(--t2);
+}
+.thumb.none{
+  display:grid;place-items:center;text-align:center;font-size:10.5px;color:var(--ink4);line-height:1.4;
+  border:1px dashed var(--rule2);box-shadow:none;
+}
+.thumb.none svg{width:20px;height:20px}
+
+/* ---------- 提示条 ---------- */
+.note{
+  display:flex;align-items:flex-start;gap:11px;padding:13px 15px;border-radius:var(--r2);font-size:13.5px;
+  background:var(--sheet2);color:var(--ink2);box-shadow:inset 0 0 0 1px var(--rule);line-height:1.68;
+}
+.note>svg{width:16px;height:16px;flex:none;margin-top:3px;color:var(--ink3)}
+.note.warn{background:var(--hl);color:var(--hl-text);box-shadow:inset 0 0 0 1px var(--hl-line)}
+.note.warn>svg{color:var(--hl-text)}
+.note.info{background:var(--blue-soft);color:var(--blue-text);box-shadow:inset 0 0 0 1px var(--blue-line)}
+.note.info>svg{color:var(--blue)}
+.note .acts{margin-left:auto;display:flex;gap:8px;flex:none;margin-top:0}
+
+/* ---------- 空态 ----------
+   空的时候就留白。外面那张纸已经把边界画好了，里面只需要一句话说清这儿
+   为什么空、接下来该做什么；摆一个大图标既解释不了，也让页面显得没做完。 */
+.empty{display:flex;flex-direction:column;align-items:center;gap:9px;padding:52px 20px;text-align:center}
+.empty .h3{font-family:var(--serif);font-size:20px;font-weight:500}
+.empty .tip{max-width:46ch}
+.futurebox{text-align:center;border-style:dashed;box-shadow:inset 0 0 0 1px var(--rule2)}
+.futurebox .tip{margin:6px auto 0}
+
+/* ---------- 进度与等待 ---------- */
+.progress{height:6px;border-radius:99px;background:var(--sheet3);overflow:hidden}
+.progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--blue-bright),var(--blue));transform-origin:left;animation:grow .8s var(--e-out) both}
+.sync{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink3)}
+.sync i{width:7px;height:7px;border-radius:50%;background:var(--realized);box-shadow:0 0 8px 1px color-mix(in srgb,var(--realized) 55%,transparent);animation:blink 2.6s var(--e-io) infinite}
+/* 骨架：贴着内容的轮廓来，不是一片灰方块 */
+.sk{display:block;border-radius:6px;background:linear-gradient(90deg,var(--sheet3),var(--sheet2),var(--sheet3));
+  background-size:220% 100%;animation:skmove 1.5s linear infinite}
+.sk.line{height:11px;margin:6px 0}
+.skeleton{opacity:.8}
+.ledger.loading .lrow.skeleton{cursor:default}
+/* 受鉴权保护的图片：先占位，再换成对象 URL */
+.shot-slot{position:relative;overflow:hidden;border-radius:var(--r);background:var(--sheet3);
+  display:flex;align-items:center;justify-content:center;min-height:64px}
+.shot-slot img{display:block;width:100%;height:100%;object-fit:contain;animation:shotIn .5s var(--e-out) both}
+.shot-wait{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:100%;
+  min-height:64px;color:var(--ink4);font-size:12px}
+.shot-wait svg{width:22px;height:22px;animation:breathe 2s var(--e-io) infinite}
+.shot-wait.failed{color:var(--unrealized)}
+/* 临时绘制的系统图，只存在于内存里 */
+.chart-slot{border-radius:var(--r2);background:var(--sheet);box-shadow:inset 0 0 0 1px var(--rule);
+  padding:10px;overflow:hidden}
+.chart-slot svg{display:block;width:100%;height:auto}
+.chart-wait{display:flex;align-items:center;justify-content:center;min-height:130px;color:var(--ink3);font-size:12.5px}
+.chart-wait.failed{color:var(--unrealized)}
+
+/* ---------- 记录判断那几步用的纸 ---------- */
+/* 这一块以前是个浮层，现在是 #/new 那三步共用的一张纸：翻页换的是纸上的
+   内容，不是换一张桌子。所以阴影从「浮在所有东西之上」收成正常的一层。 */
+.panel{
+  background:var(--sheet);border-radius:var(--r3);overflow:hidden;position:relative;
+  box-shadow:inset 0 0 0 1px var(--rule2),var(--shadow-lift);
+}
+.panel .ph{display:flex;gap:18px;padding:22px 22px 0}
+.panel .ph .ctx{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px}
+.panel .ph .ctx .r1{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.panel .ph .ctx .sym{display:flex;align-items:center;gap:7px;font-size:18px;font-weight:700}
+.panel .ph .ctx .sym svg{width:13px;height:13px;color:var(--ink3)}
+.panel .ph .ctx .win{font-size:12px;color:var(--ink3);font-family:var(--mono)}
+.panel .ph .ctx .sentence{font-size:13.5px;color:var(--ink2);line-height:1.7}
+.panel .pin{padding:18px 22px 0}
+.panel .pin textarea{
+  width:100%;border:0;background:none;outline:0;resize:none;font-family:var(--serif);font-size:23px;
+  line-height:1.52;min-height:70px;letter-spacing:-.008em;
+}
+.panel .pin textarea::placeholder{color:var(--ink4);font-family:var(--serif)}
+.panel .parse{padding:12px 22px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.panel .pf{display:flex;align-items:center;gap:9px;padding:12px 22px;font-size:12.5px;color:var(--ink3);flex-wrap:wrap}
+.panel .pf .go{margin-left:auto;display:inline-flex;align-items:center;gap:10px;color:var(--blue-text);cursor:pointer;font-weight:500}
+.panel .pf .ime{color:var(--pending)}
+.panel .mini-hint{padding:0 22px 12px;font-size:12px;color:var(--ink4)}
+.panel .mini-hint code{font-family:var(--mono);background:var(--sheet2);padding:1px 5px;border-radius:4px;color:var(--ink3)}
+.panel .more-fields{padding:0 22px;display:grid;grid-template-columns:1fr 1fr;gap:11px;animation:rise .3s var(--e-out) both}
+.panel .more-fields .input{font-size:13.5px}
+.panel.saving .ph,.panel.saving .pin,.panel.saving .parse,.panel.saving .capsec{opacity:.34;filter:blur(1.5px);transition:opacity var(--t2),filter var(--t2);pointer-events:none}
+/* 记完一条之后的那块回执。类名叫 saved 而不是 done：done 是个到处都在用的
+   状态词（流程走过的环节、队列里读完的行都带它），当成全局版式类会串台。 */
+.savedcard{display:flex;flex-direction:column;align-items:center;gap:16px;padding:56px 24px;text-align:center;animation:rise .42s var(--e-out) both}
+.savedcard .stampbig{animation:stamp .5s var(--e-spring) both}
+.savedcard .t{font-family:var(--serif);font-size:23px;font-weight:500}
+.savedcard .acts{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.demo-states{
+  display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin:12px auto 0;
+  padding:7px 12px;border-radius:99px;width:max-content;max-width:100%;
+  background:color-mix(in srgb,var(--sheet) 76%,transparent);backdrop-filter:blur(8px);
+  box-shadow:inset 0 0 0 1px var(--rule);animation:rise .5s var(--e-out) .12s both;
+}
+.demo-states span{font-size:11.5px;color:var(--ink3);letter-spacing:.06em}
+.demo-states button{font-size:12px;padding:3px 11px;border-radius:99px;color:var(--ink3);transition:background var(--t1),color var(--t1)}
+.demo-states button:hover{background:var(--sheet2);color:var(--ink)}
+.demo-states button.on{background:var(--blue);color:#fff;font-weight:600}
+
+.toast{
+  position:fixed;left:50%;bottom:calc(30px + env(safe-area-inset-bottom));z-index:200;display:flex;align-items:center;gap:12px;
+  padding:12px 18px;border-radius:99px;background:var(--board);color:var(--board-ink);font-size:13.5px;
+  box-shadow:0 24px 54px -20px rgba(0,0,0,.6),inset 0 0 0 1px color-mix(in srgb,var(--blue) 30%,transparent);
+  animation:toastIn .44s var(--e-spring) both;
+}
+.toast .ok{width:19px;height:19px;border-radius:50%;display:grid;place-items:center;background:var(--realized);color:#fff;flex:none}
+.toast .ok svg{width:11px;height:11px}
+.toast a{color:var(--blue-bright);font-weight:600;border-bottom:1px solid color-mix(in srgb,var(--blue-bright) 45%,transparent)}
+.toast button{color:var(--board-ink2);transition:color var(--t1)}
+.toast button:hover{color:var(--board-ink)}
+.toast.bad{background:var(--unrealized);color:#fff;box-shadow:0 24px 54px -20px rgba(0,0,0,.5)}
+.toast.bad button{color:rgba(255,255,255,.8);text-decoration:underline}
+.toast.bad button:hover{color:#fff}
+
+.lightbox{
+  position:fixed;inset:0;z-index:300;background:color-mix(in srgb,var(--board) 90%,transparent);
+  backdrop-filter:blur(7px);display:grid;place-items:center;cursor:zoom-out;
+  padding:calc(44px + env(safe-area-inset-top)) calc(44px + env(safe-area-inset-right)) calc(44px + env(safe-area-inset-bottom)) calc(44px + env(safe-area-inset-left));
+  animation:fade .22s var(--e) both;
+}
+.lightbox img{max-width:100%;max-height:82vh;border-radius:var(--r2);box-shadow:0 40px 100px -30px rgba(0,0,0,.9);animation:zoomIn .4s var(--e-out) both}
+.lightbox .cap{margin-top:16px;color:rgba(255,255,255,.74);font-size:13px;font-family:var(--mono);animation:rise .5s var(--e-out) .08s both}
+
+/* 自己画的确认框：Esc 取消，焦点关掉之后回到原来那颗按钮，见 ui/confirm.ts */
+.askbox{
+  position:fixed;inset:0;z-index:320;display:grid;place-items:center;
+  padding:calc(24px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));
+  background:color-mix(in srgb,var(--board) 62%,transparent);backdrop-filter:blur(6px);
+  animation:fade .16s var(--e) both;
+}
+.askcard{
+  width:min(400px,100%);padding:22px 22px 18px;border-radius:var(--r2);
+  background:var(--sheet);box-shadow:var(--shadow-lift),inset 0 0 0 1px var(--rule);
+  animation:zoomIn .22s var(--e-out) both;
+}
+.askt{font-size:16px;font-weight:650;letter-spacing:-.01em;color:var(--ink)}
+.askd{margin-top:8px;font-size:13px;line-height:1.65;color:var(--ink3)}
+.aska{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+
+/* 拖入图片时的高亮 */
+.dragging{box-shadow:inset 0 0 0 2px var(--blue),0 0 0 5px var(--glow)!important;background:var(--blue-soft)!important}

@@ -58,6 +58,10 @@ export function countUp(node: HTMLElement, to: number, ms = 620): void {
     node.textContent = String(to)
     return
   }
+  // 先把真数写上去，再让动画从 0 数上来。下一帧还没画之前动画就接手了，看不出
+  // 这一下；但页面要是一直没机会画（标签页在后台、窗口没显示），帧回调不会跑，
+  // 留在屏幕上的就是真数，而不是一个永远停在 0 的假数字。
+  node.textContent = String(to)
   const began = performance.now()
   const tick = (now: number) => {
     const t = Math.min(1, (now - began) / ms)

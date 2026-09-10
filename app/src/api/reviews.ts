@@ -20,6 +20,7 @@ import type {
   Instant,
   ReminderSaved,
   ReviewAction,
+  ReviewTrade,
   ReviewBucket,
   ReviewDraftState,
   ReviewPublished,
@@ -56,6 +57,8 @@ export function saveDraft(
   input: {
     expected_draft_revision: number
     note: string
+    attachment_ids?: Uuid[]
+    trades?: ReviewTrade[]
     better_play: string | null
     vs_last: ReviewAction | null
   },

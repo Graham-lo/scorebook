@@ -10,6 +10,11 @@ import { getJson, postJson, type RequestOptions } from './http'
 import type { HistoryPlan, HistoryPlanStarted, Instant, Market, Uuid } from './types'
 
 export interface PlanRequest {
+  /**
+   * 从哪里取行情。不写就是交易所接口；退市或者早年的合约只有官方月度归档里
+   * 有，后端会直接拒绝用接口去准备它们，而不是给一段空的。
+   */
+  source?: 'rest' | 'monthly_archive'
   symbols: string[]
   market: Market
   intervals: string[]
@@ -18,6 +23,8 @@ export interface PlanRequest {
   window_bars: number
   stride_bars: number
   models: string[]
+  /** 按合约各自的续做起点，用来接着上一轮往下走，不重做已经做过的部分。 */
+  symbol_start_at?: Record<string, Instant>
 }
 
 export function create(

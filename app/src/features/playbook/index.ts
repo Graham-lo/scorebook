@@ -79,7 +79,6 @@ export function playbookPage(host: HTMLElement): () => void {
       clear(list)
       list.appendChild(
         empty({
-          art: 'info',
           title: '这一页没有读出来',
           tip: error instanceof Error ? error.message : '稍后再试一次。',
           action: h('button.btn.sm', { text: '重试', on: { click: () => void load(false) } }),
@@ -94,7 +93,6 @@ export function playbookPage(host: HTMLElement): () => void {
     if (!rows.length) {
       list.appendChild(
         empty({
-          art: 'play',
           title: '还没有写过做法',
           tip: '等你发现自己一再踩同一个坑的时候，把改法写在这里，比记在心里牢靠。',
           action: h('button.btn.sm.primary', { text: '写一版', on: { click: () => toggleForm(true) } }),

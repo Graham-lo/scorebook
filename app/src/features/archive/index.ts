@@ -78,7 +78,6 @@ export function archivePage(host: HTMLElement): () => void {
       clear(list)
       list.appendChild(
         empty({
-          art: 'info',
           title: '标签没有读出来',
           tip: error instanceof Error ? error.message : '稍后再试一次。',
           action: h('button.btn.sm', { text: '重试', on: { click: () => void load(false) } }),
@@ -93,7 +92,6 @@ export function archivePage(host: HTMLElement): () => void {
     if (!rows.length) {
       list.appendChild(
         empty({
-          art: 'tag',
           title: '还没有写过标签',
           tip: '第一个标签可以是你最常说的那句话，比如「等回踩」或者「追高」。',
           action: h('button.btn.sm.primary', { text: '写一个标签', on: { click: () => toggleForm(true) } }),

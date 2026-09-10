@@ -10,8 +10,9 @@
 import * as calls from '../../api/calls'
 import { Latest } from '../../api/http'
 import type { CallListItem, Market } from '../../api/types'
-import { INTERVALS, MARKET_LABELS } from '../../data/session'
+import { INTERVALS, MARKET_LABELS, contractLabel, underlyingLabel } from '../../data/session'
 import { knownTags, tagIndex } from '../../data/store'
+import { go } from '../../router'
 import { clear, debounce, h } from '../../ui/dom'
 import { icon } from '../../ui/icons'
 import { stagger } from '../../ui/motion'
@@ -20,7 +21,7 @@ import { empty, ledgerSkeleton } from '../../ui/states'
 import { problem } from '../../ui/toast'
 import { ledgerRow } from './row'
 import { anyFilter, clearFilters, find } from './state'
-import { weekstrip } from './summary'
+import { forgetSummary, weekstrip } from './summary'
 
 const PAGE = 20
 const lane = new Latest()
@@ -34,6 +35,7 @@ export function invalidateLedger(): void {
   loaded = false
   rows = []
   cursor = null
+  forgetSummary()
 }
 
 export function findPage(host: HTMLElement, arg: string): () => void {
@@ -88,6 +90,13 @@ export function findPage(host: HTMLElement, arg: string): () => void {
           text: '每一行都是市场揭晓之前的一次判断：当时的画面、当时说出口的话、后来市场给的答案。原话不会被改，想不起来就搜其中一句。',
         }),
       ),
+      h('button.btn.sm.ghost', {
+        type: 'button',
+        text: '按意思找',
+        style: 'margin-left:auto',
+        title: '记不清原话的时候，用大概的意思在所有记下来的东西里找：复盘、结论、做法、实盘小结都算在内。',
+        on: { click: () => go('recall') },
+      }),
     ),
     strip,
     bar,
@@ -286,7 +295,11 @@ export function findPage(host: HTMLElement, arg: string): () => void {
     } catch (error) {
       if (Latest.aborted(error) || !alive) return
       wrap.replaceChildren(
-        empty({ art: 'info', title: '这一页没读出来', tip: message(error) }),
+        empty({
+          title: '这一页没读出来',
+          tip: message(error),
+          action: h('button.btn.sm', { text: '再试一次', on: { click: () => void fetchMore(reset) } }),
+        }),
       )
       problem(message(error), () => void fetchMore(reset))
     }
@@ -301,7 +314,6 @@ export function findPage(host: HTMLElement, arg: string): () => void {
           'div.ledger',
           {},
           empty({
-            art: 'search',
             title: filtered ? '没有符合的判断' : '还没有第一条判断',
             tip: filtered ? '换个词，或者放宽筛选。搜的是你当时的原话，不是事后写的结论。' : '按 ⌃⇧S 记下第一条判断。',
             action: filtered
@@ -380,10 +392,10 @@ export function findPage(host: HTMLElement, arg: string): () => void {
 }
 
 function describeContract(body: Record<string, unknown>): string {
-  const type = typeof body.contractType === 'string' ? body.contractType : ''
-  const under = typeof body.underlyingType === 'string' ? body.underlyingType : ''
-  const sub = Array.isArray(body.underlyingSubType) ? body.underlyingSubType.join('/') : ''
-  return [type, under, sub].filter(Boolean).join(' · ')
+  // 交易所的枚举翻成人话再显示，翻译在 data/session.ts。
+  return [contractLabel(body.contractType), underlyingLabel(body.underlyingType, body.underlyingSubType)]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 function message(error: unknown): string {

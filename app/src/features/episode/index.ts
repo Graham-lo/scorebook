@@ -52,7 +52,6 @@ export function episodePage(host: HTMLElement, arg: string): () => void {
       clear(host)
       host.appendChild(
         empty({
-          art: 'info',
           title: '这一段没有读出来',
           tip: error instanceof Error ? error.message : '也可能这一段已经不在了。',
           action: h('a.btn.sm.ghost', { href: '#/find', text: '回到我的记录' }),
@@ -83,10 +82,6 @@ export function episodePage(host: HTMLElement, arg: string): () => void {
           h('span.lat', { text: MARKET_LABELS[episode.market] }),
         ),
         h('div.line', { style: 'margin-top:6px' }, h('span', { text: dateRange(episode.anchor_at, episode.end_at) }), h('span.faint', { text: relative(episode.anchor_at) })),
-        h('div.tip', {
-          style: 'margin-top:8px;max-width:56ch',
-          text: '同一段行情里的几次判断放在一起看，比一条一条看清楚：你是一路改口，还是从头到尾说的一件事。',
-        }),
       ),
     )
 
@@ -164,7 +159,6 @@ export function episodePage(host: HTMLElement, arg: string): () => void {
           { style: 'margin:8px 0 0' },
           decide(record, 'confirmed', '就是这一段'),
           decide(record, 'rejected', '不是这一段'),
-          h('span.faint', { text: meta.help }),
         ),
       )
     }
@@ -219,10 +213,6 @@ export function episodePage(host: HTMLElement, arg: string): () => void {
         'div.sheet.pad',
         {},
         h('h1.h1', { text: '一段一段的行情' }),
-        h('div.tip', {
-          style: 'margin-top:6px;max-width:56ch',
-          text: '同一个品种、挨着的一段时间里的几次判断会被拢成一段。点开看你的看法在这段行情的哪一步转了向、理由换没换，而不是只记得最后那一版。',
-        }),
       ),
     )
     const list = h('div', { style: 'margin-top:18px' })
@@ -237,7 +227,6 @@ export function episodePage(host: HTMLElement, arg: string): () => void {
       if (!page.items.length) {
         list.appendChild(
           empty({
-            art: 'link',
             title: '还没有成段的行情',
             tip: '同一个品种上短时间里写下两三条判断，它们就会被拢成一段。',
             action: h('a.btn.sm.ghost', { href: '#/find', text: '去看全部记录' }),
@@ -269,7 +258,6 @@ export function episodePage(host: HTMLElement, arg: string): () => void {
       clear(list)
       list.appendChild(
         empty({
-          art: 'info',
           title: '没有读出来',
           tip: error instanceof Error ? error.message : '稍后再试一次。',
           action: h('button.btn.sm', { text: '重试', on: { click: () => void many() } }),

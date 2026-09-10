@@ -1,0 +1,99 @@
+/* ============================================================
+   局面类别、我的做法、设置
+   ============================================================ */
+.archive{display:grid;grid-template-columns:296px 1fr;gap:20px;align-items:start}
+.taglist{
+  position:sticky;top:76px;max-height:calc(100vh - 100px);overflow:auto;background:var(--sheet);
+  border-radius:var(--r2);box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow);
+}
+.tagrow{
+  position:relative;display:flex;align-items:center;gap:9px;padding:11px 16px;width:100%;text-align:left;
+  border-top:1px solid var(--rule);cursor:pointer;font-size:13.5px;
+  transition:background var(--t2) var(--e),padding-left var(--t2) var(--e),color var(--t2);
+}
+.tagrow:first-child{border-top:0}
+.tagrow::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--blue);transform:scaleY(0);transition:transform var(--t2) var(--e-out)}
+.tagrow:hover{background:color-mix(in srgb,var(--blue-soft) 40%,transparent);padding-left:19px}
+.tagrow.on{background:var(--blue-soft);color:var(--blue-text);font-weight:600}
+.tagrow.on::before{transform:scaleY(1)}
+.tagrow .n{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink3)}
+.tagrow.on .n{color:var(--blue-text)}
+.tagrow .flag{width:6px;height:6px;border-radius:50%;flex:none}
+
+/* 卡片墙 */
+.tagwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(252px,1fr));gap:14px}
+.tagcard{
+  position:relative;display:block;overflow:hidden;background:var(--sheet);border-radius:var(--r2);padding:16px 17px;
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow);
+  transition:transform var(--t2) var(--e),box-shadow var(--t2);
+}
+.tagcard::after{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:2px;
+  background:linear-gradient(180deg,var(--blue),transparent);transform:scaleY(0);transform-origin:top;
+  transition:transform .42s var(--e-out);
+}
+a.tagcard:hover{transform:translateY(-2px);box-shadow:0 0 0 1px var(--blue-line),var(--shadow-lift)}
+a.tagcard:hover::after{transform:scaleY(1)}
+.tagname{font-family:var(--serif);font-size:19px;color:var(--ink);letter-spacing:-.01em}
+a.tagname{border-bottom:1px solid transparent;transition:border-color var(--t1)}
+a.tagname:hover{border-color:var(--blue)}
+.tagcard .def{margin-top:8px;font-size:13.5px;line-height:1.65;color:var(--ink2)}
+
+/* 打法的版本线 */
+.vtimeline{position:relative;padding-left:28px;display:flex;flex-direction:column;gap:14px}
+.vtimeline::before{content:'';position:absolute;left:6px;top:8px;bottom:8px;width:1px;background:var(--rule2)}
+.vcard{
+  position:relative;background:var(--sheet);border-radius:var(--r2);padding:15px 17px;
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow);
+  transition:transform var(--t2) var(--e),box-shadow var(--t2);
+}
+.vcard:hover{transform:translateX(2px);box-shadow:0 0 0 1px var(--blue-line),var(--shadow-lift)}
+.vcard::before{content:'';position:absolute;left:-27px;top:20px;width:9px;height:9px;border-radius:50%;background:var(--rule3);box-shadow:0 0 0 3px var(--paper)}
+.vcard.adopted::before{background:var(--realized);box-shadow:0 0 0 3px var(--paper),0 0 12px 1px color-mix(in srgb,var(--realized) 55%,transparent)}
+.vcard.cand::before{background:var(--gold);box-shadow:0 0 0 3px var(--paper),0 0 12px 1px var(--gold-glow)}
+.vcard.cand{box-shadow:0 0 0 1.5px var(--hl-line),var(--shadow)}
+.vcard.hist{opacity:.72}
+.vcard .vh{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:10px}
+.vcard .vh .d{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink3)}
+.vcard .body{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px 16px;font-size:13px}
+.vcard .body>div>span{color:var(--ink3);margin-right:6px}
+.vcard .body .wide{grid-column:1/-1}
+.vcard .body .chg{color:var(--blue-text);font-weight:600}
+
+.pbcard{position:relative;overflow:hidden}
+.pbcard::before{content:'';position:absolute;left:0;top:16px;bottom:16px;width:2px;border-radius:2px;background:linear-gradient(180deg,var(--blue),transparent);opacity:.6}
+.pbgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;margin-top:12px}
+@media (max-width:760px){.pbgrid{grid-template-columns:1fr}}
+.pbrow{display:flex;flex-direction:column;gap:5px}
+.pbrow p{font-size:13.5px;line-height:1.68;color:var(--ink2);margin:0;white-space:pre-wrap}
+
+.form-sheet{display:flex;flex-direction:column;gap:13px;padding:17px;background:var(--sheet2);border-radius:var(--r2);box-shadow:inset 0 0 0 1px var(--rule)}
+
+/* ---------- 设置 ---------- */
+.settings{display:flex;flex-direction:column;gap:18px;max-width:790px}
+.sgroup{background:var(--sheet);border-radius:var(--r2);overflow:hidden;box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow)}
+.sgroup .gt{
+  display:flex;align-items:center;gap:10px;padding:13px 17px;font-size:12px;font-weight:600;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--ink3);
+  background:linear-gradient(180deg,var(--sheet2),color-mix(in srgb,var(--sheet2) 30%,transparent));
+  border-bottom:1px solid var(--rule);
+}
+.sgroup .gt+.srow{border-top:0}
+.srow{display:flex;align-items:center;gap:16px;padding:14px 17px;border-top:1px solid var(--rule);transition:background var(--t2)}
+.srow:hover{background:color-mix(in srgb,var(--sheet2) 55%,transparent)}
+.srow .l{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.srow .l b{font-size:13.5px;font-weight:600}
+.srow .l span{font-size:12.5px;color:var(--ink3);line-height:1.6}
+.srow>:last-child{flex:none}
+.symlist{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0}
+.symlist button{text-align:left}
+
+/* 能力清单：实现了 / 配置了 是两件事，颜色和文字都要分开 */
+.caprow{display:flex;gap:13px;align-items:flex-start;background:var(--sheet);border-radius:var(--r2);padding:15px 17px;box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent)}
+.caprow .mark{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;margin-top:1px}
+.caprow .mark svg{width:13px;height:13px}
+.caprow.on .mark{background:var(--realized-soft);color:var(--realized);box-shadow:inset 0 0 0 1px var(--realized-line)}
+.caprow.off .mark{background:var(--sheet2);color:var(--ink3);box-shadow:inset 0 0 0 1px var(--rule2)}
+.caprow.off{opacity:.86}
+.caprow>div:last-child{min-width:0}
+.caprow .tip{margin-top:5px;max-width:62ch;overflow-wrap:break-word}

@@ -1,0 +1,155 @@
+/* ============================================================
+   信号：结果状态、方向、标签、流程条
+   ------------------------------------------------------------
+   状态从来不只靠颜色说话——每一枚都带文字，形状也不同（实心点、空心圈、
+   斜纹底），色觉差异的人也分得清。
+   ============================================================ */
+.stamp{
+  display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 11px 0 10px;border-radius:99px;
+  font-size:12px;font-weight:600;letter-spacing:.02em;white-space:nowrap;
+  background:var(--grey-soft);color:var(--grey);box-shadow:inset 0 0 0 1px var(--grey-line);
+}
+.stamp::before{
+  content:'';width:7px;height:7px;border-radius:50%;background:currentColor;flex:none;
+  box-shadow:0 0 0 2px color-mix(in srgb,currentColor 16%,transparent);
+}
+.stamp.st-realized{background:var(--realized-soft);color:var(--realized);box-shadow:inset 0 0 0 1px var(--realized-line)}
+.stamp.st-unrealized{background:var(--unrealized-soft);color:var(--unrealized);box-shadow:inset 0 0 0 1px var(--unrealized-line)}
+.stamp.st-pending{background:var(--blue-soft);color:var(--blue-text);box-shadow:inset 0 0 0 1px var(--blue-line)}
+.stamp.st-pending::before{animation:blink 1.9s var(--e-io) infinite}
+.stamp.st-not_triggered,.stamp.st-no_criteria{background:var(--grey-soft);color:var(--grey);box-shadow:inset 0 0 0 1px var(--grey-line)}
+.stamp.st-no_criteria::before{background:transparent;box-shadow:inset 0 0 0 1.5px currentColor}
+.stamp.st-insufficient_data{background:repeating-linear-gradient(-45deg,var(--grey-soft) 0 5px,transparent 5px 10px);color:var(--grey);box-shadow:inset 0 0 0 1px var(--grey-line)}
+.stamp.lg{height:34px;padding:0 16px 0 14px;font-size:14px;gap:9px}
+.stamp.lg::before{width:9px;height:9px}
+.stamp.flat{box-shadow:inset 0 0 0 1px var(--rule2);background:var(--sheet2)}
+
+/* 方向 */
+.stance{
+  width:21px;height:21px;border-radius:7px;display:inline-grid;place-items:center;flex:none;
+  font-size:10.5px;font-weight:700;font-family:var(--mono);
+  background:var(--realized-soft);color:var(--realized);box-shadow:inset 0 0 0 1px var(--realized-line);
+}
+.stance.L{background:var(--unrealized-soft);color:var(--unrealized);box-shadow:inset 0 0 0 1px var(--unrealized-line)}
+.stance.none,.stance.soft{background:var(--sheet2);color:var(--ink4);box-shadow:inset 0 0 0 1px var(--rule)}
+.stance.soft{width:19px;height:19px}
+
+/* 标签 / 版本 / 品种 */
+.tag{
+  display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:99px;
+  font-size:12px;color:var(--ink2);background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule);
+  transition:transform var(--t1) var(--e),box-shadow var(--t1),color var(--t1),background var(--t1);
+}
+.tag svg,.pk svg{width:12px;height:12px}
+.tag.link{cursor:pointer}
+.tag.link:hover{transform:translateY(-1px);color:var(--blue-text);background:var(--blue-soft);box-shadow:inset 0 0 0 1px var(--blue-line)}
+.tag.warn,.tag.warm{background:var(--hl);color:var(--hl-text);box-shadow:inset 0 0 0 1px var(--hl-line)}
+.tag.key{background:var(--blue-soft);color:var(--blue-text);box-shadow:inset 0 0 0 1px var(--blue-line);font-weight:600}
+.tag.cold{background:transparent;color:var(--ink3);box-shadow:inset 0 0 0 1px var(--rule2);border-style:dashed}
+.ver{
+  display:inline-flex;align-items:center;height:21px;padding:0 9px;border-radius:6px;font-family:var(--mono);
+  font-size:11px;font-weight:500;background:var(--sheet2);color:var(--ink2);box-shadow:inset 0 0 0 1px var(--rule2);
+}
+.ver.adopted{background:var(--realized-soft);color:var(--realized);box-shadow:inset 0 0 0 1px var(--realized-line)}
+.ver.candidate{background:var(--hl);color:var(--hl-text);box-shadow:inset 0 0 0 1px var(--hl-line)}
+.ver.withdrawn{opacity:.55;text-decoration:line-through}
+.mkt{font-size:11px;color:var(--ink3);letter-spacing:.06em;text-transform:uppercase;font-stretch:88%;font-weight:600}
+.pk{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:99px;background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule2);font-size:12.5px;cursor:pointer;transition:box-shadow var(--t1),background var(--t1)}
+.pk:hover{background:var(--blue-soft);box-shadow:inset 0 0 0 1px var(--blue-line)}
+.pk .k{color:var(--ink3)}
+.pk.ambig{background:var(--hl);box-shadow:inset 0 0 0 1px var(--hl-line);color:var(--hl-text)}
+.pk.free{color:var(--ink3);border-style:dashed}
+.badge{display:inline-flex;align-items:center;font-size:11px;letter-spacing:.05em;
+  text-transform:uppercase;padding:2px 8px;border-radius:99px;box-shadow:inset 0 0 0 1px var(--rule2);color:var(--ink3)}
+.badge.ready{color:var(--realized);box-shadow:inset 0 0 0 1px var(--realized-line);background:var(--realized-soft)}
+.badge.wait{color:var(--blue-text);box-shadow:inset 0 0 0 1px var(--blue-line);background:var(--blue-soft)}
+
+/* 口径高亮：香槟金只用在这里和 mark 上 */
+.hl{
+  display:inline-flex;align-items:baseline;gap:7px;padding:2px 10px;border-radius:7px;
+  background:var(--hl);color:var(--hl-text);font-size:13px;font-weight:600;
+  box-shadow:inset 0 0 0 1px var(--hl-line);
+}
+.hl .sub{font-weight:400;font-size:12px;opacity:.8;font-family:var(--mono)}
+.hl.soft{background:var(--sheet2);color:var(--ink3);box-shadow:inset 0 0 0 1px var(--rule);font-weight:500;font-style:italic}
+
+/* ============================================================
+   流程条：记录判断 → 持续观察 → 查看结果 → 完成复盘 → 沉淀做法
+   ------------------------------------------------------------
+   它是一条路，不是审批链。走过的段落是青蓝实线，当前这一段亮着，
+   后面的还是浅色——可以直接跳过去，界面不拦。
+   ============================================================ */
+.flow{position:relative;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:0;padding-top:20px}
+.flow::before{
+  content:'';position:absolute;left:0;right:0;top:6px;height:3px;border-radius:99px;
+  background:var(--sheet3);
+}
+.flow::after{
+  content:'';position:absolute;left:0;top:6px;height:3px;border-radius:99px;
+  width:var(--fp,0%);background:linear-gradient(90deg,var(--blue),var(--blue-bright));
+  box-shadow:0 0 12px 0 var(--glow);
+  transform-origin:left;animation:growX .8s var(--e-out) both;
+  transition:width .5s var(--e-out);
+}
+.fstep{position:relative;display:flex;flex-direction:column;gap:2px;padding-right:18px;min-width:0}
+.fstep>i{
+  position:absolute;left:0;top:-20px;width:11px;height:11px;border-radius:50%;
+  background:var(--sheet);box-shadow:inset 0 0 0 2px var(--rule2);z-index:1;
+  transition:background var(--t2),box-shadow var(--t2),transform var(--t2) var(--e-spring);
+}
+.fstep .t{font-size:13px;font-weight:600;color:var(--ink4);white-space:nowrap;transition:color var(--t2)}
+.fstep .l{font-size:12px;line-height:1.6;color:var(--ink4);transition:color var(--t2)}
+.fstep.done>i{background:var(--blue);box-shadow:inset 0 0 0 2px var(--blue)}
+.fstep.done .t{color:var(--ink2)}
+.fstep.done .l{color:var(--ink3)}
+.fstep.now>i{
+  background:var(--blue);box-shadow:0 0 0 4px color-mix(in srgb,var(--blue) 20%,transparent),0 0 14px 2px var(--glow);
+  transform:scale(1.15);
+}
+.fstep.now .t{color:var(--blue-text)}
+.fstep.now .l{color:var(--ink2)}
+.fstep.skipped>i{background:var(--sheet);box-shadow:inset 0 0 0 2px var(--blue-line)}
+.fstep.skipped .t{color:var(--ink3)}
+/* 窄一点的地方（复盘工作台的右栏）：五行小字会挤成一堵墙，只留当前这一步
+   和被跳过那一步的说明——其余环节的标题本身已经说清楚了。 */
+.rpane .flow .fstep .l{display:none}
+.rpane .flow .fstep.now .l,.rpane .flow .fstep.skipped .l{display:block}
+.rpane .flow .fstep{padding-right:12px}
+/* 行里的迷你版：只有点和一行字 */
+.flow.mini{padding-top:0;gap:0;display:flex;align-items:center}
+.flow.mini::before,.flow.mini::after{display:none}
+.flow.mini .fstep{padding:0;flex-direction:row;align-items:center;gap:5px}
+.flow.mini .fstep>i{position:static;width:7px;height:7px}
+.flow.mini .fstep .t{font-size:11.5px;font-weight:500}
+.flow.mini .fstep::after{content:'';width:14px;height:1px;background:var(--rule2);margin:0 6px}
+.flow.mini .fstep:last-child::after{display:none}
+.flow.mini .fstep.done::after{background:var(--blue-line)}
+
+/* 下一步：一条记录当前最该做的那一件事 */
+.nextup{
+  display:flex;align-items:center;gap:13px;padding:14px 16px;border-radius:var(--r2);
+  background:linear-gradient(120deg,var(--blue-soft),color-mix(in srgb,var(--blue-soft) 30%,transparent));
+  box-shadow:inset 0 0 0 1px var(--blue-line);
+}
+.nextup .ic{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;flex:none;
+  background:var(--blue);color:#fff;box-shadow:0 6px 16px -8px var(--glow)}
+.nextup .ic svg{width:16px;height:16px}
+.nextup .b{flex:1;min-width:0}
+.nextup .b b{display:block;font-size:14px;color:var(--ink);font-weight:600}
+.nextup .b span{display:block;font-size:12.5px;color:var(--ink2);line-height:1.6;margin-top:1px}
+.nextup .acts{margin-top:0;flex:none}
+/* 这一轮已经走完：没有待办就不要摆一个青蓝的行动条，换成安静的香槟色收尾。 */
+.nextup.done{
+  background:linear-gradient(120deg,color-mix(in srgb,var(--gold) 12%,transparent),color-mix(in srgb,var(--gold) 4%,transparent));
+  box-shadow:inset 0 0 0 1px var(--gold-line,color-mix(in srgb,var(--gold) 26%,transparent));
+}
+.nextup.done .ic{background:var(--gold);box-shadow:0 6px 16px -9px color-mix(in srgb,var(--gold) 70%,transparent)}
+
+/* 六态条 */
+.sixbar{display:flex;height:13px;border-radius:99px;overflow:hidden;background:var(--sheet3);box-shadow:inset 0 0 0 1px var(--rule)}
+.sixbar i{display:block;height:100%;transform-origin:left;animation:growX .7s var(--e-out) both;transition:filter var(--t2)}
+.sixbar:hover i{filter:saturate(1.25)}
+.sixleg{display:flex;flex-wrap:wrap;gap:9px 18px}
+.sixleg span{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink2)}
+.sixleg i{width:9px;height:9px;border-radius:3px;flex:none}
+.sixleg b{font-family:var(--mono);font-weight:500;color:var(--ink)}

@@ -56,7 +56,8 @@ export function thumb(id: Uuid | null, alt: string, extra = ''): HTMLElement {
   if (!id) {
     return h('div', { class: ['thumb', 'none', extra] }, '没有现场图')
   }
-  return attachmentImage(id, { alt, className: `thumb ${extra}`.trim() })
+  // 92×64 的一格，按显示尺寸解一张小的就够；完整的那张在记录详情里看。
+  return attachmentImage(id, { alt, className: `thumb ${extra}`.trim(), maxWidth: 200 })
 }
 
 export function tagChip(name: string, query = ''): HTMLElement {
@@ -99,8 +100,10 @@ export function button(
 
 /** Identity of a picture: the field traders must never have to guess. */
 export const ATTACHMENT_IDENTITY: Record<string, { label: string; tip: string }> = {
-  scene: { label: '原图', tip: '你记录时的截图原样，没有任何加工。' },
-  supplement: { label: '补图', tip: '事后补上的图，不代表你当时看到的画面。' },
+  // 「原图 / 补图」被误解过：原图听起来像「没压缩的那张」，补图听起来像「补拍的同一张」。
+  // 这两张的区别其实只有一个——拍下来的是哪个时间点，所以就照时间叫。
+  scene: { label: '当时', tip: '你记录判断那一刻传的截图，原样保留，没有被改过。' },
+  supplement: { label: '后来', tip: '复盘时补上的后续走势，不是你当时看到的画面。' },
   reference: { label: '参考图', tip: '附带的参考材料，不是当时的现场。' },
   query: { label: '查询图', tip: '用来找相似走势的那张图。' },
 }

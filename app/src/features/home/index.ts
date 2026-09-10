@@ -1,44 +1,31 @@
-// 首页 —— 打开这个产品第一眼看到的地方。
+// 今天 —— 打开这个产品第一眼看到的地方。
 //
-// 它要让人一眼想用：先说清这套东西替交易员解决什么（直觉分不清真假、记忆会被现在的
-// 观点改写、同类局面看不出有没有进步），再说它怎么做到——交易先有判断，市场后给答案，
-// 这里只存答案揭晓之前的那一半，行情走完再由市场给它记分。分组照这条时间线走：
-// 市场开口之前 —— 别让记忆改写它 —— 下次同样的局面。每一组下面才是具体入口。
+// 它只回答一个问题：接着上次，现在该做哪一件事。上面是记分簿的前提（交易先有
+// 判断、市场后给答案、这里只存答案揭晓之前的那一半），下面就是今天真正等着你
+// 的那几条记录：写了一半的复盘、结果已经出来可以回头对一次的、还在观察期里的。
 //
-// 这里出现的每个数字都来自真实请求：本周的条数是从 GET /v1/calls 走一页数出来
-// 的，待复盘来自 GET /v1/review-queue，标签数来自 GET /v1/tags。没有一处是编
-// 出来充场面的。功能卡片是否可点，由后端 /v1/capabilities 说了算：后端还没做的
-// 能力照实写成「还没开放」，不做成看起来能用的空壳。
+// 这里出现的每一条、每一个数字都来自真实请求：任务来自 GET /v1/review-queue 的
+// 两个桶，最近的判断来自 GET /v1/calls，本周条数和局面类别数各自数出来。哪条记
+// 录走到了哪个环节、下一步是什么，由 data/flow.ts 统一决定，这一页不自己猜。
+// 能力没开的时候不摆一排点不开的卡片，只给一句实话和一个设置入口。
 
 import * as calls from '../../api/calls'
 import * as knowledge from '../../api/knowledge'
 import * as reviews from '../../api/reviews'
-import type { CallListItem } from '../../api/types'
-import { go } from '../../router'
-import { isLive } from '../../data/session'
+import type { CallListItem, QueueItem } from '../../api/types'
+import { flowOf, fromQueueItem, STAGES, type Flow } from '../../data/flow'
+import { capabilityGap, isLive } from '../../data/session'
 import { relative } from '../../data/time'
+import { go } from '../../router'
 import { stanceBadge, thumb } from '../../ui/bits'
 import { clear, h } from '../../ui/dom'
+import { flowMini } from '../../ui/flow'
 import { icon } from '../../ui/icons'
 import { countUp, prefersReducedMotion, stagger } from '../../ui/motion'
 import { empty } from '../../ui/states'
 import { openCapture } from '../capture'
 
 const WEEK_MS = 7 * 24 * 3_600_000
-
-interface Entry {
-  iconName: string
-  title: string
-  line: string
-  href?: string
-  onClick?: () => void
-  /** 这张卡片下面那句动作，写具体一点，六张卡不要都写「进去看看」。 */
-  act: string
-  /** 后端能力名；留空表示这条一直可用。 */
-  needs?: string
-  /** 用不了的时候，如实说一句为什么。 */
-  closed?: string
-}
 
 export function homePage(host: HTMLElement): () => void {
   let alive = true
@@ -49,91 +36,25 @@ export function homePage(host: HTMLElement): () => void {
   const tagged = bigNumber('你分出来的局面类别')
 
   const hero = buildHero(week.node, due.node, tagged.node)
+  const today = h('div.tlist')
   const recent = h('div.hrecent')
 
-  const blocks: (HTMLElement | null)[] = [
-    hero,
-    group(
-      '市场开口之前',
-      '这一刻你还在盘上，脑子里刚闪过的那句话是最值钱的东西，也是最容易丢的东西。记下来只要一行、十几秒，它以后会变成能被数出来的证据。心里冒出「这种画面我见过」的时候，去问样本，别问记忆。',
-      [
-        {
-          iconName: 'plus',
-          title: '记录判断',
-          line: '一行记完：当时那张图、你说出口的那句话、这个想法从哪来。方向、周期、算对的标准都可以空着——判断的那一刻你在交易，不该被表格拖住。原话存下就不再改，往后谁也篡改不了它。',
-          act: '十几秒记一条',
-          onClick: () => openCapture(),
-          needs: 'records',
-          closed: '本机后端还没有开放写入。',
-        },
-        {
-          iconName: 'img',
-          title: '按图找同类局面',
-          line: '把眼前这张图丢进来，立刻翻出你自己记过的、画面最像的那几条：当时你怎么说的，后来市场怎么答的。这种局面到底见过几次，不用再靠印象猜。',
-          act: '传一张图去比',
-          href: '#/search',
-          needs: 'image_structure_search',
-          closed: '本机还没有准备好比图用的数据。',
-        },
-      ],
+  host.appendChild(hero)
+  host.appendChild(
+    h(
+      'section.tsec',
+      {},
+      h(
+        'div.tsh',
+        {},
+        h('span.eyebrow', { text: '今天' }),
+        h('span.why', { text: '接着上次的地方继续。这里只放真的等着你的那几条，没有的时候就是没有。' }),
+        h('a.more', { href: '#/review' }, '全部复盘队列', icon('chev')),
+      ),
+      today,
     ),
-    group(
-      '别让记忆改写它',
-      '经验最大的敌人不是忘记，是被改写：每回想一次，记忆就朝你现在的观点修一点，几年下来分不清哪部分是真的。这里翻出来的永远是市场揭晓之前的那一版，一个字都没动过。',
-      [
-        {
-          iconName: 'search',
-          title: '我的记录',
-          line: '按当时的原话、品种、周期、标签往回翻。看到的是判断时刻写下的原文；事后补的结果单独放，永远不会混进当时那句话里。',
-          act: '翻回当时那一版',
-          href: '#/find',
-        },
-        {
-          iconName: 'wave',
-          title: '一段一段的行情',
-          line: '同一段行情里的几次判断串成一条线：你的看法在哪根 K 线上转的、理由变没变，一眼看完自己当时的思路是怎么走的。',
-          act: '看想法怎么变的',
-          href: '#/episode',
-        },
-        {
-          iconName: 'tag',
-          title: '局面类别',
-          line: '你自己给同类局面起的名字。点进去就是这一类的全部样本——这种局面你到底见过多少次，从这里开始有答案。',
-          act: '按类看样本',
-          href: '#/archive',
-        },
-      ],
-    ),
-    group(
-      '下次同样的局面',
-      '同类局面会反复出现，多数人只是又经历一次。事后回看不是拿来批判当时的局限的，它只回答一个问题：同样的局面再来一次，有没有更好的打法、比上一次进步在哪里——让直觉的成长第一次看得见。',
-      [
-        {
-          iconName: 'review',
-          title: '复盘',
-          line: '行情走完再写：当时那句话哪一半站住了、哪一半是错觉，同样的局面下次怎么做更好，和上一次比变在哪里。写过的复盘不会被改，只会一层层叠上去。',
-          act: '写一条复盘',
-          href: '#/review',
-          needs: 'reviews',
-          closed: '本机后端还没有开放复盘。',
-        },
-        {
-          iconName: 'play',
-          title: '我的做法',
-          line: '把一类局面的打法定下来，和支撑它的那几条记录绑在一起；改一次留一版，你的策略是怎么长起来的，自己会显出来。',
-          act: '看做法怎么变的',
-          href: '#/playbook',
-        },
-        {
-          iconName: 'gear',
-          title: '这台机器现在能做什么',
-          line: '每一项能力是开着还是关着，照实列在这一页。没做完的绝不摆成能用的样子，免得你把它当成真的。',
-          act: '看能力清单',
-          href: '#/settings',
-        },
-      ],
-    ),
-    closedGroup(),
+  )
+  host.appendChild(
     h(
       'section.hsec',
       {},
@@ -141,26 +62,83 @@ export function homePage(host: HTMLElement): () => void {
         'div.hsh',
         {},
         h('span.eyebrow', { text: '最近记下的判断' }),
-        h('span.why', { text: '点开任意一条，看到的是当时那张图和当时那句话。' }),
+        h('span.why', { text: '点开任意一条，看到的是当时那张图和当时那句话，一个字都没动过。' }),
         h('a.more', { href: '#/find' }, '全部记录', icon('chev')),
       ),
       recent,
     ),
-  ]
-  for (const block of blocks) if (block) host.appendChild(block)
+  )
+  const gaps = gapNote()
+  if (gaps) host.appendChild(gaps)
 
+  today.appendChild(waitRow())
+  today.appendChild(waitRow())
   recent.appendChild(h('div.hrec.wait', {}, h('span.sk.line', { style: 'width:40%' })))
 
+  void loadToday()
   void loadNumbers()
   void loadRecent()
 
-  // 顶部记分牌上的光跟着指针走一点点，幅度很小，只是让这块深色板子不像贴纸。
+  // 顶上那块深色板子上的光跟着指针走一点点，幅度很小，只是让它不像一张贴纸。
   const track = (e: PointerEvent) => {
+    if (e.pointerType !== 'mouse' || prefersReducedMotion()) return
     const box = hero.getBoundingClientRect()
     hero.style.setProperty('--mx', `${((e.clientX - box.left) / box.width) * 100}%`)
     hero.style.setProperty('--my', `${((e.clientY - box.top) / box.height) * 100}%`)
   }
   if (!prefersReducedMotion()) hero.addEventListener('pointermove', track)
+
+  /**
+   * 两个桶分开读，筛选交给后端：写了一半的在 in_progress，还没写过的在
+   * needs_review——后者既有结果已经出来的，也有还在观察期里的，按流程环节分开。
+   */
+  async function loadToday(): Promise<void> {
+    try {
+      const [drafts, fresh] = await Promise.all([
+        reviews.queue({ bucket: 'in_progress', limit: 10 }),
+        reviews.queue({ bucket: 'needs_review', limit: 40 }),
+      ])
+      if (!isAlive()) return
+      const rows = [...drafts.items, ...fresh.items].map((item) => ({
+        item,
+        flow: flowOf(fromQueueItem(item)),
+      }))
+      const editing = rows.filter((r) => r.flow.next.kind === 'continue')
+      const ready = rows.filter((r) => r.flow.next.kind === 'write' || r.flow.next.kind === 'recheck')
+      const watching = rows.filter((r) => r.flow.next.kind === 'observe' || r.flow.next.kind === 'result')
+
+      clear(today)
+      if (!editing.length && !ready.length && !watching.length) {
+        today.appendChild(clearDay())
+        return
+      }
+      const made: HTMLElement[] = []
+      const put = (title: string, why: string, list: typeof rows, max: number) => {
+        if (!list.length) return
+        today.appendChild(groupLine(title, why, list.length, max))
+        for (const row of list.slice(0, max)) {
+          const node = taskRow(row.item, row.flow)
+          today.appendChild(node)
+          made.push(node)
+        }
+      }
+      put('接着写完', '上次写到一半的复盘草稿还在，原样留着。', editing, 3)
+      put('可以回头对一次了', '市场已经给出答案，趁着还记得写下来。', ready, 4)
+      put('还在观察里', '到期以前不判对错。想先看看现在走到哪了，从这儿进去。', watching, 3)
+      stagger(made)
+      for (const node of made) node.classList.add('in')
+    } catch {
+      if (!isAlive()) return
+      clear(today)
+      today.appendChild(
+        empty({
+          title: '今天要做的事没读出来',
+          tip: '确认本机后端在 127.0.0.1:8787 运行，然后在这儿再试一次。',
+          action: h('button.btn.sm', { text: '再试一次', on: { click: () => void loadToday() } }),
+        }),
+      )
+    }
+  }
 
   async function loadNumbers(): Promise<void> {
     try {
@@ -207,7 +185,6 @@ export function homePage(host: HTMLElement): () => void {
       if (!page.items.length) {
         recent.appendChild(
           empty({
-            art: 'search',
             title: '还没有第一条判断',
             tip: '下一次开口之前先记一条，往后这里就是你最近说过的话，也是记分的第一笔。',
             action: h('button.btn.sm', { text: '记录判断', on: { click: () => openCapture() } }),
@@ -222,7 +199,11 @@ export function homePage(host: HTMLElement): () => void {
       if (!isAlive()) return
       clear(recent)
       recent.appendChild(
-        empty({ art: 'info', title: '最近的判断没读出来', tip: '确认本机后端在运行，然后刷新页面。' }),
+        empty({
+          title: '最近的判断没读出来',
+          tip: '确认本机后端在运行，然后在这儿再试一次。',
+          action: h('button.btn.sm', { text: '再试一次', on: { click: () => void loadRecent() } }),
+        }),
       )
     }
   }
@@ -234,16 +215,10 @@ export function homePage(host: HTMLElement): () => void {
 }
 
 /**
- * 顶上的记分牌：一句话说清这个产品的前提。
- * 底下的三步不是装饰，它就是一次判断真实的时间顺序：说在前、市场作答、下次更好。
+ * 顶上的记分牌：一句话说清这个产品的前提，底下五步就是一条记录真实的走法，
+ * 和四个主入口对得上。
  */
 function buildHero(...tiles: HTMLElement[]): HTMLElement {
-  const steps: [string, string, string][] = [
-    ['01', '市场开口前', '一句话钉住判断，十几秒，不打断盘面'],
-    ['02', '市场给答案', '走势走完，对错由行情说，不由记忆补'],
-    ['03', '下次同样局面', '翻出上次怎么做的，这次好在哪里'],
-  ]
-
   return h(
     'section.hero',
     {},
@@ -263,18 +238,18 @@ function buildHero(...tiles: HTMLElement[]): HTMLElement {
         text:
           '直觉是主观交易者最值钱的东西，也是最说不清的东西：反馈快的品种上它是真本事，反馈慢的品种上它可能只是错觉，而两者的体感一模一样。' +
           '记分簿把你在市场开口之前说出的每一句判断，连同当时那张图一起钉住，等行情走完，由市场来打分。' +
-          '它不替你判断，也不怀疑你的直觉——只是让直觉自己长出能被数出来的证据。用得越久，你越清楚自己在哪类局面上真的有优势。',
+          '它不替你判断，也不怀疑你的直觉——只是让直觉自己长出能被数出来的证据。',
       }),
       h(
         'div.hero-flow',
         {},
-        ...steps.map(([n, title, line]) =>
+        ...STAGES.map((stage, i) =>
           h(
             'div.hstep',
             {},
-            h('span.n', { text: n }),
-            h('span.t', { text: title }),
-            h('span.l', { text: line }),
+            h('span.n', { text: String(i + 1).padStart(2, '0') }),
+            h('span.t', { text: stage.title }),
+            h('span.l', { text: stage.line }),
           ),
         ),
       ),
@@ -282,101 +257,132 @@ function buildHero(...tiles: HTMLElement[]): HTMLElement {
         'div.hero-acts',
         {},
         h('button.btn.primary.lg', { on: { click: () => openCapture() } }, icon('plus'), '记下这一刻的判断'),
-        h('a.btn.lg.onboard', { href: '#/find' }, icon('search'), '翻我说过的话'),
+        h('a.btn.lg.onboard', { href: '#/search' }, icon('img'), '用现在的走势找过去'),
       ),
       h('div.hero-nums', {}, ...tiles),
     ),
   )
 }
 
-function group(title: string, why: string, entries: Entry[]): HTMLElement {
-  const cards = entries.map(card)
-  const node = h(
-    'section.hsec',
+function groupLine(title: string, why: string, total: number, max: number): HTMLElement {
+  const more = total > max ? `　还有 ${total - max} 条` : ''
+  return h(
+    'div.tgh',
     {},
-    h('div.hsh', {}, h('span.eyebrow', { text: title }), h('span.why', { text: why })),
-    h('div', { class: ['hcards', entries.length === 2 ? 'lead' : ''] }, ...cards),
+    h('span.t', { text: title }),
+    h('span.n', { text: String(total) }),
+    h('span.w', { text: why + more }),
   )
-  stagger(cards)
-  return node
+}
+
+/** 一条今天要做的事：说清是哪条记录、走到哪儿了、下一步做什么。 */
+function taskRow(item: QueueItem, flow: Flow): HTMLElement {
+  const href = flow.next.href ?? `#/call/${item.id}`
+  return h(
+    'a.ttask',
+    {
+      href,
+      on: {
+        click: (e: MouseEvent) => {
+          e.preventDefault()
+          go(href.replace(/^#\//, ''))
+        },
+      },
+    },
+    h('span.ic', {}, icon(flow.next.iconName)),
+    h(
+      'div.c',
+      {},
+      h(
+        'div.r1',
+        {},
+        h('span.sym', { text: item.instrument ?? '没写品种' }),
+        item.timeframe ? h('span', { text: item.timeframe }) : null,
+        h('span', { text: relative(item.submitted_at) }),
+        flowMini(flow),
+      ),
+      h('div.q', { text: item.original_text }),
+      h('div.r2', { text: flow.summary }),
+    ),
+    h('span.go', {}, h('span', { text: flow.next.label }), icon('chev')),
+  )
+}
+
+function waitRow(): HTMLElement {
+  return h(
+    'div.ttask.wait',
+    {},
+    h('span.ic', {}, h('span.sk', { style: 'width:20px;height:20px;border-radius:7px' })),
+    h(
+      'div.c',
+      {},
+      h('div.sk.line', { style: 'width:26%' }),
+      h('div.sk.line', { style: 'width:72%' }),
+    ),
+  )
+}
+
+/** 今天没有待办：不摆一排空卡片，给一句话和一个动作。 */
+function clearDay(): HTMLElement {
+  return h(
+    'div.tclear',
+    {},
+    h('span.ic', {}, icon('check')),
+    h(
+      'div.b',
+      {},
+      h('b', { text: '今天没有等着你的记录' }),
+      h('span', {
+        text: '写了一半的、结果已经出来的、还在观察里的，现在都没有。下一次开口之前记一条，它会自己排到这里来。',
+      }),
+    ),
+    h('button.btn.primary', { on: { click: () => openCapture() } }, icon('plus'), '记录判断'),
+  )
 }
 
 /**
- * 后端还没做完的能力单独放一组，写清楚现在用不了，而不是先摆一个能点开的空壳。
- * 已经开放的能力在这里不出现——它们各自有真的入口。
+ * 没接上的能力，一句实话加一个设置入口。
+ *
+ * 「后端没做」和「后端做了、这台机器没配」是两件事：交易所账户在 v4 里适配器
+ * 已经实现，缺的只是本机凭证；Chat 同理。上一版把这两种情况都写成「后端还没有
+ * 做这部分」，这里按 /v1/capabilities 的真实形态分开说。
  */
-function closedGroup(): HTMLElement | null {
-  const planned: Entry[] = [
-    {
-      iconName: 'q',
-      title: '问过去的自己',
-      line: '一句话问回去：这种局面我以前是怎么说的、说中了几次、什么时候不灵，让过去的自己回答现在的自己。',
-      act: '',
-      needs: 'chat_generation',
-      closed: '本机还没有接模型，问不了。',
-    },
-    {
-      iconName: 'link',
-      title: '交易所账户',
-      line: '把真实成交自动对回当时那条判断，说到有没有做到、做到有没有做对，全部自动对上，不再靠事后手填。',
-      act: '',
-      needs: 'exchange_accounts',
-      closed: '后端还没有做这部分。',
-    },
-    {
-      iconName: 'scale',
-      title: '直觉的记分板',
-      line: '同一类局面见过多少次、按你说的走了多少次、在什么情况下失效——直觉的成绩单。',
-      act: '',
-      needs: 'formal_statistics',
-      closed: '口径还没定下来，先不给数字，免得看着像真的。',
-    },
-  ].filter((entry) => !isLive(entry.needs ?? ''))
+function gapNote(): HTMLElement | null {
+  const watch: { name: string; label: string }[] = [
+    { name: 'chat_generation', label: '问过去的自己' },
+    { name: 'exchange_accounts', label: '交易所账户' },
+    { name: 'encrypted_backup', label: '加密备份' },
+    { name: 'knowledge_index', label: '按意思找' },
+  ]
+  const missing = watch.filter((w) => !isLive(w.name))
+  if (!missing.length) return null
 
-  if (!planned.length) return null
-  const cards = planned.map(card)
-  const node = h(
-    'section.hsec',
+  const configure = missing.filter((w) => capabilityGap(w.name) === 'not_configured')
+  const absent = missing.filter((w) => capabilityGap(w.name) !== 'not_configured')
+  const lines: string[] = []
+  if (configure.length) {
+    lines.push(`${configure.map((w) => w.label).join('、')}：后端已经做好了，这台机器上还没配它要的那一份东西。`)
+  }
+  if (absent.length) {
+    lines.push(`${absent.map((w) => w.label).join('、')}：本机后端现在没有报告这项能力。`)
+  }
+
+  return h(
+    'section.tsec',
     {},
     h(
-      'div.hsh',
+      'div.gapnote',
       {},
-      h('span.eyebrow', { text: '还没开放' }),
-      h('span.why', {
-        text: '记分要有说得清的口径，口径没定下来就不给数字，免得看着像真的。以下这些后端还没做完，如实标在这里。',
-      }),
+      h('span.ic', {}, icon('gear')),
+      h(
+        'div.b',
+        {},
+        h('b', { text: '有几项现在用不了' }),
+        ...lines.map((text) => h('span', { text })),
+      ),
+      h('a.btn.sm', { href: '#/settings' }, '去设置里看', icon('chev')),
     ),
-    h('div.hcards', {}, ...cards),
   )
-  stagger(cards)
-  return node
-}
-
-function card(entry: Entry): HTMLElement {
-  const open = !entry.needs || isLive(entry.needs)
-  const head = h(
-    'div.hc-top',
-    {},
-    h('span.ic', {}, icon(entry.iconName)),
-    h('span.t', { text: entry.title }),
-  )
-  const line = h('p.l', { text: entry.line })
-
-  if (!open) {
-    return h(
-      'div.hcard.off',
-      {},
-      head,
-      line,
-      h('span.go', {}, h('span.tag.cold', { text: '还没开放' }), h('span.faint', { text: entry.closed ?? '' })),
-    )
-  }
-
-  const go2 = h('span.go', {}, h('span', { text: entry.act }), icon('chev'))
-  if (entry.href) {
-    return h('a.hcard', { href: entry.href }, head, line, go2)
-  }
-  return h('button.hcard', { on: { click: () => entry.onClick?.() } }, head, line, go2)
 }
 
 function recentRow(item: CallListItem): HTMLElement {

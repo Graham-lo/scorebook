@@ -15,10 +15,14 @@
 
 import { ApiError, NetworkError } from '../../api/errors'
 import { WriteAction } from '../../api/http'
+import { ImageUploads } from '../../data/image-uploads'
+import { tradeEditor, tradeSummary } from './trades'
+import { imagePicker, reviewImages } from '../../ui/image-picker'
 import * as reviews from '../../api/reviews'
-import type { CallDetail, Outcome, ReviewAction, ReviewPublished, Uuid } from '../../api/types'
+import type { CallDetail, Outcome, ReviewAction, ReviewPublished, ReviewTrade, ReviewTradeSnapshot, Uuid } from '../../api/types'
 import { stateLook, whyLine } from '../../data/outcome'
 import { dateTime } from '../../data/time'
+import { ask } from '../../ui/confirm'
 import { clear, h } from '../../ui/dom'
 import { icon } from '../../ui/icons'
 import { note as noteBox, spinner } from '../../ui/states'
@@ -33,6 +37,7 @@ export const REVIEW_ACTIONS: { value: ReviewAction; label: string; help: string 
 ]
 
 export interface DraftEditorOptions {
+  instrument?: string | null
   callId: Uuid
   /** 重新读这条记录，冲突和结果更新之后要用它拿到最新的一版。 */
   reread: () => Promise<CallDetail>
@@ -46,8 +51,43 @@ export interface DraftEditorOptions {
   lead?: string
 }
 
+/**
+ * 编辑区拆开之后的几块。
+ *
+ * 一次性摊在一页上的时候它们叠在 `node` 里；引导式复盘一步一页，就把这几块
+ * 分到各步里去。它们是同一批节点，同一份状态——分开摆不等于分开存，草稿仍然
+ * 是整份自动保存的。
+ */
+export interface DraftParts {
+  /** 后续走势截图。 */
+  pictures: HTMLElement
+  /** 实盘关联。 */
+  trades: HTMLElement
+  /** 这次看到了什么。 */
+  note: HTMLElement
+  /** 下次怎么做。 */
+  better: HTMLElement
+  /** 和上一次同类局面比。 */
+  vsLast: HTMLElement
+  /** 冲突和「结果变了」的横幅。 */
+  banner: HTMLElement
+  /** 发布、丢弃和保存状态。 */
+  foot: HTMLElement
+}
+
 export interface DraftEditor {
   node: HTMLElement
+  parts: DraftParts
+  /**
+   * 草稿读完了没有。
+   *
+   * 一步一页的时候这几块被搬到别的容器里，`node` 里那圈「正在读草稿」的转圈
+   * 就看不见了；页面自己要知道什么时候才该把它们摆出来，不然会先摆出一组空
+   * 框，两百毫秒之后字才跳进去。
+   */
+  opened: Promise<void>
+  /** 这一步之后还能不能发布，引导式复盘用它决定「下一步」亮不亮。 */
+  canPublish(): boolean
   hasText(): boolean
   /** 离开页面之前把没发出的那一次保存补上。 */
   flush(): Promise<void>
@@ -75,6 +115,25 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   let paused = false
   let timer = 0
   let vs: ReviewAction | null = null
+  let publishing = false
+  let pendingSave: Promise<void> | null = null
+  let saveFailed = false
+  let imageSignature = '[]'
+  const positions = tradeEditor(options.instrument, touched, () => ready && !paused && !publishing)
+  const images = new ImageUploads('supplement')
+  const pictures = imagePicker(images, '上传后续走势截图', () => {
+    const signature = JSON.stringify(images.ids)
+    if (signature !== imageSignature) {
+      imageSignature = signature
+      touched()
+    }
+    if (ready) publish.disabled = !canPublish()
+  }, () => ready && !paused && !publishing)
+
+  function restoreImages(ids: Uuid[] = []): void {
+    imageSignature = JSON.stringify(ids)
+    images.restore(ids)
+  }
 
   const noteInput = h('textarea.textarea', {
     rows: 4,
@@ -111,28 +170,67 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   /** 冲突和「结果变了」都长在这里，不用弹窗打断输入。 */
   const banner = h('div.dbanner', { hidden: true })
 
+  const partPictures = h(
+    'div.dpart',
+    {},
+    pictures.node,
+    h('div.tip', { text: '放上判断之后的走势，和当时的截图对照着看。图片会随草稿保存，发布后保留在这条复盘里。' }),
+  )
+  const partNote = h('div.dpart', {}, noteInput)
+  const partBetter = h(
+    'div.dpart',
+    {},
+    h('div.dlabel', { text: '下次怎么做（可以不写）' }),
+    betterInput,
+  )
+  const partVs = h(
+    'div.dpart',
+    {},
+    h('div.dlabel', { text: '和上一次同类局面比' }),
+    opts,
+    optHelp,
+  )
+  const partFoot = h(
+    'div.dfoot',
+    {},
+    publish,
+    discard,
+    h('span.dstatewrap', {}, state, stateRetry),
+  )
+  const parts: DraftParts = {
+    pictures: partPictures,
+    trades: positions.node,
+    note: partNote,
+    better: partBetter,
+    vsLast: partVs,
+    banner,
+    foot: partFoot,
+  }
+
   const body = h(
     'div.dbody',
     { hidden: true },
     h('div.dlead', { text: options.lead ?? '行情已经走完了，现在你怎么看当时那句话？' }),
-    noteInput,
-    h('div.dlabel', { text: '下次怎么做（可以不写）' }),
-    betterInput,
-    h('div.dlabel', { text: '和上一次同类局面比' }),
-    opts,
-    optHelp,
+    partPictures,
+    positions.node,
+    partNote,
+    partBetter,
+    partVs,
     banner,
-    h(
-      'div.dfoot',
-      {},
-      publish,
-      discard,
-      h('span.dstatewrap', {}, state, stateRetry),
-    ),
+    partFoot,
   )
 
   const loading = spinner('正在读这条记录的草稿…')
   const node = h('div.rvform', {}, loading, body)
+
+  let settleOpen: () => void = () => undefined
+  let failOpen: (error: unknown) => void = () => undefined
+  const opened = new Promise<void>((resolve, reject) => {
+    settleOpen = resolve
+    failOpen = reject
+  })
+  // 没人接的时候也不能让它变成未捕获的拒绝。
+  opened.catch(() => undefined)
 
   void open()
 
@@ -147,16 +245,22 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
         noteInput.value = current.draft.body.note ?? ''
         betterInput.value = current.draft.body.better_play ?? ''
         vs = current.draft.body.vs_last ?? null
+        restoreImages(current.draft.body.attachment_ids)
+        positions.restore(current.draft.body.trades, current.draft.body.trade_snapshots)
         savedAt = current.draft.updated_at
       }
       ready = true
+      positions.lock()
+      pictures.render()
       loading.remove()
       body.hidden = false
       paintOptions()
       paintState()
       report()
+      settleOpen()
     } catch (error) {
       if (!alive) return
+      failOpen(error)
       loading.replaceWith(
         noteBox(
           'warn',
@@ -183,6 +287,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
           text: item.label,
           on: {
             click: () => {
+              if (publishing) return
               vs = vs === item.value ? null : item.value
               paintOptions()
               optHelp.textContent = vs ? item.help : '选一个，它会跟着这条复盘一起存下来。'
@@ -196,12 +301,12 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   }
 
   function canPublish(): boolean {
-    if (!ready || paused) return false
+    if (!ready || paused || publishing || images.pending || !positions.valid()) return false
     return Boolean(vs) && Boolean(noteInput.value.trim() || betterInput.value.trim())
   }
 
   function hasText(): boolean {
-    return Boolean(noteInput.value.trim() || betterInput.value.trim() || vs)
+    return Boolean(noteInput.value.trim() || betterInput.value.trim() || vs || images.items.length || positions.hasContent())
   }
 
   function report(): void {
@@ -209,6 +314,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   }
 
   function paintState(): void {
+    positions.lock()
     stateRetry.hidden = true
     if (saving) {
       state.className = 'dstate saving'
@@ -263,11 +369,26 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
    * 内容又变了，再补一次，这样两条草稿不会串写。
    */
   async function flush(immediate = false): Promise<void> {
+    if (immediate) window.clearTimeout(timer)
+    await images.wait()
+    if (pendingSave) return pendingSave
+    if (!ready || paused || !dirty) return
+    pendingSave = (async () => {
+      do {
+        saveFailed = false
+        await saveOnce()
+      } while (dirty && !saveFailed && !paused)
+    })().finally(() => { pendingSave = null })
+    await pendingSave
+  }
+
+  async function saveOnce(): Promise<void> {
     if (!ready || paused || !dirty) return
     if (saving) return
-    if (immediate) window.clearTimeout(timer)
     const payload = {
       expected_draft_revision: draftRevision,
+      attachment_ids: images.ids,
+      trades: positions.read(),
       note: noteInput.value,
       better_play: betterInput.value.trim() ? betterInput.value : null,
       vs_last: vs,
@@ -278,17 +399,15 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     try {
       // 内容变了才换幂等键；网络重试用的是同一把键和同一份正文。
       const result = await reviews.saveDraft(options.callId, payload, save.keyFor(payload))
-      if (!alive) return
       saving = false
       draftRevision = result.revision
       savedAt = result.updated_at
       save.reset()
       paintState()
       report()
-      if (dirty) void flush()
     } catch (error) {
-      if (!alive) return
       saving = false
+      saveFailed = true
       dirty = true
       if (error instanceof ApiError && error.code === 'draft_revision_conflict') {
         await onConflict()
@@ -297,7 +416,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
       // 失败就近说明，不弹提示；文字全部留在编辑器里，重试用的还是同一把幂等键。
       state.className = 'dstate bad'
       state.textContent =
-        error instanceof NetworkError ? '尚未保存，网络没通。' : '这一次没有存下来。'
+        error instanceof NetworkError ? '尚未保存，网络没通。' : error instanceof Error ? error.message : '这一次没有存下来。'
       stateRetry.hidden = false
       report()
     }
@@ -356,6 +475,8 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
                   noteInput.value = theirs.note ?? ''
                   betterInput.value = theirs.better_play ?? ''
                   vs = theirs.vs_last ?? null
+                  restoreImages(theirs.attachment_ids)
+                  positions.restore(theirs.trades, theirs.trade_snapshots)
                   draftRevision = remote.draft_revision
                   callRevision = remote.call_revision
                   seenOutcomeIds = [...remote.current_outcome_ids]
@@ -375,8 +496,8 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
         ? h(
             'div.dcompare',
             {},
-            side('我这边', mine.note, mine.better, mine.vs),
-            side('另一处', theirs.note, theirs.better_play, theirs.vs_last),
+            side('我这边', mine.note, mine.better, mine.vs, images.ids, positions.read()),
+            side('另一处', theirs.note, theirs.better_play, theirs.vs_last, theirs.attachment_ids, theirs.trades, theirs.trade_snapshots),
           )
         : null,
     )
@@ -387,6 +508,9 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     text: string,
     better: string | null,
     action: ReviewAction | null,
+    imageIds: Uuid[] = [],
+    trades: ReviewTrade[] = [],
+    snapshots: ReviewTradeSnapshot[] = [],
   ): HTMLElement {
     const label = REVIEW_ACTIONS.find((a) => a.value === action)?.label
     return h(
@@ -396,6 +520,8 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
       h('div.quote.sm', { text: text.trim() || '（这一栏是空的）' }),
       better?.trim() ? h('div.faint', { text: `下次怎么做：${better.trim()}` }) : null,
       label ? h('div.faint', { text: `和上一次比：${label}` }) : null,
+      reviewImages(imageIds),
+      tradeSummary(trades, snapshots),
     )
   }
 
@@ -422,12 +548,16 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
 
   async function doPublish(): Promise<void> {
     if (!canPublish()) return
+    publishing = true
+    positions.lock()
+    pictures.render()
+    noteInput.disabled = betterInput.disabled = true
     publish.disabled = true
     publish.textContent = '正在发布…'
     try {
       // 发布之前先把最后一次草稿保存确认掉，否则发出去的会是上一版文字。
-      if (dirty) await flush(true)
-      if (dirty || paused) {
+      await flush(true)
+      if (dirty || paused || saving) {
         publish.textContent = '发布这条复盘'
         publish.disabled = !canPublish()
         problem('刚写的这几个字还没存下来，等它存好再发布。')
@@ -451,6 +581,8 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
       noteInput.value = ''
       betterInput.value = ''
       vs = null
+      restoreImages()
+      positions.restore()
       dirty = false
       discard.hidden = true
       publish.textContent = '发布这条复盘'
@@ -477,6 +609,12 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
         return
       }
       problem(error instanceof Error ? error.message : '这条复盘没有发布成功。')
+    } finally {
+      publishing = false
+      positions.lock()
+      noteInput.disabled = betterInput.disabled = false
+      pictures.render()
+      publish.disabled = !canPublish()
     }
   }
 
@@ -548,7 +686,19 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   }
 
   async function doDiscard(): Promise<void> {
-    if (hasText() && !window.confirm('丢掉这份草稿？写下的字不会留下来，原判断和以前的复盘都还在。')) {
+    if (publishing) return
+    await flush(true)
+    if (dirty || paused || saving || images.pending) { problem('请先完成图片上传和草稿保存，再丢弃。'); return }
+    if (
+      hasText() &&
+      !(await ask({
+        title: '丢掉这份草稿？',
+        detail: '草稿中的文字和所选后续截图不会发布。当时那句话和以前发布过的复盘都还在。',
+        confirm: '丢掉草稿',
+        cancel: '继续写',
+        danger: true,
+      }))
+    ) {
       return
     }
     discard.disabled = true
@@ -565,6 +715,8 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
       noteInput.value = ''
       betterInput.value = ''
       vs = null
+      restoreImages()
+      positions.restore()
       savedAt = null
       dirty = false
       discard.hidden = true
@@ -588,11 +740,16 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
 
   return {
     node,
+    opened,
+    parts,
+    canPublish,
     hasText,
     flush: () => flush(true),
     dispose() {
       alive = false
+      positions.dispose()
       window.clearTimeout(timer)
+      void flush(true).finally(() => { images.onChange = () => {}; images.clear() })
     },
   }
 }

@@ -1,0 +1,16 @@
+/* Scorebook 的样式入口。分层从下往上：变量 → 排版 → 外壳 → 控件 →
+   容器 → 信号 → 各页 → 动效 → 响应。不再往 patch.css 堆补丁。 */
+@import url('./tokens.css');
+@import url('./base.css');
+@import url('./shell.css');
+@import url('./controls.css');
+@import url('./surfaces.css');
+@import url('./signals.css');
+@import url('./records.css');
+@import url('./review.css');
+@import url('./relive.css');
+@import url('./discover.css');
+@import url('./library.css');
+@import url('./home.css');
+@import url('./motion.css');
+@import url('./responsive.css');

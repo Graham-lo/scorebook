@@ -14,7 +14,14 @@ import { Latest, WriteAction } from '../../api/http'
 import * as jobs from '../../api/jobs'
 import type { Capabilities, JobRecord, Uuid } from '../../api/types'
 import * as lastExport from '../../data/lastExport'
-import { MARKET_LABELS, capability, defaultMarket, isLive, loadCapabilities } from '../../data/session'
+import {
+  MARKET_LABELS,
+  capabilityDetail,
+  capabilityState,
+  defaultMarket,
+  loadCapabilities,
+  qualityAccepted,
+} from '../../data/session'
 import { clear, h } from '../../ui/dom'
 import { icon } from '../../ui/icons'
 import { prefersReducedMotion, stagger } from '../../ui/motion'
@@ -32,6 +39,8 @@ interface Row {
   can: string
   /** What is missing, in their words, when it is not. */
   cannot: string
+  /** 已经做好、但这台机器上还差一步时，那一步是什么。 */
+  setup?: string
 }
 
 const ROWS: Row[] = [
@@ -57,27 +66,75 @@ const ROWS: Row[] = [
     key: 'image_visual_search',
     title: '按画面样子搜索',
     can: '本机的视觉模型在运行，可以按整张图看起来像不像来检索，也可以两种一起排。',
-    cannot: '本机的视觉模型没有启动，所以只能按走势形状比较。启动它之后刷新页面就会多出这两种。',
+    cannot: '本机的视觉模型没有启动，所以只能按走势形状比较。',
+    setup: '在后端目录里运行 python3 vision/server.py，然后刷新这一页。',
   },
   {
-    key: 'formal_statistics',
-    title: '正式统计',
-    can: '可以按每条记录写下的标准，统计胜率一类的数字。',
-    cannot: '统计方式还在做。在它做完之前，这里不会给你任何一个看起来像胜率的数字——算错的统计比没有统计更糟。',
+    key: 'screenshot_ocr',
+    title: '认截图上的字',
+    can: '可以从你自己的截图里读出品种、周期这些标注，读不准的地方仍然要你确认。',
+    cannot: '本机没有开识字服务，所以按图搜索时品种和周期要你自己填。',
+    setup: '把 native/ocr.swift 编成本机可执行文件，配好 SCOREBOOK_OCR_EXECUTABLE 再重启后端。',
   },
   {
-    key: 'chat_generation',
-    title: '对着记录提问',
-    can: '可以用自然语言问自己的记录。',
-    cannot: '问答还没有接上。现在不会给你一个编出来的答案。',
+    key: 'historical_search',
+    title: '在币安历史里搜',
+    can: '可以在已经建好索引的那部分币安历史里找相似结构，来源会逐段核验。',
+    cannot: '还不能在币安历史里搜。',
+  },
+  {
+    key: 'trade_ledger',
+    title: '真实成交账本',
+    can: '导入的成交按原样保存，持仓轮次和账本快照由它们推出来，不覆盖交易所给的价格。',
+    cannot: '成交账本没有就绪。',
   },
   {
     key: 'exchange_accounts',
     title: '连交易所账户',
-    can: '可以把成交记录接进来，和判断对上。',
-    cannot: '还不能连交易所。原型里那个「已连接」是画出来的，不是真的。',
+    can: '可以按只读权限把成交读进来，和当时那条判断对上。',
+    cannot: '还没有配只读账户，现在只能用 CSV 或者交易所导出的账单导入。',
+    setup: '在本机 Keychain 里放好只读密钥，再在这里建立连接；密钥不经过浏览器。',
+  },
+  {
+    key: 'formal_statistics',
+    title: '正式统计',
+    can: '可以按固定的一次统计，看它由哪些记录组成、代表样本和分组。',
+    cannot: '正式统计没有就绪，这里不会给你任何一个看起来像胜率的数字。',
+  },
+  {
+    key: 'baseline',
+    title: '参照基准',
+    can: '可以拿同一段历史的 250 日参照来对比，它是参照，不是预测。',
+    cannot: '参照基准没有就绪。',
+  },
+  {
+    key: 'knowledge_index',
+    title: '在自己的记录里检索',
+    can: '可以按意思检索自己的原话、复盘和资料，命中的片段都能回到原文。',
+    cannot: '本机的中文检索模型没有启动，按意思检索暂时用不了。',
+    setup: '在后端目录里运行 python3 text_encoder/server.py，然后刷新这一页。',
+  },
+  {
+    key: 'chat_generation',
+    title: '对着记录提问',
+    can: '可以用自然语言问自己的记录，答案按来源引用给出。',
+    cannot: '还没有选定问答用的模型，后端会明说没有配置。现在不会给你一个编出来的答案。',
+    setup: '先决定用哪个模型供应商并在后端配好，这一步不在浏览器里做。',
+  },
+  {
+    key: 'encrypted_backup',
+    title: '加密备份',
+    can: '可以把记录和截图加密备份出去，恢复只往空库里做。',
+    cannot: '备份还没配好，现在这台机器上的东西只有一份。',
+    setup: '装好备份引擎并指定一个独立的仓库位置；密码放 Keychain，不进浏览器。',
   },
 ]
+
+const STATE_WORD: Record<string, string> = {
+  ready: '现在可用',
+  needs_setup: '还差一步',
+  unknown: '不清楚',
+}
 
 export function settingsPage(host: HTMLElement): () => void {
   let alive = true
@@ -113,7 +170,6 @@ export function settingsPage(host: HTMLElement): () => void {
       clear(body)
       body.appendChild(
         empty({
-          art: 'info',
           title: '连不上本机后端',
           tip: '确认后端在 127.0.0.1:8787 上运行，然后重试。' +
             (error instanceof Error ? ` 服务说：${error.message}` : ''),
@@ -128,8 +184,9 @@ export function settingsPage(host: HTMLElement): () => void {
 
     const list = h('div.stack', { style: 'gap:12px' })
     ROWS.forEach((row, index) => {
-      const live = isLive(row.key)
-      const raw = capability(row.key)
+      const state = capabilityState(row.key)
+      const live = state === 'ready'
+      const detail = capabilityDetail(row.key)
       list.appendChild(
         h(
           'div.caprow',
@@ -144,10 +201,12 @@ export function settingsPage(host: HTMLElement): () => void {
               h('span.h3', { text: row.title }),
               h('span', {
                 class: ['badge', live ? 'ready' : 'wait'],
-                text: live ? '现在可用' : stateWord(raw),
+                text: STATE_WORD[state] ?? '不清楚',
               }),
             ),
             h('div.tip', { text: live ? row.can : row.cannot }),
+            !live && row.setup ? h('div.tip.dim', { text: row.setup }) : null,
+            live && detail ? h('div.tip.dim', { text: `用的是 ${detail}` }) : null,
           ),
         ),
       )
@@ -155,14 +214,27 @@ export function settingsPage(host: HTMLElement): () => void {
     body.appendChild(list)
     stagger(list.children)
 
-    if (capability('exports')) body.appendChild(exportPanel())
+    // 配好了不等于验过。后端自己就是这么说的，页面照抄，不替它下结论。
+    body.appendChild(
+      note(
+        'info',
+        qualityAccepted('image_structure_search')
+          ? '上面写的是后端此刻自报的状态。'
+          : '上面写的是“做了没有、这台机器配了没有”，不是“效果验过了没有”。按图搜索的匹配质量还没有用真实截图盲测验收过，成交、备份和问答也都还要用真实数据走一遍才算数。',
+      ),
+    )
 
+    body.appendChild(exportPanel())
+
+    // 接上模型它就是一个真的入口，没接上才是「以后会有」。标题跟着实际情况走，
+    // 不把已经能用的东西继续摆在「以后」里，也不把没接的说成能用。
+    const chat = chatPanel()
     body.appendChild(
       h(
         'div',
         { style: 'margin-top:18px' },
-        h('div.eyebrow', { text: '以后会有' }),
-        h('div', { style: 'margin-top:10px' }, chatPanel().node),
+        h('div.eyebrow', { text: chat.live ? '对着自己的记录提问' : '以后会有' }),
+        h('div', { style: 'margin-top:10px' }, chat.node),
       ),
     )
 
@@ -175,8 +247,8 @@ export function settingsPage(host: HTMLElement): () => void {
           'div.kv',
           { style: 'margin-top:10px' },
           kv('后端状态', health ? (health.status === 'ok' ? '正常' : health.status) : '问不到'),
-          kv('后端版本', health?.version ?? '问不到'),
-          kv('默认市场', MARKET_LABELS[caps.default_market ?? defaultMarket()]),
+          kv('后端版本', health?.version ?? caps.backend_version ?? '问不到'),
+          kv('默认市场', MARKET_LABELS[defaultMarket()]),
           kv('动效', prefersReducedMotion() ? '按系统设置减弱' : '正常'),
         ),
       ),
@@ -417,17 +489,3 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Turns the backend's own word into something a trader can read. */
-function stateWord(raw: string): string {
-  switch (raw) {
-    case 'planned':
-      return '还没有做'
-    case 'implementation_in_progress':
-      return '正在做'
-    case 'not_configured':
-      return '本机没有启动'
-    case '':
-      return '不清楚'
-    default:
-      return raw
-  }
-}

@@ -1,0 +1,714 @@
+/* ============================================================
+   重温一遍：把一次判断放回它当时那段真实行情里
+   ------------------------------------------------------------
+   舞台是深色的青墨板面——看 K 线本来就该在暗底上看，而且它和整站
+   的浅纸面拉开了层次：走进这几屏，像走进一间放映室。板面之外仍然
+   是纸，事实、原话、截图都摆在纸上。
+
+   这五屏只摆事实，所以版面上没有一处「说明区」：标题条、舞台、
+   一排事实、两个走屏按钮，就这么多。
+   ============================================================ */
+
+.rlv {
+  --rlv-h: clamp(320px, 52vh, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+/* ---------- 顶上那条：这是谁，走到第几屏 ---------- */
+
+.rlv-top {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  position: relative;
+}
+.rlv-top::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--blue-line), var(--rule) 38%, transparent 82%);
+}
+.rlv-id {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.rlv-back {
+  font-size: 12.5px;
+  color: var(--ink3);
+  white-space: nowrap;
+  transition: color var(--t1);
+}
+.rlv-back:hover { color: var(--blue-text) }
+.rlv-sym {
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.rlv-mk { font-size: 12.5px; color: var(--ink3) }
+
+.rlv-steps {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.rlv-steps a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px 0 8px;
+  border-radius: 99px;
+  font-size: 13px;
+  color: var(--ink3);
+  white-space: nowrap;
+  transition: background var(--t2) var(--e), color var(--t2), box-shadow var(--t2);
+}
+.rlv-steps a .n {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-style: normal;
+  background: var(--sheet2);
+  box-shadow: inset 0 0 0 1px var(--rule2);
+  color: var(--ink3);
+  transition: background var(--t2) var(--e), color var(--t2), box-shadow var(--t2);
+}
+.rlv-steps a:hover { color: var(--ink); background: color-mix(in srgb, var(--sheet) 74%, transparent) }
+.rlv-steps a.past .n { background: var(--blue-soft); color: var(--blue-text); box-shadow: inset 0 0 0 1px var(--blue-line) }
+.rlv-steps a.on {
+  color: var(--blue-text);
+  font-weight: 600;
+  background: var(--blue-soft);
+  box-shadow: inset 0 0 0 1px var(--blue-line);
+}
+.rlv-steps a.on .n { background: var(--blue); color: #fff; box-shadow: none }
+
+/* ---------- 一屏 ---------- */
+
+.rlv-body { min-width: 0 }
+.rlv-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.rlv-flat {
+  padding: 26px 22px;
+  background: var(--sheet);
+  border-radius: var(--r2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
+}
+.rlv-say {
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--ink2);
+  margin: 0;
+}
+.rlv-acts, .rlv-walk { display: flex; align-items: center; gap: 10px; flex-wrap: wrap }
+.rlv-walk { margin-top: 2px }
+.rlv-walk > :last-child { margin-left: auto }
+
+/* ---------- 舞台 ---------- */
+
+.rlv-plate {
+  /* 板子永远是深的，涨跌两色要按板子定，跟着页面的浅色主题走会看不见。 */
+  --up: #4fd6a0;
+  --down: #ff8a78;
+  --blue: #67d6c6;
+  --gold: #e4c98a;
+  position: relative;
+  padding: 12px;
+  border-radius: var(--r2);
+  background:
+    radial-gradient(120% 90% at 8% -10%, color-mix(in srgb, var(--board3) 62%, transparent), transparent 62%),
+    linear-gradient(180deg, var(--board2), var(--board));
+  box-shadow: var(--shadow-lift), inset 0 0 0 1px color-mix(in srgb, var(--board3) 78%, transparent);
+  overflow: hidden;
+}
+.rlv-plate::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 34%);
+}
+
+.rlv-stage {
+  position: relative;
+  height: var(--rlv-h);
+  min-height: 240px;
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.rlv-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100% }
+
+.rlv-grid .g {
+  stroke: color-mix(in srgb, var(--board-ink2) 20%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 2 6;
+}
+
+/* K 线本体。粗细走 non-scaling-stroke，纵向压缩压不扁它。 */
+.rlv-c .w { stroke-width: 1.15 }
+.rlv-c .b { stroke-width: 1 }
+.rlv-c.up .w, .rlv-c.up .b { stroke: var(--up) }
+.rlv-c.up .b { fill: color-mix(in srgb, var(--up) 62%, transparent) }
+.rlv-c.down .w, .rlv-c.down .b { stroke: var(--down) }
+.rlv-c.down .b { fill: color-mix(in srgb, var(--down) 74%, transparent) }
+.rlv-c.fresh { animation: rlvGrow 0.34s var(--e-out) both }
+@keyframes rlvGrow { from { opacity: 0 } to { opacity: 1 } }
+
+.rlv-line { fill: none; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round }
+.rlv-line.ma.m0 { stroke: #f0c46a }
+.rlv-line.ma.m1 { stroke: #7fd4ff }
+.rlv-line.ma.m2 { stroke: #ef9ad0 }
+.rlv-line.ema.m0 { stroke: #9df0c8; stroke-dasharray: 6 3 }
+.rlv-line.ema.m1 { stroke: #ffb08a; stroke-dasharray: 6 3 }
+.rlv-line.ema.m2 { stroke: #b9b4ff; stroke-dasharray: 6 3 }
+.rlv-line.bb { stroke: color-mix(in srgb, var(--board-ink2) 74%, transparent); stroke-width: 1.1 }
+.rlv-line.bb.mid { stroke-dasharray: 4 4 }
+.rlv-line.atr { stroke: color-mix(in srgb, var(--gold) 84%, transparent); stroke-width: 1.3 }
+
+.rlv-level { stroke-width: 1.2; stroke-dasharray: 7 5; opacity: 0; animation: rlvLevel 0.5s var(--e-out) forwards; animation-delay: calc(var(--i, 0) * 90ms + 160ms) }
+@keyframes rlvLevel { from { opacity: 0 } to { opacity: 0.9 } }
+.rlv-level.k-target { stroke: var(--realized) }
+.rlv-level.k-invalidation { stroke: var(--unrealized) }
+.rlv-level.k-boundary { stroke: var(--pending) }
+.rlv-level.k-trigger { stroke: var(--gold) }
+.rlv-level.k-base { stroke: color-mix(in srgb, var(--board-ink2) 82%, transparent); stroke-dasharray: 2 5 }
+
+.rlv-judge {
+  stroke: var(--blue-bright);
+  stroke-width: 1.6;
+  stroke-dasharray: 3 4;
+  transition: opacity var(--t2);
+}
+.rlv-cross { transition: opacity var(--t1) }
+.rlv-cross line { stroke: color-mix(in srgb, var(--board-ink) 44%, transparent); stroke-width: 1; stroke-dasharray: 3 3 }
+
+/* ---------- 坐标轴 ---------- */
+
+.rlv-y, .rlv-x, .rlv-pins { position: absolute; inset: 0; pointer-events: none }
+.rlv-yt {
+  position: absolute;
+  right: 4px;
+  transform: translateY(-50%);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--board-ink2);
+  letter-spacing: -0.02em;
+}
+.rlv-xt {
+  position: absolute;
+  bottom: 2px;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--board-ink2);
+  white-space: nowrap;
+}
+
+/* ---------- 价位标签 ---------- */
+
+.rlv-ltag {
+  position: absolute;
+  transform: translate(0, -50%);
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  opacity: 0;
+  animation: rlvTag 0.42s var(--e-out) forwards;
+  animation-delay: calc(var(--i, 0) * 90ms + 240ms);
+}
+@keyframes rlvTag { from { opacity: 0; transform: translate(10px, -50%) } to { opacity: 1; transform: translate(0, -50%) } }
+.rlv-ltag.k-target { background: color-mix(in srgb, var(--realized) 26%, transparent); color: #b6f0d3 }
+.rlv-ltag.k-invalidation { background: color-mix(in srgb, var(--down) 30%, transparent); color: #ffd0c7 }
+.rlv-ltag.k-boundary { background: color-mix(in srgb, var(--pending) 32%, transparent); color: #d6d6ff }
+.rlv-ltag.k-trigger { background: color-mix(in srgb, var(--gold) 30%, transparent); color: #f6e0b2 }
+.rlv-ltag.k-base { background: color-mix(in srgb, var(--board3) 92%, transparent); color: var(--board-ink2) }
+
+/* ---------- 标注 ---------- */
+
+.rlv-pin {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  /* 贴着右边缘的时候，绝对定位剩下的宽度很窄，气泡会被挤成一列竖排的字。
+     按内容自己的宽度来，再由 .t 的 max-width 决定在哪换行。 */
+  width: max-content;
+  max-width: 258px;
+  transform: translate(0, -50%);
+  padding: 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--t2) var(--e-out);
+  text-align: left;
+}
+.rlv-pin.on { opacity: 1; visibility: visible; animation: rlvPin 0.4s var(--e-spring) both }
+button.rlv-pin.on { pointer-events: auto; cursor: pointer }
+@keyframes rlvPin { from { opacity: 0; transform: translate(0, calc(-50% + 8px)) } to { opacity: 1; transform: translate(0, -50%) } }
+.rlv-pin .d {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--blue-bright);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-bright) 26%, transparent);
+}
+.rlv-pin .t {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--board) 82%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--board3) 90%, transparent);
+  backdrop-filter: blur(6px);
+  max-width: 240px;
+}
+.rlv-pin .t b { font-size: 12px; font-weight: 600; color: var(--board-ink); line-height: 1.35 }
+.rlv-pin .t .s { font-family: var(--mono); font-size: 10.5px; color: var(--board-ink2); line-height: 1.35 }
+.rlv-pin.flip { flex-direction: row-reverse; transform: translate(-100%, -50%) }
+.rlv-pin.flip.on { animation-name: rlvPinFlip }
+@keyframes rlvPinFlip { from { opacity: 0; transform: translate(-100%, calc(-50% + 8px)) } to { opacity: 1; transform: translate(-100%, -50%) } }
+.rlv-pin.low { transform: translate(0, 4px) }
+.rlv-pin.rail .t { padding: 3px 8px }
+.rlv-pin.rail .d { width: 7px; height: 7px }
+button.rlv-pin:hover .t { box-shadow: inset 0 0 0 1px var(--blue-bright) }
+
+.rlv-pin.k-judgment .d { background: var(--blue-bright) }
+.rlv-pin.k-trigger .d { background: var(--gold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 26%, transparent) }
+.rlv-pin.k-threshold .d { background: var(--realized); box-shadow: 0 0 0 3px color-mix(in srgb, var(--realized) 26%, transparent) }
+.rlv-pin.k-invalidation .d { background: var(--down); box-shadow: 0 0 0 4px color-mix(in srgb, var(--down) 30%, transparent) }
+.rlv-pin.k-invalidation .t { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--down) 68%, transparent) }
+.rlv-pin.k-end .t { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue-bright) 60%, transparent) }
+.rlv-pin.k-mfe .d { background: var(--up) }
+.rlv-pin.k-mae .d { background: var(--down) }
+.rlv-pin.k-review .d { background: #b9b4ff }
+.rlv-pin.k-shot .d { background: #f0c46a }
+.rlv-pin.k-other .d { background: color-mix(in srgb, var(--board-ink2) 82%, transparent) }
+.rlv-pin.k-trade .d { width: 0; height: 0; border-radius: 0; background: none; box-shadow: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 8px solid var(--board-ink) }
+
+/* ---------- 时间轴上的一段 ---------- */
+
+.rlv-band {
+  position: absolute;
+  bottom: 20px;
+  height: 16px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0;
+  animation: rlvBand 0.5s var(--e-out) forwards;
+  animation-delay: calc(var(--i, 0) * 80ms + 200ms);
+}
+@keyframes rlvBand { from { opacity: 0; transform: scaleX(0.4) } to { opacity: 1; transform: scaleX(1) } }
+button.rlv-band { pointer-events: auto; cursor: pointer }
+.rlv-band .bl {
+  font-size: 10.5px;
+  white-space: nowrap;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rlv-band.k-horizon { background: color-mix(in srgb, var(--blue-bright) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue-bright) 46%, transparent) }
+.rlv-band.k-horizon .bl { color: #b7ece7 }
+.rlv-band.k-shot { background: color-mix(in srgb, var(--gold) 24%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 48%, transparent) }
+.rlv-band.k-shot .bl { color: #f6e0b2 }
+.rlv-band.k-threshold { background: color-mix(in srgb, var(--realized) 24%, transparent) }
+.rlv-band.k-threshold .bl { color: #b6f0d3 }
+
+/* ---------- 十字线读数 ---------- */
+
+.rlv-read {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 6px 11px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--board) 78%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--board3) 86%, transparent);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+.rlv-read.right { left: auto; right: 66px }
+.rlv-read .t { font-family: var(--mono); font-size: 11px; color: var(--board-ink) }
+.rlv-read .o { display: inline-flex; align-items: baseline; gap: 4px }
+.rlv-read .o i { font-style: normal; font-size: 10.5px; color: var(--board-ink2) }
+.rlv-read .o b { font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--board-ink) }
+
+/* ---------- 播放条 ---------- */
+
+.rlv-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.rlv-count { font-size: 12px; color: var(--ink3) }
+.rlv-status {
+  font-family: var(--serif);
+  font-size: 14px;
+  color: var(--ink2);
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rlv-result { animation: rise 0.4s var(--e-out) both }
+
+/* ---------- 事实 ---------- */
+
+.rlv-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 1px;
+  background: color-mix(in srgb, var(--rule) 72%, transparent);
+  border-radius: var(--r2);
+  overflow: hidden;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
+}
+.rlv-facts .f {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 13px 16px;
+  background: var(--sheet);
+  min-width: 0;
+}
+.rlv-facts .f i {
+  font-style: normal;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink3);
+}
+.rlv-facts .f b {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+/* 这个值不是记下来的，是从 K 线上读的——小字把来路说清楚。 */
+.rlv-facts .f .rlv-fnote {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 99px;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+  color: var(--ink3);
+  background: var(--sheet2);
+  box-shadow: inset 0 0 0 1px var(--rule2);
+  animation: rise 0.4s var(--e-out) both;
+  animation-delay: 120ms;
+}
+
+/* ---------- 当时那句话 ---------- */
+
+.rlv-words {
+  margin: 0;
+  padding: 18px 22px;
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.7;
+  color: var(--ink);
+  background: var(--sheet);
+  border-radius: var(--r2);
+  border-left: 3px solid var(--blue);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  transition: box-shadow var(--t3) var(--e-out), background var(--t3);
+}
+.rlv-words.lit {
+  background: var(--hl);
+  box-shadow: 0 0 0 1px var(--hl-line), 0 0 0 6px color-mix(in srgb, var(--gold) 18%, transparent);
+}
+
+/* ---------- 角落里那张截图 ---------- */
+
+/* 判断时刻永远在右边，参考图挂右下角会正好压住那几根 K 线和价格轴，所以挂左下角。 */
+.rlv-shot {
+  position: absolute;
+  left: 14px;
+  bottom: 30px;
+  width: min(150px, 26%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  animation: rlvShot 0.6s var(--e-out) 0.3s both;
+}
+@keyframes rlvShot { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
+.rlv-shot .shot-slot { width: 100%; max-height: 170px; background: none; border-radius: 6px }
+.rlv-shot img {
+  width: 100%;
+  max-height: 170px;
+  object-fit: contain;
+  object-position: bottom left;
+  display: block;
+  border-radius: 6px;
+  cursor: zoom-in;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--board3) 92%, transparent), var(--shadow-lift);
+  transition: transform var(--t2) var(--e);
+}
+.rlv-shot img:hover { transform: scale(1.03) }
+.rlv-shotl { font-size: 10.5px; color: var(--board-ink2) }
+
+/* ---------- 后来 ---------- */
+
+.rlv-later:empty { display: none }
+.rlv-later {
+  padding: 18px 22px;
+  background: var(--sheet);
+  border-radius: var(--r2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
+  animation: rise 0.4s var(--e-out) both;
+}
+.rlv-later .shot-slot { max-height: 460px; background: none }
+.rlv-later img { width: 100%; max-height: 460px; object-fit: contain; display: block; cursor: zoom-in; border-radius: var(--r) }
+.rlv-rhead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px }
+.rlv-rhead b { font-family: var(--mono); font-size: 13px; color: var(--ink2) }
+.rlv-rhead .faint { font-size: 12px }
+.rlv-rrow { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--rule) }
+.rlv-rrow i { font-style: normal; font-size: 11.5px; letter-spacing: 0.08em; color: var(--ink3) }
+.rlv-rrow p { margin: 0; font-family: var(--serif); font-size: 15.5px; line-height: 1.7; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere }
+
+/* ---------- 全貌 ---------- */
+
+.rlv-verdict {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  background: var(--sheet);
+  border-radius: var(--r2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
+}
+.rlv-fig { display: inline-flex; flex-direction: column; gap: 3px }
+.rlv-fig i { font-style: normal; font-size: 11px; letter-spacing: 0.08em; color: var(--ink3) }
+.rlv-fig b { font-size: 15px; font-weight: 500; color: var(--ink) }
+
+/* 只有一张图的时候不让它摊满一行，图会被拉得很小、两边全是空白。 */
+.rlv-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 460px)); justify-content: start; gap: 14px }
+.rlv-card {
+  margin: 0;
+  padding: 10px;
+  background: var(--sheet);
+  border-radius: var(--r2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
+  min-width: 0;
+}
+.rlv-card .shot-slot { height: 240px; aspect-ratio: auto !important; background: none }
+.rlv-card img { width: 100%; height: 240px; object-fit: contain; display: block; cursor: zoom-in }
+.rlv-card figcaption { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; font-size: 12px }
+.rlv-card figcaption b { font-size: 13px; color: var(--ink2) }
+
+/* ---------- 画哪几条线 ---------- */
+
+.rlv-setup { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.rlv-slabel { font-size: 12.5px; color: var(--ink3) }
+
+/* ---------- 钉到真实行情 ---------- */
+
+.rlv-locate {
+  padding: 14px 18px;
+  background: var(--sheet2);
+  border-radius: var(--r2);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.rlv-lrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; color: var(--ink2) }
+.rlv-lrow .mono { font-size: 12.5px }
+.rlv-lok {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--blue-soft);
+  color: var(--blue-text);
+  box-shadow: inset 0 0 0 1px var(--blue-line);
+}
+.rlv-lauto {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: var(--ink3);
+  box-shadow: inset 0 0 0 1px var(--rule2);
+}
+.rlv-lbad { color: var(--unrealized) }
+.rlv-lmeta { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink3) }
+.rlv-spin {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--blue-line);
+  border-top-color: var(--blue);
+  animation: rlvSpin 0.8s linear infinite;
+}
+@keyframes rlvSpin { to { transform: rotate(360deg) } }
+
+.rlv-cands { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 12px; margin-top: 12px; width: 100% }
+.rlv-cand {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--sheet);
+  border-radius: var(--r);
+  box-shadow: 0 0 0 1px var(--rule), var(--shadow);
+  min-width: 0;
+  animation: rise 0.4s var(--e-out) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+  transition: box-shadow var(--t2), transform var(--t2) var(--e);
+}
+.rlv-cand:hover { transform: translateY(-2px); box-shadow: 0 0 0 1px var(--blue-line), var(--shadow-lift) }
+.rlv-chead { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; font-size: 12.5px }
+.rlv-chead .rank { font-family: var(--mono); font-size: 11px; color: var(--gold) }
+.rlv-cchart {
+  height: 62px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, var(--board2), var(--board));
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.rlv-cwhen { font-size: 11px; color: var(--ink3); overflow-wrap: anywhere }
+.rlv-cfail { font-size: 11.5px; color: var(--board-ink2) }
+.rlv-mini { width: 100%; height: 100% ; display: block }
+.rlv-mini .up .w, .rlv-mini .up .b { stroke: var(--up) }
+.rlv-mini .up .b { fill: color-mix(in srgb, var(--up) 60%, transparent) }
+.rlv-mini .down .w, .rlv-mini .down .b { stroke: var(--down) }
+.rlv-mini .down .b { fill: color-mix(in srgb, var(--down) 72%, transparent) }
+.rlv-mini .w, .rlv-mini .b { stroke-width: 0.7 }
+
+/* ============================================================
+   小屏：手机竖着看，图占上面一大半，事实排在它下面
+   ============================================================ */
+
+@media (max-width: 1040px) {
+  .rlv { --rlv-h: clamp(300px, 46vh, 460px) }
+}
+
+@media (max-width: 760px) {
+  .rlv { --rlv-h: clamp(260px, 42vh, 380px); gap: 14px }
+  .rlv-sym { font-size: 20px }
+  .rlv-steps { margin-left: 0; width: 100%; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none }
+  .rlv-steps::-webkit-scrollbar { display: none }
+  .rlv-steps a { padding: 0 10px 0 7px; font-size: 12.5px }
+  .rlv-plate { padding: 8px; border-radius: var(--r) }
+  .rlv-words { font-size: 15.5px; padding: 15px 17px }
+  .rlv-facts { grid-template-columns: repeat(2, 1fr) }
+  .rlv-facts .f b { font-size: 13.5px }
+  .rlv-status { margin-left: 0; width: 100% }
+  .rlv-shot { width: 96px; left: 8px; bottom: 26px }
+  .rlv-shot .shot-slot, .rlv-shot img { max-height: 108px }
+  .rlv-pin .t { max-width: 150px }
+  .rlv-pin .t b { font-size: 11px }
+  .rlv-card .shot-slot, .rlv-card img { height: 180px }
+  .rlv-later { padding: 14px 16px }
+}
+
+@media (max-width: 520px) {
+  .rlv-steps a .t { display: none }
+  .rlv-steps a { padding: 0 7px }
+  .rlv-facts { grid-template-columns: 1fr 1fr }
+  .rlv-locate { padding: 12px 14px }
+}
+
+/* 手机横过来：屏幕只有一点点高，把图撑满、别的收窄 */
+@media (max-height: 480px) and (orientation: landscape) {
+  .rlv { --rlv-h: min(72vh, 300px); gap: 10px }
+  .rlv-top { padding-bottom: 8px }
+  .rlv-sym { font-size: 17px }
+  .rlv-words { font-size: 14.5px; padding: 12px 14px; max-height: 140px; overflow: auto }
+  .rlv-facts .f { padding: 9px 12px }
+}
+
+/* 触屏上没有 hover，标注和候选都得自己站住 */
+@media (pointer: coarse) {
+  .rlv-stage { cursor: default }
+  .rlv-cand:hover { transform: none }
+  .rlv-shot img:hover { transform: none }
+}
+
+/* ============================================================
+   三个入口：详情页的图、复盘队列的一行
+   ============================================================ */
+
+/* 看图台工具条上的「钉到真实行情」，钉的过程就摊在图和脚注之间。 */
+.viewer-pin {
+  padding: 13px 15px;
+  border-top: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--sheet2) 66%, transparent);
+  animation: rise 0.3s var(--e-out) both;
+}
+.viewer-pin .rlv-locate { padding: 0; background: none; box-shadow: none }
+
+/* 复盘队列：写之前可以先把那一段行情走一遍。 */
+.qcell { position: relative }
+.qcell .qitem { padding-right: 104px }
+.qrelive {
+  position: absolute;
+  right: 12px;
+  bottom: 11px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  color: var(--ink3);
+  white-space: nowrap;
+  transition: color var(--t1), background var(--t2) var(--e), box-shadow var(--t2);
+}
+.qrelive:hover { color: var(--blue-text); background: var(--blue-soft); box-shadow: inset 0 0 0 1px var(--blue-line) }
+
+@media (max-width: 760px) {
+  .qcell .qitem { padding-right: 92px }
+}

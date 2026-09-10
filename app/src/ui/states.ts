@@ -5,8 +5,9 @@
 import { append, h, type Child } from './dom'
 import { icon } from './icons'
 
+// 空态就留白：一行标题、一句说明，需要动作再给一颗按钮。不摆占位插画——
+// 一个大图标既说不清这里为什么空，也让页面看起来像还没做完。
 export function empty(options: {
-  art?: string
   title: string
   tip?: string
   action?: HTMLElement | null
@@ -14,7 +15,6 @@ export function empty(options: {
   return h(
     'div.empty',
     {},
-    options.art ? h('div.art', {}, icon(options.art)) : null,
     h('div.h3', { text: options.title }),
     options.tip ? h('div.tip', { text: options.tip }) : null,
     options.action ? h('div', { style: 'margin-top:14px' }, options.action) : null,
@@ -76,6 +76,40 @@ export function unavailable(title: string, why: string): HTMLElement {
   return h(
     'div.sheet.pad',
     {},
-    empty({ art: 'info', title, tip: why }),
+    empty({ title, tip: why }),
   )
+}
+
+/**
+ * 收起来的那一段。技术口径、内部预算、比法版本这些东西该有——检索出了偏差时
+ * 它们是唯一能查的证据——但它们不该挡在动作前面。所以放进这里：标题一行说清
+ * 里面是什么，点开才展开，键盘和读屏都能用。
+ *
+ * 注意它收的只是「解释」，不收数据缺口和检索范围——那两样任何时候都摆在外面。
+ */
+export function foldout(title: string, ...children: Child[]): HTMLElement {
+  const body = h('div.fold-b')
+  append(body, children)
+  const wrap = h('div.fold-w', { hidden: true }, body)
+  const caret = h('span.fold-c', {}, icon('chev'))
+  const head = h('button.fold-h', { type: 'button', attrs: { 'aria-expanded': 'false' } }, h('span', { text: title }), caret)
+  let open = false
+  head.addEventListener('click', () => {
+    open = !open
+    head.setAttribute('aria-expanded', String(open))
+    head.classList.toggle('on', open)
+    // hidden 要先撤掉才能量到高度；收起来时等动画结束再挂回去，免得读屏在中途
+    // 就把它当成不存在。
+    if (open) {
+      wrap.hidden = false
+      wrap.style.height = `${body.scrollHeight}px`
+      window.setTimeout(() => { if (open) wrap.style.height = 'auto' }, 240)
+    } else {
+      wrap.style.height = `${body.scrollHeight}px`
+      void wrap.offsetHeight
+      wrap.style.height = '0px'
+      window.setTimeout(() => { if (!open) wrap.hidden = true }, 240)
+    }
+  })
+  return h('div.fold', {}, head, wrap)
 }

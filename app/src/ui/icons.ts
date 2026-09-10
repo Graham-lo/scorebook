@@ -8,6 +8,8 @@ const ICONS: Record<string, string> = {
   archive:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h14v10H3z"/><path d="M3 6l2-3h10l2 3"/><path d="M8 10h4"/></svg>',
   play:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16V4l6 4-6 4"/><path d="M11 5h5M11 9h5M11 13h5"/></svg>',
   gear:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4"/></svg>',
+  // 往前走一步：按钮上跟着动作走的箭头。chev 是往下开的，属于下拉，两回事。
+  go:'<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1.6 5h6.4M5.4 2.4L8 5 5.4 7.6"/></svg>',
   chev:'<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4l2.5 2.5L7.5 4"/></svg>',
   tri:'<svg viewBox="0 0 10 10" fill="currentColor"><path d="M3 1.5l4 3.5-4 3.5z"/></svg>',
   check:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5l3.5 3.5 7.5-8"/></svg>',
@@ -21,6 +23,11 @@ const ICONS: Record<string, string> = {
   plus:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>',
   wave:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5c1.6 0 1.9-4 3.5-4s1.9 6 3.5 6 2-8 3.6-8 1.9 5 3.4 5"/><path d="M2 16.5h16" opacity=".45"/></svg>',
   home:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l7-5.5L17 9"/><path d="M5 8.6V16h10V8.6"/><path d="M8.4 16v-3.6h3.2V16"/></svg>',
+  ledger:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.5h10a1 1 0 011 1V16.5H6.5A1.5 1.5 0 015 15z"/><path d="M5 13.6h11" opacity=".45"/><path d="M8 6.6h5M8 9.2h3"/></svg>',
+  more:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.5" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.4" fill="currentColor" stroke="none"/></svg>',
+  chart:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16.5h14" opacity=".45"/><path d="M5.5 14V9M10 14V4.5M14.5 14v-7"/></svg>',
+  quote:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.5C5.6 6.4 4.2 8.2 4.2 10.5c0 1.7 1 2.9 2.4 2.9 1.3 0 2.2-.9 2.2-2.1 0-1.2-.8-2-1.9-2-.2 0-.4 0-.5.1.2-1.1 1-2 2.2-2.6z"/><path d="M16 5.5c-2.4.9-3.8 2.7-3.8 5 0 1.7 1 2.9 2.4 2.9 1.3 0 2.2-.9 2.2-2.1 0-1.2-.8-2-1.9-2-.2 0-.4 0-.5.1.2-1.1 1-2 2.2-2.6z"/></svg>',
+  chat:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5.5A1.5 1.5 0 015 4h10a1.5 1.5 0 011.5 1.5v6A1.5 1.5 0 0115 13H8.5L5 16v-3a1.5 1.5 0 01-1.5-1.5z"/><path d="M7 8h6M7 10.4h3.5" opacity=".7"/></svg>',
   zoom:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 8V3h5M17 8V3h-5M3 12v5h5M17 12v5h-5"/></svg>',
 }
 
