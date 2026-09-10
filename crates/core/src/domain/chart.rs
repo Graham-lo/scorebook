@@ -14,6 +14,9 @@ pub struct ChartRequest {
     pub interval: String,
     pub start_at: DateTime<Utc>,
     pub end_at: DateTime<Utc>,
+    /// Display-only boundary. Bars after this instant never enter similarity ranking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub match_end_at: Option<DateTime<Utc>>,
 }
 fn market() -> String {
     "usd_m".into()
@@ -68,7 +71,27 @@ pub fn raster(bars: &[Bar]) -> Result<image::DynamicImage, String> {
     Ok(image::DynamicImage::ImageRgb8(im))
 }
 pub fn svg(bars: &[Bar], symbol: &str, interval: &str) -> Result<String, String> {
+    svg_with_match(bars, symbol, interval, None)
+}
+pub fn svg_with_match(
+    bars: &[Bar],
+    symbol: &str,
+    interval: &str,
+    match_end_at: Option<DateTime<Utc>>,
+) -> Result<String, String> {
     let p = numbers(bars)?;
+    let split = match match_end_at {
+        Some(at) => Some(
+            bars.iter()
+                .position(|b| b.end == at)
+                .ok_or("match_boundary_not_in_chart")?
+                + 1,
+        ),
+        None => None,
+    };
+    if split.is_some() && !bars.windows(2).all(|b| b[0].end == b[1].start) {
+        return Err("chart_followthrough_has_gaps".into());
+    }
     let hi = p.iter().map(|v| v[1]).fold(f64::NEG_INFINITY, f64::max);
     let lo = p.iter().map(|v| v[2]).fold(f64::INFINITY, f64::min);
     let range = (hi - lo).max(hi * 1e-6);
@@ -90,6 +113,18 @@ pub fn svg(bars: &[Bar], symbol: &str, interval: &str) -> Result<String, String>
         s += &format!(
             r##"<path d="M24 {yy}H1100" stroke="#e3e5e9"/><text x="1110" y="{}" font-family="system-ui" font-size="12" fill="#81848b">{value:.4}</text>"##,
             yy + 4.0
+        );
+    }
+    if let Some(n) = split {
+        let x = 28.0 + n as f64 * 1064.0 / p.len() as f64;
+        s += &format!(
+            r##"<rect x="28" y="48" width="{:.2}" height="452" fill="#b39448" opacity="0.07"/><path d="M{x:.2} 44V502" stroke="#a18139" stroke-width="2" stroke-dasharray="5 5"/><text x="36" y="48" font-family="system-ui" font-size="12" fill="#8b703c">匹配片段</text><text x="1086" y="48" text-anchor="end" font-family="system-ui" font-size="12" fill="#6a7080">{}</text>"##,
+            x - 28.0,
+            if n < p.len() {
+                "后续走势 · 不参与匹配"
+            } else {
+                "尚无后续已收盘 K 线"
+            }
         );
     }
     for (j, v) in p.iter().enumerate() {

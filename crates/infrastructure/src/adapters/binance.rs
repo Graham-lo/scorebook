@@ -10,6 +10,9 @@ pub struct Binance {
     budget: super::provider_budget::ProviderBudget,
 }
 impl crate::application::ports::MarketDataProvider for Binance {
+    fn tickers_24h<'a>(&'a self, market: &'a str) -> crate::application::ports::ProviderFuture<'a> {
+        Box::pin(async move { self.tickers_24h(market).await.map_err(Into::into) })
+    }
     fn klines<'a>(
         &'a self,
         market: &'a str,
@@ -45,6 +48,21 @@ impl crate::application::ports::MarketDataProvider for Binance {
     }
 }
 impl Binance {
+    async fn tickers_24h(&self, market: &str) -> Result<Value> {
+        let url = match market {
+            "usd_m" => "https://fapi.binance.com/fapi/v1/ticker/24hr",
+            "coin_m" => "https://dapi.binance.com/dapi/v1/ticker/24hr",
+            _ => return Err(Error::bad("market_not_supported")),
+        };
+        self.budget.reserve(market, 40).await?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(anyhow::Error::from)?;
+        self.decode(market, response).await
+    }
     pub fn new(pool: sqlx::PgPool) -> anyhow::Result<Self> {
         Ok(Self {
             budget: super::provider_budget::ProviderBudget::new(pool)?,
@@ -61,12 +79,7 @@ impl Binance {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Value> {
-        if symbol.is_empty()
-            || symbol.len() > 40
-            || !symbol
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-        {
+        if !scorebook_core::domain::instrument::valid_symbol(symbol) {
             return Err(Error::bad("invalid_symbol"));
         }
         let duration = match interval {
@@ -189,10 +202,7 @@ impl Binance {
     ) -> Result<Value> {
         if start >= end
             || (end - start).num_minutes() > 5
-            || symbol.is_empty()
-            || !symbol
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            || !scorebook_core::domain::instrument::valid_symbol(symbol)
         {
             return Err(Error::bad("invalid_trade_range"));
         }

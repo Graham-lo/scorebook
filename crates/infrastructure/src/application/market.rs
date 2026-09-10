@@ -9,6 +9,12 @@ pub async fn data(s: &super::Services, input: &ChartRequest) -> Result<Value> {
         return Err(Error::bad("contract_market_required"));
     }
     let seconds = super::history::interval_seconds(&input.interval)?;
+    if input
+        .match_end_at
+        .is_some_and(|at| at <= input.start_at || at > input.end_at)
+    {
+        return Err(Error::bad("invalid_match_boundary"));
+    }
     if input.start_at >= input.end_at
         || (input.end_at - input.start_at).num_seconds() / seconds > 2000
     {
@@ -46,5 +52,6 @@ pub async fn svg(s: &super::Services, input: &ChartRequest) -> Result<String> {
     let data = data(s, input).await?;
     let bars: Vec<Bar> =
         serde_json::from_value(data["bars"].clone()).map_err(|_| Error::bad("invalid_bars"))?;
-    crate::domain::chart::svg(&bars, &input.symbol, &input.interval).map_err(Error::bad)
+    crate::domain::chart::svg_with_match(&bars, &input.symbol, &input.interval, input.match_end_at)
+        .map_err(Error::bad)
 }

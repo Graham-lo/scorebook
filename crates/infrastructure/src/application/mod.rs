@@ -56,6 +56,7 @@ pub mod model_access;
 pub mod record_changes;
 
 pub mod hybrid_search;
+mod instrument_popularity;
 pub mod instruments;
 
 pub mod market;
@@ -66,6 +67,7 @@ pub mod access;
 
 pub mod search_sessions;
 
+mod review_trades;
 pub mod review_workflow;
 
 pub mod history_plans;
@@ -97,3 +99,7 @@ pub mod chat;
 pub mod backups;
 
 pub mod capabilities;
+
+pub mod locate;
+
+pub mod replay;

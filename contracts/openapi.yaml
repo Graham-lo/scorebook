@@ -82,6 +82,16 @@ components:
       - funding
       - tolerance
       type: object
+    AtrSetup:
+      additionalProperties: false
+      properties:
+        n:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+      - n
+      type: object
     AttachmentLink:
       additionalProperties: false
       properties:
@@ -94,6 +104,46 @@ components:
       required:
       - attachment_id
       - expected_revision
+      type: object
+    AttachmentLocation:
+      additionalProperties: false
+      description: One screenshot pinned to a real Binance window. Confirmed once,
+        kept for good.
+      properties:
+        bars_count:
+          format: int32
+          type:
+          - integer
+          - 'null'
+        end_at:
+          format: date-time
+          type: string
+        interval:
+          type: string
+        market:
+          type: string
+        score:
+          type:
+          - string
+          - 'null'
+        search_run_id:
+          format: uuid
+          type:
+          - string
+          - 'null'
+        source:
+          $ref: '#/components/schemas/HistorySource'
+        start_at:
+          format: date-time
+          type: string
+        symbol:
+          type: string
+      required:
+      - symbol
+      - interval
+      - start_at
+      - end_at
+      - source
       type: object
     BackupConfiguration:
       additionalProperties: false
@@ -164,6 +214,19 @@ components:
       - statistics_run_id
       - source_plan
       - calendar
+      type: object
+    BollSetup:
+      additionalProperties: false
+      properties:
+        k:
+          type: string
+        n:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+      - n
+      - k
       type: object
     CallFilter:
       properties:
@@ -239,6 +302,13 @@ components:
           type: string
         market:
           type: string
+        match_end_at:
+          description: Display-only boundary. Bars after this instant never enter
+            similarity ranking.
+          format: date-time
+          type:
+          - string
+          - 'null'
         source:
           $ref: '#/components/schemas/HistorySource'
         start_at:
@@ -269,9 +339,9 @@ components:
           - string
           - 'null'
         interval:
-          type:
-          - string
-          - 'null'
+          description: Required selected screenshot interval; cross-interval search
+            is not supported.
+          type: string
         limit:
           minimum: 0
           type:
@@ -298,6 +368,35 @@ components:
       required:
       - attachment_id
       - scope
+      - interval
+      type: object
+    ChartSetup:
+      additionalProperties: false
+      description: 'Which overlays the replay stage draws. The backend stores the
+        shape only and
+
+        never computes an indicator.'
+      properties:
+        atr:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/AtrSetup'
+        boll:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BollSetup'
+        ema:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type: array
+        ma:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type: array
       type: object
     ChatCancel:
       additionalProperties: false
@@ -624,6 +723,11 @@ components:
     DraftInput:
       additionalProperties: false
       properties:
+        attachment_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
         better_play:
           type:
           - string
@@ -633,6 +737,10 @@ components:
           type: integer
         note:
           type: string
+        trades:
+          items:
+            $ref: '#/components/schemas/ReviewTrade'
+          type: array
         vs_last:
           type:
           - string
@@ -1143,9 +1251,9 @@ components:
           - string
           - 'null'
         interval:
-          type:
-          - string
-          - 'null'
+          description: Required selected screenshot interval; cross-interval search
+            is not supported.
+          type: string
         limit:
           format: int64
           type:
@@ -1167,6 +1275,7 @@ components:
           - 'null'
       required:
       - attachment_id
+      - interval
       type: object
     HistorySource:
       enum:
@@ -1288,6 +1397,42 @@ components:
       - asset
       - amount
       - occurred_at
+      type: object
+    Levels:
+      properties:
+        boundary_kind:
+          type:
+          - string
+          - 'null'
+        boundary_price:
+          type:
+          - string
+          - 'null'
+        horizon_end_at:
+          format: date-time
+          type:
+          - string
+          - 'null'
+        invalidation_price:
+          type:
+          - string
+          - 'null'
+        target_price:
+          type:
+          - string
+          - 'null'
+        template:
+          $ref: '#/components/schemas/Template'
+        threshold_abs:
+          type:
+          - string
+          - 'null'
+        trigger:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/TriggerLevel'
+      required:
+      - template
       type: object
     MarketRequest:
       additionalProperties: false
@@ -1587,6 +1732,11 @@ components:
     Review:
       additionalProperties: false
       properties:
+        attachment_ids:
+          items:
+            format: uuid
+            type: string
+          type: array
         better_play:
           type:
           - string
@@ -1604,6 +1754,10 @@ components:
           type: integer
         note:
           type: string
+        trades:
+          items:
+            $ref: '#/components/schemas/ReviewTrade'
+          type: array
         vs_last:
           type: string
       required:
@@ -1613,6 +1767,99 @@ components:
       - vs_last
       - expected_revision
       type: object
+    ReviewTrade:
+      oneOf:
+      - properties:
+          closed_at:
+            format: date-time
+            type:
+            - string
+            - 'null'
+          direction:
+            type:
+            - string
+            - 'null'
+          entry_price:
+            type:
+            - string
+            - 'null'
+          exit_price:
+            type:
+            - string
+            - 'null'
+          fees:
+            type:
+            - string
+            - 'null'
+          leverage:
+            type:
+            - string
+            - 'null'
+          margin_mode:
+            type:
+            - string
+            - 'null'
+          note:
+            type:
+            - string
+            - 'null'
+          opened_at:
+            format: date-time
+            type:
+            - string
+            - 'null'
+          quantity:
+            type:
+            - string
+            - 'null'
+          quantity_unit:
+            type:
+            - string
+            - 'null'
+          realized_pnl:
+            type:
+            - string
+            - 'null'
+          settlement_asset:
+            type:
+            - string
+            - 'null'
+          source:
+            enum:
+            - manual
+            type: string
+          symbol:
+            type: string
+        required:
+        - symbol
+        - source
+        type: object
+      - properties:
+          connection_id:
+            format: uuid
+            type: string
+          cycle_id:
+            format: uuid
+            type: string
+          leverage:
+            description: 'Explicit manual supplement: historical leverage is not inferred
+              from today''s settings.'
+            type:
+            - string
+            - 'null'
+          note:
+            type:
+            - string
+            - 'null'
+          source:
+            enum:
+            - exchange
+            type: string
+        required:
+        - connection_id
+        - cycle_id
+        - source
+        type: object
     RevisionRequest:
       additionalProperties: false
       properties:
@@ -1778,11 +2025,11 @@ components:
           - type: 'null'
           - $ref: '#/components/schemas/Region'
         timeframe:
-          type:
-          - string
-          - 'null'
+          description: Required selected screenshot interval.
+          type: string
       required:
       - attachment_id
+      - timeframe
       type: object
     SnoozeInput:
       additionalProperties: false
@@ -2002,6 +2249,10 @@ components:
           type:
           - string
           - 'null'
+        direction:
+          type:
+          - string
+          - 'null'
         end_at:
           format: date-time
           type:
@@ -2009,6 +2260,10 @@ components:
           - 'null'
         start_at:
           format: date-time
+          type:
+          - string
+          - 'null'
+        status:
           type:
           - string
           - 'null'
@@ -2087,6 +2342,23 @@ components:
       - price
       - window_hours
       type: object
+    TriggerLevel:
+      properties:
+        comparator:
+          type: string
+        kind:
+          type: string
+        price:
+          type: string
+        window_end_at:
+          format: date-time
+          type: string
+      required:
+      - kind
+      - comparator
+      - price
+      - window_end_at
+      type: object
     VerdictFilter:
       additionalProperties: false
       properties:
@@ -2150,6 +2422,13 @@ paths:
           - string
           - 'null'
       - in: query
+        name: direction
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - in: query
         name: end_at
         required: false
         schema:
@@ -2162,6 +2441,13 @@ paths:
         required: false
         schema:
           format: date-time
+          type:
+          - string
+          - 'null'
+      - in: query
+        name: status
+        required: false
+        schema:
           type:
           - string
           - 'null'
@@ -2378,6 +2664,292 @@ paths:
                       type:
                       - object
                       - array
+                    - properties:
+                        deleted:
+                          const: true
+                      required:
+                      - deleted
+                      type: object
+                    - properties:
+                        expired:
+                          const: true
+                      required:
+                      - expired
+                      type: object
+                  meta:
+                    properties:
+                      api_version:
+                        const: v1
+                    required:
+                    - api_version
+                    type: object
+                required:
+                - data
+                - meta
+                type: object
+          description: Success
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+        '409':
+          description: Idempotency or revision conflict
+        '422':
+          description: Invalid input
+      x-required-permission: records.write
+  /v1/attachments/{id}/locate:
+    get:
+      operationId: get__v1_attachments__id__locate
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  data:
+                    anyOf:
+                    - additionalProperties: true
+                      properties:
+                        job:
+                          properties:
+                            created_at:
+                              format: date-time
+                              type: string
+                            id:
+                              format: uuid
+                              type: string
+                            result:
+                              additionalProperties: true
+                              type:
+                              - object
+                              - 'null'
+                            status:
+                              type: string
+                          type:
+                          - object
+                          - 'null'
+                        location:
+                          additionalProperties: true
+                          type:
+                          - object
+                          - 'null'
+                      required:
+                      - location
+                      - job
+                      type: object
+                    - properties:
+                        deleted:
+                          const: true
+                      required:
+                      - deleted
+                      type: object
+                    - properties:
+                        expired:
+                          const: true
+                      required:
+                      - expired
+                      type: object
+                  meta:
+                    properties:
+                      api_version:
+                        const: v1
+                    required:
+                    - api_version
+                    type: object
+                required:
+                - data
+                - meta
+                type: object
+          description: Success
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+        '409':
+          description: Idempotency or revision conflict
+        '422':
+          description: Invalid input
+      x-required-permission: knowledge.read
+    post:
+      operationId: post__v1_attachments__id__locate
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          maxLength: 128
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  data:
+                    anyOf:
+                    - additionalProperties: true
+                      properties:
+                        deduplicated:
+                          type: boolean
+                        job:
+                          properties:
+                            created_at:
+                              format: date-time
+                              type: string
+                            id:
+                              format: uuid
+                              type: string
+                            result:
+                              additionalProperties: true
+                              type:
+                              - object
+                              - 'null'
+                            status:
+                              type: string
+                          type:
+                          - object
+                          - 'null'
+                        location:
+                          additionalProperties: true
+                          type:
+                          - object
+                          - 'null'
+                      required:
+                      - location
+                      - job
+                      - deduplicated
+                      type: object
+                    - properties:
+                        deleted:
+                          const: true
+                      required:
+                      - deleted
+                      type: object
+                    - properties:
+                        expired:
+                          const: true
+                      required:
+                      - expired
+                      type: object
+                  meta:
+                    properties:
+                      api_version:
+                        const: v1
+                    required:
+                    - api_version
+                    type: object
+                required:
+                - data
+                - meta
+                type: object
+          description: Success
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+        '409':
+          description: Idempotency or revision conflict
+        '422':
+          description: Invalid input
+      x-required-permission: records.write
+  /v1/attachments/{id}/location:
+    delete:
+      operationId: delete__v1_attachments__id__location
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+      x-required-permission: records.write
+    put:
+      operationId: put__v1_attachments__id__location
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachmentLocation'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  data:
+                    anyOf:
+                    - additionalProperties: true
+                      properties:
+                        attachment_id:
+                          format: uuid
+                          type: string
+                        bars_count:
+                          type:
+                          - integer
+                          - 'null'
+                        confirmed_at:
+                          format: date-time
+                          type: string
+                        end_at:
+                          format: date-time
+                          type: string
+                        interval:
+                          type: string
+                        market:
+                          type: string
+                        score:
+                          type:
+                          - string
+                          - 'null'
+                        search_run_id:
+                          format: uuid
+                          type:
+                          - string
+                          - 'null'
+                        source:
+                          type: string
+                        start_at:
+                          format: date-time
+                          type: string
+                        symbol:
+                          type: string
+                      required:
+                      - attachment_id
+                      - symbol
+                      - market
+                      - interval
+                      - start_at
+                      - end_at
+                      - source
+                      type: object
                     - properties:
                         deleted:
                           const: true
@@ -3254,6 +3826,79 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
+  /v1/calls/{id}/chart-setup:
+    put:
+      operationId: put__v1_calls__id__chart-setup
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChartSetup'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  data:
+                    anyOf:
+                    - additionalProperties: true
+                      properties:
+                        body:
+                          additionalProperties: true
+                          type: object
+                        call_id:
+                          format: uuid
+                          type: string
+                        updated_at:
+                          format: date-time
+                          type: string
+                      required:
+                      - call_id
+                      - body
+                      - updated_at
+                      type: object
+                    - properties:
+                        deleted:
+                          const: true
+                      required:
+                      - deleted
+                      type: object
+                    - properties:
+                        expired:
+                          const: true
+                      required:
+                      - expired
+                      type: object
+                  meta:
+                    properties:
+                      api_version:
+                        const: v1
+                    required:
+                    - api_version
+                    type: object
+                required:
+                - data
+                - meta
+                type: object
+          description: Success
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+        '409':
+          description: Idempotency or revision conflict
+        '422':
+          description: Invalid input
+      x-required-permission: records.write
   /v1/calls/{id}/corrections:
     post:
       operationId: post__v1_calls__id__corrections
@@ -3471,6 +4116,181 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
+  /v1/calls/{id}/replay:
+    delete:
+      operationId: delete__v1_calls__id__replay
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+      x-required-permission: records.write
+    get:
+      operationId: get__v1_calls__id__replay
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  data:
+                    anyOf:
+                    - additionalProperties: true
+                      properties:
+                        bars:
+                          items:
+                            additionalProperties: true
+                            properties:
+                              close:
+                                type: string
+                              end:
+                                format: date-time
+                                type: string
+                              high:
+                                type: string
+                              low:
+                                type: string
+                              open:
+                                type: string
+                              start:
+                                format: date-time
+                                type: string
+                            required:
+                            - start
+                            - end
+                            - open
+                            - high
+                            - low
+                            - close
+                            type: object
+                          type: array
+                        call_id:
+                          format: uuid
+                          type: string
+                        interval:
+                          type: string
+                        judgment:
+                          additionalProperties: true
+                          properties:
+                            at:
+                              format: date-time
+                              type: string
+                            atr0:
+                              type:
+                              - string
+                              - 'null'
+                            base_price:
+                              type:
+                              - string
+                              - 'null'
+                          required:
+                          - at
+                          type: object
+                        levels:
+                          $ref: '#/components/schemas/Levels'
+                        locating:
+                          properties:
+                            job_id:
+                              format: uuid
+                              type: string
+                            status:
+                              type: string
+                          type:
+                          - object
+                          - 'null'
+                        market:
+                          type: string
+                        marks:
+                          additionalProperties: true
+                          type:
+                          - object
+                          - 'null'
+                        source:
+                          type: string
+                        storage_policy:
+                          type: string
+                        symbol:
+                          type: string
+                        window:
+                          additionalProperties: true
+                          properties:
+                            bars_before:
+                              type: integer
+                            coverage_complete:
+                              type: boolean
+                            end_at:
+                              format: date-time
+                              type: string
+                            start_at:
+                              format: date-time
+                              type: string
+                            truncated:
+                              type: boolean
+                          required:
+                          - start_at
+                          - end_at
+                          - truncated
+                          type: object
+                      required:
+                      - call_id
+                      - symbol
+                      - market
+                      - interval
+                      - window
+                      - judgment
+                      - levels
+                      - bars
+                      - storage_policy
+                      type: object
+                    - properties:
+                        deleted:
+                          const: true
+                      required:
+                      - deleted
+                      type: object
+                    - properties:
+                        expired:
+                          const: true
+                      required:
+                      - expired
+                      type: object
+                  meta:
+                    properties:
+                      api_version:
+                        const: v1
+                    required:
+                    - api_version
+                    type: object
+                required:
+                - data
+                - meta
+                type: object
+          description: Success
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+        '409':
+          description: Idempotency or revision conflict
+        '422':
+          description: Invalid input
+      x-required-permission: knowledge.read
   /v1/calls/{id}/replays:
     post:
       operationId: post__v1_calls__id__replays
@@ -10279,6 +11099,13 @@ paths:
           - string
           - 'null'
       - in: query
+        name: direction
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - in: query
         name: end_at
         required: false
         schema:
@@ -10291,6 +11118,13 @@ paths:
         required: false
         schema:
           format: date-time
+          type:
+          - string
+          - 'null'
+      - in: query
+        name: status
+        required: false
+        schema:
           type:
           - string
           - 'null'
@@ -10475,6 +11309,13 @@ paths:
           - string
           - 'null'
       - in: query
+        name: direction
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - in: query
         name: end_at
         required: false
         schema:
@@ -10487,6 +11328,13 @@ paths:
         required: false
         schema:
           format: date-time
+          type:
+          - string
+          - 'null'
+      - in: query
+        name: status
+        required: false
+        schema:
           type:
           - string
           - 'null'

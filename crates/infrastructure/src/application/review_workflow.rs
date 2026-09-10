@@ -39,10 +39,13 @@ pub async fn save(
         return Ok(v);
     }
     calls::require_call(&mut tx, owner, id).await?;
+    knowledge::validate_review_images(&mut tx, owner, &input.attachment_ids).await?;
+    let trade_snapshots =
+        super::review_trades::snapshots(&mut tx, owner, &input.trades, false).await?;
     // A monotonic clock on the parent survives deletion of a published draft.
     let revision:Option<i64>=sqlx::query_scalar("UPDATE call_state SET draft_revision=draft_revision+1 WHERE owner_id=$1 AND call_id=$2 AND draft_revision=$3 RETURNING draft_revision").bind(owner).bind(id).bind(input.expected_draft_revision).fetch_optional(&mut *tx).await?;
     let revision = revision.ok_or_else(|| Error::conflict("draft_revision_conflict"))?;
-    let saved:Value=sqlx::query_scalar("INSERT INTO review_drafts(owner_id,call_id,body,revision) VALUES($1,$2,$3,$4) ON CONFLICT(owner_id,call_id) DO UPDATE SET body=EXCLUDED.body,revision=EXCLUDED.revision,updated_at=now() RETURNING to_jsonb(review_drafts)-'owner_id'-'body'").bind(owner).bind(id).bind(json!({"note":input.note,"better_play":input.better_play,"vs_last":input.vs_last})).bind(revision).fetch_one(&mut *tx).await?;
+    let saved:Value=sqlx::query_scalar("INSERT INTO review_drafts(owner_id,call_id,body,revision) VALUES($1,$2,$3,$4) ON CONFLICT(owner_id,call_id) DO UPDATE SET body=EXCLUDED.body,revision=EXCLUDED.revision,updated_at=now() RETURNING to_jsonb(review_drafts)-'owner_id'-'body'").bind(owner).bind(id).bind(json!({"note":input.note,"better_play":input.better_play,"vs_last":input.vs_last,"attachment_ids":input.attachment_ids,"trades":input.trades,"trade_snapshots":trade_snapshots})).bind(revision).fetch_one(&mut *tx).await?;
     super::review_projection::refresh(&mut tx, owner, id).await?;
     Database::finish(&mut tx, owner, "review_draft.save", key, &body, &saved).await?;
     tx.commit().await?;
@@ -81,6 +84,15 @@ pub async fn publish(
     }
     let draft: Value = row.get("body");
     let review = Review {
+        trades: serde_json::from_value(draft.get("trades").cloned().unwrap_or_else(|| json!([])))
+            .map_err(|_| Error::bad("invalid_review_trade"))?,
+        attachment_ids: serde_json::from_value(
+            draft
+                .get("attachment_ids")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        )
+        .map_err(|_| Error::bad("invalid_review_images"))?,
         expected_outcome_ids: input.expected_outcome_ids,
         call_id: id,
         expected_revision: input.expected_call_revision,

@@ -8,6 +8,18 @@ use image::{DynamicImage, GenericImageView};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Screenshot searches always compare one declared candle interval. Missing input
+/// is rejected before encoding or persistence, including calls from model tools.
+pub fn require_interval(interval: Option<&str>) -> Result<&str> {
+    let interval = interval
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| Error::bad("chart_interval_required"))?;
+    if !["1m", "5m", "15m", "1h", "4h", "1d"].contains(&interval) {
+        return Err(Error::bad("unsupported_interval"));
+    }
+    Ok(interval)
+}
+
 pub const MODEL: &str = "candle-geometry-v2";
 pub const PROTOCOL: &str = "chart-match-v2";
 #[derive(Clone, Debug)]

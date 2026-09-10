@@ -1,3 +1,4 @@
+mod common;
 use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
 use scorebook::{
@@ -8,11 +9,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 async fn setup() -> (Services, Uuid, String, tempfile::TempDir) {
-    let db = Database::connect(
-        &std::env::var("DATABASE_URL").expect("DATABASE_URL must point to isolated test DB"),
-    )
-    .await
-    .unwrap();
+    let db = Database::connect(&common::test_db_url()).await.unwrap();
     db.migrate().await.unwrap();
     let (o, t) = db.create_user("integration-test").await.unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -136,6 +133,8 @@ async fn review_revision_and_immutable_evidence() {
         .unwrap();
     let id: Uuid = serde_json::from_value(a["id"].clone()).unwrap();
     let r = Review {
+        trades: vec![],
+        attachment_ids: vec![],
         expected_outcome_ids: vec![],
         call_id: id,
         note: "后来的解释".into(),
@@ -222,7 +221,15 @@ async fn vector_search_works_cross_theme_and_excludes_other_users_and_later_imag
     let aid: Uuid = serde_json::from_value(a["id"].clone()).unwrap();
     let mut c = call("上涨结构");
     c.attachments = vec![aid];
-    calls::create(&s, o, "case", c).await.unwrap();
+    calls::create(&s, o, "case", c.clone()).await.unwrap();
+    c.timeframe = Some("1h".into());
+    calls::create(&s, o, "same-image-other-period", c.clone())
+        .await
+        .unwrap();
+    c.timeframe = None;
+    calls::create(&s, o, "same-image-unknown-period", c)
+        .await
+        .unwrap();
     similarity::embed(&s, o, aid, None, "candle-geometry-v2")
         .await
         .unwrap();
@@ -597,7 +604,7 @@ async fn export_restores_in_an_isolated_database() {
         .execute(&s.db.pool)
         .await
         .unwrap();
-    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    let mut url = reqwest::Url::parse(&common::test_db_url()).unwrap();
     url.set_path(&format!("/{name}"));
     let db = Database::connect(url.as_str()).await.unwrap();
     db.migrate().await.unwrap();
@@ -659,6 +666,10 @@ struct FixtureMarket {
     retry: Option<scorebook::error::RetryDirective>,
 }
 impl scorebook::application::ports::MarketDataProvider for FixtureMarket {
+    fn tickers_24h<'a>(&'a self, _: &'a str) -> scorebook_core::market::ProviderFuture<'a> {
+        Box::pin(async { unreachable!("this fixture does not request instrument popularity") })
+    }
+
     fn klines<'a>(
         &'a self,
         _: &'a str,
@@ -934,6 +945,8 @@ async fn review_draft_resumes_conflicts_without_loss_and_publishes_atomically() 
         .unwrap();
     let id = serde_json::from_value(created["id"].clone()).unwrap();
     let save = |rev, note: &str| w::DraftInput {
+        trades: vec![],
+        attachment_ids: vec![],
         expected_draft_revision: rev,
         note: note.into(),
         better_play: Some("先等收盘确认，再决定".into()),
@@ -1128,7 +1141,7 @@ async fn model_image_compute_is_ephemeral_and_hybrid_never_downgrades() {
     let a = calls::upload(&s, o, "query", chart(false, false), "query".into(), None)
         .await
         .unwrap();
-    let q = json!({"attachment_id":a["id"],"model_id":"candle-geometry-v2"});
+    let q = json!({"attachment_id":a["id"],"model_id":"candle-geometry-v2","timeframe":"4h"});
     let result = knowledge::tool(
         &s,
         o,
@@ -1311,7 +1324,7 @@ async fn cleanup_protects_saved_searches_and_removes_expired_staging() {
         model_id: "candle-geometry-v2".into(),
         instrument: None,
         market: None,
-        timeframe: None,
+        timeframe: Some("4h".into()),
         cutoff_at: None,
         limit: Some(5),
     };
@@ -1439,6 +1452,8 @@ async fn discarding_a_draft_fences_inflight_autosave_without_touching_record() {
         .unwrap();
     let id = serde_json::from_value(v["id"].clone()).unwrap();
     let draft = |rev| w::DraftInput {
+        trades: vec![],
+        attachment_ids: vec![],
         expected_draft_revision: rev,
         note: "草稿".into(),
         better_play: None,
@@ -1478,6 +1493,8 @@ async fn publishing_review_requires_the_outcomes_the_user_actually_saw() {
         id,
         "draft",
         w::DraftInput {
+            trades: vec![],
+            attachment_ids: vec![],
             expected_draft_revision: 0,
             note: "我的总结".into(),
             better_play: None,
@@ -1544,6 +1561,8 @@ async fn simultaneous_draft_save_and_outcome_publication_keep_review_queue_consi
             id,
             "save",
             w::DraftInput {
+                trades: vec![],
+                attachment_ids: vec![],
                 expected_draft_revision: 0,
                 note: "内容必须保留".into(),
                 better_play: None,
@@ -1597,9 +1616,7 @@ async fn simultaneous_draft_save_and_outcome_publication_keep_review_queue_consi
 async fn ann_capacity_is_shared_across_pools_and_released_with_transactions() {
     use scorebook::adapters::ann;
     let (s, _, _, _tmp) = setup().await;
-    let other = Database::connect(&std::env::var("DATABASE_URL").unwrap())
-        .await
-        .unwrap();
+    let other = Database::connect(&common::test_db_url()).await.unwrap();
     let mut held = Vec::new();
     for _ in 0..8 {
         let mut tx = s.db.pool.begin().await.unwrap();
@@ -1674,4 +1691,345 @@ async fn due_reminder_retry_replays_receipt_without_snoozing_the_record_again() 
     let queue = w::queue(&s, o, w::QueueFilter::default()).await.unwrap();
     assert_eq!(queue["items"][0]["id"], json!(id));
     assert_eq!(queue["items"][0]["preference_revision"], 1);
+}
+
+#[tokio::test]
+async fn review_screenshots_persist_with_draft_and_publish_without_rewriting_originals() {
+    use scorebook::application::review_workflow as w;
+    let (s, owner, _, _tmp) = setup().await;
+    let mut scenes = Vec::new();
+    let mut later = Vec::new();
+    for (kind, ids) in [("scene", &mut scenes), ("supplement", &mut later)] {
+        for n in 0..2 {
+            let uploaded = calls::upload(
+                &s,
+                owner,
+                &format!("{kind}-{n}"),
+                chart(n == 0, n == 1),
+                kind.into(),
+                None,
+            )
+            .await
+            .unwrap();
+            ids.push(serde_json::from_value::<Uuid>(uploaded["id"].clone()).unwrap());
+        }
+    }
+    let mut input = call("原判断与两张当时截图");
+    input.attachments = scenes.clone();
+    let created = calls::create(&s, owner, "capture", input).await.unwrap();
+    let id: Uuid = serde_json::from_value(created["id"].clone()).unwrap();
+    let original = calls::get(&s, owner, id).await.unwrap()["body"].clone();
+    let draft_input = |revision, ids| w::DraftInput {
+        trades: vec![],
+        expected_draft_revision: revision,
+        note: "后来回落，再看两张不同周期的走势图".into(),
+        better_play: None,
+        vs_last: Some("new".into()),
+        attachment_ids: ids,
+    };
+    w::save(
+        &s,
+        owner,
+        id,
+        "first-picture",
+        draft_input(0, vec![later[0]]),
+    )
+    .await
+    .unwrap();
+    w::save(
+        &s,
+        owner,
+        id,
+        "append-picture",
+        draft_input(1, later.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        w::draft(&s, owner, id).await.unwrap()["draft"]["body"]["attachment_ids"],
+        json!(later)
+    );
+    assert_eq!(
+        calls::get(&s, owner, id).await.unwrap()["attachments"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    for (key, ids, code) in [
+        (
+            "original-as-review",
+            vec![scenes[0]],
+            "review_supplement_required",
+        ),
+        (
+            "missing-image",
+            vec![Uuid::new_v4()],
+            "review_supplement_required",
+        ),
+        (
+            "duplicate-image",
+            vec![later[0], later[0]],
+            "invalid_review_images",
+        ),
+        (
+            "too-many",
+            (0..21).map(|_| Uuid::new_v4()).collect(),
+            "invalid_review_images",
+        ),
+    ] {
+        assert_eq!(
+            w::save(&s, owner, id, key, draft_input(2, ids))
+                .await
+                .unwrap_err()
+                .code,
+            code
+        );
+    }
+    let (other, _) = s.db.create_user("other-owner").await.unwrap();
+    let foreign = calls::upload(
+        &s,
+        other,
+        "foreign",
+        chart(false, false),
+        "supplement".into(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        w::save(
+            &s,
+            owner,
+            id,
+            "foreign",
+            draft_input(
+                2,
+                vec![serde_json::from_value(foreign["id"].clone()).unwrap()]
+            )
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "review_supplement_required"
+    );
+    assert_eq!(w::draft(&s, owner, id).await.unwrap()["draft_revision"], 2);
+    let publish = |revision| w::PublishDraft {
+        expected_draft_revision: 2,
+        expected_call_revision: revision,
+        expected_outcome_ids: vec![],
+    };
+    assert!(
+        w::publish(&s, owner, id, "stale-publish", publish(99))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        calls::get(&s, owner, id).await.unwrap()["attachments"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let receipt = w::publish(&s, owner, id, "publish-images", publish(0))
+        .await
+        .unwrap();
+    assert_eq!(
+        w::publish(&s, owner, id, "publish-images", publish(0))
+            .await
+            .unwrap(),
+        receipt
+    );
+    let detail = calls::get(&s, owner, id).await.unwrap();
+    assert_eq!(detail["body"], original);
+    assert_eq!(detail["attachments"].as_array().unwrap().len(), 4);
+    assert_eq!(detail["reviews"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["reviews"][0]["body"]["attachment_ids"], json!(later));
+    assert!(w::draft(&s, owner, id).await.unwrap()["draft"].is_null());
+    w::save(
+        &s,
+        owner,
+        id,
+        "another-review",
+        draft_input(3, later.clone()),
+    )
+    .await
+    .unwrap();
+    w::save(
+        &s,
+        owner,
+        id,
+        "remove-from-draft",
+        draft_input(4, vec![later[0]]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        w::draft(&s, owner, id).await.unwrap()["draft"]["body"]["attachment_ids"],
+        json!([later[0]])
+    );
+    w::discard(
+        &s,
+        owner,
+        id,
+        "discard-new",
+        w::DiscardDraft {
+            expected_draft_revision: 5,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        calls::get(&s, owner, id).await.unwrap()["reviews"],
+        detail["reviews"]
+    );
+}
+
+#[tokio::test]
+async fn review_trade_details_validate_and_freeze_selected_positions() {
+    use scorebook::application::{review_workflow as w, trades};
+    let (s, owner, _, _tmp) = setup().await;
+    let created = calls::create(&s, owner, "capture-trade", call("交易复盘"))
+        .await
+        .unwrap();
+    let id: Uuid = serde_json::from_value(created["id"].clone()).unwrap();
+    let input = |revision, selected: Value| {
+        serde_json::from_value::<w::DraftInput>(json!({"expected_draft_revision":revision,"note":"回看成交","vs_last":"new","trades":selected})).unwrap()
+    };
+    let publish = |revision| w::PublishDraft {
+        expected_draft_revision: revision,
+        expected_call_revision: 0,
+        expected_outcome_ids: vec![],
+    };
+    w::save(
+        &s,
+        owner,
+        id,
+        "partial",
+        input(0, json!([{"source":"manual","symbol":""}])),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        w::publish(&s, owner, id, "incomplete", publish(1))
+            .await
+            .unwrap_err()
+            .code,
+        "review_trade_details_required"
+    );
+    let manual = json!({"source":"manual","symbol":"BTCUSDT","direction":"long","opened_at":"2024-01-01T00:00:01Z","closed_at":"2024-01-01T00:00:02Z","quantity":"2","quantity_unit":"BTC","leverage":"5","entry_price":"100","exit_price":"110","realized_pnl":"20","settlement_asset":"USDT"});
+    for (field, value, code) in [
+        ("leverage", json!("0"), "invalid_review_trade_number"),
+        ("quantity", json!("abc"), "invalid_review_trade_number"),
+        (
+            "closed_at",
+            json!("2023-01-01T00:00:00Z"),
+            "review_trade_time_order",
+        ),
+    ] {
+        let mut invalid = manual.clone();
+        invalid[field] = value;
+        assert_eq!(
+            w::save(&s, owner, id, field, input(1, json!([invalid])))
+                .await
+                .unwrap_err()
+                .code,
+            code
+        );
+    }
+    let connection = trades::connection(
+        &s,
+        owner,
+        "review-account",
+        serde_json::from_value(json!({"name":"历史账户","account_label":"test","market":"usd_m"}))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let connection_id: Uuid = serde_json::from_value(connection["connection_id"].clone()).unwrap();
+    trades::seed(&s,owner,"review-seed",serde_json::from_value(json!({"connection_id":connection_id,"symbol":"BTCUSDT","position_side":"BOTH","effective_at":"2024-01-01T00:00:00Z","quantity":"0","contract_multiplier":"1","settlement_asset":"USDT","evidence":"verified empty"})).unwrap()).await.unwrap();
+    let fill = |id, side, price, pnl| json!({"trade_id":format!("{id}"),"symbol":"BTCUSDT","side":side,"position_side":"BOTH","price":price,"quantity":"2","realized_pnl":pnl,"settlement_asset":"USDT","commission":"0.1","commission_asset":"USDT","traded_at":format!("2024-01-01T00:00:0{id}Z")});
+    trades::import::import(&s,owner,"review-import",serde_json::from_value(json!({"connection_id":connection_id,"source":"csv","dataset":"trades","start_at":"2024-01-01T00:00:00Z","end_at":"2024-01-02T00:00:00Z","symbols":["BTCUSDT"],"declared_complete":true,"fills":[fill(1,"BUY","100","0"),fill(2,"SELL","110","20")]})).unwrap()).await.unwrap();
+    for _ in 0..8 {
+        if !jobs::run_filtered(&s, Some(owner), Some("batch"))
+            .await
+            .unwrap()
+        {
+            break;
+        }
+    }
+    let filter = |direction| {
+        serde_json::from_value(json!({"connection_id":connection_id,"symbol":"BTCUSDT","direction":direction,"status":"closed","start_at":"2024-01-01T00:00:00Z","end_at":"2024-01-02T00:00:00Z"})).unwrap()
+    };
+    let cycles = trades::projection::list(&s, owner, filter("long"))
+        .await
+        .unwrap();
+    assert_eq!(cycles["items"].as_array().unwrap().len(), 1, "{cycles}");
+    assert_eq!(
+        trades::projection::list(&s, owner, filter("short"))
+            .await
+            .unwrap()["items"],
+        json!([])
+    );
+    let selected = json!({"source":"exchange","connection_id":connection_id,"cycle_id":cycles["items"][0]["id"]});
+    let (other, _) = s.db.create_user("foreign-trade").await.unwrap();
+    let foreign = calls::create(&s, other, "foreign-call", call("另一账户"))
+        .await
+        .unwrap();
+    assert_eq!(
+        w::save(
+            &s,
+            other,
+            serde_json::from_value(foreign["id"].clone()).unwrap(),
+            "foreign-selection",
+            input(0, json!([selected]))
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "review_trade_position_unavailable"
+    );
+    assert!(
+        w::save(
+            &s,
+            owner,
+            id,
+            "duplicate-selection",
+            input(1, json!([selected, selected]))
+        )
+        .await
+        .is_err()
+    );
+    let saved = w::save(
+        &s,
+        owner,
+        id,
+        "valid-trades",
+        input(1, json!([manual, selected])),
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved["revision"], 2);
+    let draft = w::draft(&s, owner, id).await.unwrap();
+    let snapshot = &draft["draft"]["body"]["trade_snapshots"][1];
+    assert_eq!(snapshot["account_name"], "历史账户");
+    assert_eq!(snapshot["totals"]["opened_quantity"], "2");
+    assert_eq!(snapshot["cycle"]["computed_realized_pnl"], "20");
+    assert!(snapshot["leverage"].is_null());
+    w::publish(&s, owner, id, "publish-trades", publish(2))
+        .await
+        .unwrap();
+    let detail = calls::get(&s, owner, id).await.unwrap();
+    assert_eq!(
+        detail["reviews"][0]["body"]["trades"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        detail["reviews"][0]["body"]["trade_snapshots"][1],
+        *snapshot
+    );
+    assert_eq!(detail["body"]["original_text"], "交易复盘");
 }

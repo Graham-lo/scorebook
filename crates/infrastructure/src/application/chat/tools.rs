@@ -126,7 +126,7 @@ pub fn catalog() -> Vec<ToolDefinition> {
         ),
         (
             "search_charts",
-            "使用已声明的范围检索图形，结果需要真实行情重取精排",
+            "必须先明确截图周期，只搜索同周期；无法从截图确定时先询问用户，不猜周期。结果需要真实行情重取精排",
             schema::<scorebook_core::api::chart_search::ChartSearchInput>(),
         ),
         ("get_chart_search", "读取图搜进度和结果", ident.clone()),

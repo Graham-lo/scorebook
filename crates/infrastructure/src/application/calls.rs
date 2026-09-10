@@ -226,7 +226,8 @@ pub async fn bump(
 pub async fn get(s: &Services, owner: Uuid, id: Uuid) -> Result<Value> {
     let mut v:Value=sqlx::query_scalar(r#"SELECT (to_jsonb(c)-'owner_id') || jsonb_build_object(
         'revision',st.revision,'voided',st.voided,
-        'attachments',(SELECT COALESCE(jsonb_agg(to_jsonb(a)-'owner_id' ORDER BY a.uploaded_at,a.id),'[]') FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=c.owner_id AND l.call_id=c.id),
+        'attachments',(SELECT COALESCE(jsonb_agg((to_jsonb(a)-'owner_id')||jsonb_build_object('location',(SELECT (to_jsonb(al)-'owner_id'-'score')||jsonb_build_object('score',al.score::text) FROM attachment_locations al WHERE al.owner_id=a.owner_id AND al.attachment_id=a.id)) ORDER BY a.uploaded_at,a.id),'[]') FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=c.owner_id AND l.call_id=c.id),
+        'chart_setup',(SELECT body FROM chart_setups WHERE owner_id=c.owner_id AND call_id=c.id),
         'events',(SELECT COALESCE(jsonb_agg(to_jsonb(e)-'owner_id' ORDER BY sequence),'[]') FROM (SELECT * FROM events WHERE owner_id=c.owner_id AND call_id=c.id ORDER BY sequence DESC LIMIT 21) e),
         'reviews',(SELECT COALESCE(jsonb_agg((to_jsonb(r)-'owner_id')||jsonb_build_object('outcome_ids',(SELECT COALESCE(jsonb_agg(outcome_id ORDER BY outcome_id),'[]') FROM review_outcome_refs rr WHERE rr.owner_id=r.owner_id AND rr.review_id=r.id)) ORDER BY created_at,id),'[]') FROM (SELECT * FROM reviews WHERE owner_id=c.owner_id AND call_id=c.id ORDER BY created_at DESC,id DESC LIMIT 21) r),
         'outcomes',(SELECT COALESCE(jsonb_agg(to_jsonb(o)-'owner_id' ORDER BY created_at,id),'[]') FROM (SELECT * FROM outcomes WHERE owner_id=c.owner_id AND call_id=c.id ORDER BY created_at DESC,id DESC LIMIT 21) o),

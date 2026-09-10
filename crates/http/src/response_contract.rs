@@ -123,6 +123,55 @@ pub fn data(path: &str, method: &str) -> Value {
             json!({"items":{"type":"array","items":object(json!({"sequence":{"type":"integer"},"type":text(),"data":any_object()}),&["sequence","type","data"])},"state":any_object()}),
             &["items", "state"],
         ),
+        ("/v1/attachments/{id}/location", _) => object(
+            json!({"attachment_id":uuid(),"symbol":text(),"market":text(),"interval":text(),"start_at":{"type":"string","format":"date-time"},"end_at":{"type":"string","format":"date-time"},"bars_count":{"type":["integer","null"]},"source":text(),"score":{"type":["string","null"]},"search_run_id":{"type":["string","null"],"format":"uuid"},"confirmed_at":{"type":"string","format":"date-time"}}),
+            &[
+                "attachment_id",
+                "symbol",
+                "market",
+                "interval",
+                "start_at",
+                "end_at",
+                "source",
+            ],
+        ),
+        ("/v1/attachments/{id}/locate", method) => {
+            let location = json!({"type":["object","null"],"additionalProperties":true});
+            let job = json!({"type":["object","null"],"properties":{"id":uuid(),"status":text(),"result":{"type":["object","null"],"additionalProperties":true},"created_at":{"type":"string","format":"date-time"}}});
+            if method == "post" {
+                object(
+                    json!({"location":location,"job":job,"deduplicated":{"type":"boolean"}}),
+                    &["location", "job", "deduplicated"],
+                )
+            } else {
+                object(json!({"location":location,"job":job}), &["location", "job"])
+            }
+        }
+        ("/v1/calls/{id}/chart-setup", _) => object(
+            json!({"call_id":uuid(),"body":any_object(),"updated_at":{"type":"string","format":"date-time"}}),
+            &["call_id", "body", "updated_at"],
+        ),
+        ("/v1/calls/{id}/replay", "get") => object(
+            json!({"call_id":uuid(),"symbol":text(),"market":text(),"interval":text(),"source":text(),
+                "window":object(json!({"start_at":{"type":"string","format":"date-time"},"end_at":{"type":"string","format":"date-time"},"bars_before":{"type":"integer"},"truncated":{"type":"boolean"},"coverage_complete":{"type":"boolean"}}),&["start_at","end_at","truncated"]),
+                "judgment":object(json!({"at":{"type":"string","format":"date-time"},"base_price":{"type":["string","null"]},"atr0":{"type":["string","null"]}}),&["at"]),
+                "levels":{"$ref":"#/components/schemas/Levels"},
+                "marks":{"type":["object","null"],"additionalProperties":true},
+                "locating":{"type":["object","null"],"properties":{"job_id":uuid(),"status":text()}},
+                "bars":{"type":"array","items":object(json!({"start":{"type":"string","format":"date-time"},"end":{"type":"string","format":"date-time"},"open":text(),"high":text(),"low":text(),"close":text()}),&["start","end","open","high","low","close"])},
+                "storage_policy":text()}),
+            &[
+                "call_id",
+                "symbol",
+                "market",
+                "interval",
+                "window",
+                "judgment",
+                "levels",
+                "bars",
+                "storage_policy",
+            ],
+        ),
         ("/v1/capabilities", _) => object(
             json!({"backend_version":text(),"raw_market_storage":{"const":"none"},"chat_generation":any_object(),"knowledge_index":any_object(),"encrypted_backup":any_object(),"configuration_status_is_not_live_acceptance":{"const":true}}),
             &[

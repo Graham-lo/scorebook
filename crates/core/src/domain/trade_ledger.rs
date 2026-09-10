@@ -21,12 +21,7 @@ pub fn validate_fill(f: &FillInput) -> Result<()> {
     if f.trade_id.is_empty()
         || f.trade_id.len() > 38
         || !f.trade_id.chars().all(|c| c.is_ascii_digit())
-        || f.symbol.is_empty()
-        || f.symbol.len() > 40
-        || !f
-            .symbol
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        || !super::instrument::valid_symbol(&f.symbol)
     {
         return Err(Error::bad("invalid_trade_identity"));
     }

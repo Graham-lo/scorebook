@@ -41,6 +41,8 @@ pub async fn review_tx(
         return Err(Error::bad("review_content_required_or_too_large"));
     }
     calls::require_call(tx, owner, input.call_id).await?;
+    validate_review_images(tx, owner, &input.attachment_ids).await?;
+    let trade_snapshots = super::review_trades::snapshots(tx, owner, &input.trades, true).await?;
     calls::bump(tx, owner, input.call_id, input.expected_revision).await?;
     // The same immutable call lock serializes head publication and recording what the trader reviewed.
     sqlx::query("SELECT id FROM calls WHERE owner_id=$1 AND id=$2 FOR UPDATE")
@@ -61,12 +63,19 @@ pub async fn review_tx(
         return Err(Error::conflict("review_outcomes_changed"));
     }
 
+    for image in &input.attachment_ids {
+        sqlx::query("INSERT INTO call_attachments(owner_id,call_id,attachment_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
+            .bind(owner).bind(input.call_id).bind(image).execute(&mut **tx).await?;
+    }
+
     let id = Uuid::new_v4();
+    let mut body = json!(input);
+    body["trade_snapshots"] = json!(trade_snapshots);
     sqlx::query("INSERT INTO reviews(id,owner_id,call_id,body) VALUES($1,$2,$3,$4)")
         .bind(id)
         .bind(owner)
         .bind(input.call_id)
-        .bind(json!(input))
+        .bind(body)
         .execute(&mut **tx)
         .await?;
     sqlx::query("INSERT INTO review_outcome_refs SELECT $1,$2,outcome_id FROM outcome_heads WHERE owner_id=$1 AND call_id=$3").bind(owner).bind(id).bind(input.call_id).execute(&mut **tx).await?;
@@ -76,6 +85,10 @@ pub async fn review_tx(
         .execute(&mut **tx)
         .await?;
     super::review_projection::refresh(tx, owner, input.call_id).await?;
+    // The record is finished; its never-pinned scene screenshots get their one
+    // automatic match, in this same transaction, so a published review and its
+    // queued match cannot come apart.
+    super::locate::enqueue_after_review(tx, owner, input.call_id).await?;
     event(
         tx,
         owner,
@@ -85,6 +98,23 @@ pub async fn review_tx(
     )
     .await?;
     Ok(json!({"id":id,"revision":input.expected_revision+1,"saved_at":chrono::Utc::now()}))
+}
+
+pub(super) async fn validate_review_images(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owner: Uuid,
+    ids: &[Uuid],
+) -> Result<()> {
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    if ids.len() > 20 || unique.len() != ids.len() {
+        return Err(Error::bad("invalid_review_images"));
+    }
+    let found: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM attachments WHERE owner_id=$1 AND id=ANY($2) AND kind='supplement' FOR KEY SHARE")
+        .bind(owner).bind(ids).fetch_all(&mut **tx).await?;
+    if found.len() != ids.len() {
+        return Err(Error::bad("review_supplement_required"));
+    }
+    Ok(())
 }
 
 pub async fn tag(s: &Services, owner: Uuid, key: &str, input: TagInput) -> Result<Value> {

@@ -68,8 +68,13 @@ pub async fn recognize(bytes: Vec<u8>) -> Result<OcrResult> {
         }
         let result: OcrResult =
             serde_json::from_slice(&output).map_err(|_| Error::bad("invalid_ocr_response"))?;
-        if result.model_id != "apple-vision-text-r3"
-            || result.revision != 3
+        let expected = if cfg!(target_os = "macos") {
+            ("apple-vision-text-r3", 3)
+        } else {
+            ("tesseract-5-eng-v1", 1)
+        };
+        if result.model_id != expected.0
+            || result.revision != expected.1
             || result.observations.len() > 256
         {
             return Err(Error::bad("ocr_model_version_mismatch"));

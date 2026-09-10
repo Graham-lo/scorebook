@@ -87,9 +87,7 @@ pub async fn create(
     {
         return Err(Error::bad("invalid_chart_search"));
     }
-    if let Some(tf) = &input.interval {
-        super::history::interval_seconds(tf)?;
-    }
+    chart_match::require_interval(input.interval.as_deref())?;
     let original = json!(input);
     let (mut tx, cached) = s.db.write(owner, "chart.search", key, &original).await?;
     if let Some(v) = cached {
@@ -150,6 +148,7 @@ pub async fn cancel(
 pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     let input: ChartSearchInput =
         serde_json::from_value(j.body.clone()).map_err(|_| Error::bad("invalid_search_job"))?;
+    chart_match::require_interval(input.interval.as_deref())?;
     let (query, _, _) = analysis::evidence(
         s,
         j.owner,
@@ -176,15 +175,57 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
         repository::private_candidates(s, j.owner, &input, vector, visual).await?
     };
     repository::publish(s,j,&json!({"status":"provisional","items":candidates,"protocol":chart_match::PROTOCOL,"quality_validated":false}),false).await?;
-    let (mut ranked, excluded) = rerank::run(s, j, &input, &query.candles, candidates).await?;
+    let (ranked, excluded) = rerank::run(s, j, &input, &query.candles, candidates).await?;
+    // One window per contract only makes sense while the contract is still in
+    // question; a search already restricted to one returns its best windows.
+    let grouped = input.scope == ChartScope::BinanceHistory && input.symbol.is_none();
+    let ranked = best_matches(ranked, grouped, input.limit.unwrap_or(3));
+    let result = json!({"search_run_id":j.id,"protocol":chart_match::PROTOCOL,"status":"final","items":ranked,"excluded_candidates":excluded,"scope":input.scope,"interval":input.interval,"interval_policy":"same_interval_only","cutoff_at":input.cutoff_at,"quality_validated":false,"query_quality":query.quality,"coverage":"published_geometry_v2_only","candidate_budget":3000,"rerank_budget":30,"grouping":if grouped {"best_verified_window_per_contract"} else if input.scope == ChartScope::BinanceHistory {"best_verified_windows_of_the_named_contract"} else {"exact_image_then_confirmed_episode"},"raw_market_storage":"none"});
+    repository::publish(s, j, &result, true).await?;
+    Ok(result)
+}
+
+fn best_matches(mut ranked: Vec<Value>, grouped: bool, limit: usize) -> Vec<Value> {
     ranked.sort_by(|a, b| {
         b["match"]["score"]
             .as_f64()
             .unwrap_or(0.)
             .total_cmp(&a["match"]["score"].as_f64().unwrap_or(0.))
     });
-    ranked.truncate(input.limit.unwrap_or(10));
-    let result = json!({"search_run_id":j.id,"protocol":chart_match::PROTOCOL,"status":"final","items":ranked,"excluded_candidates":excluded,"scope":input.scope,"cutoff_at":input.cutoff_at,"quality_validated":false,"query_quality":query.quality,"coverage":"published_geometry_v2_only","candidate_budget":3000,"rerank_budget":30,"raw_market_storage":"none"});
-    repository::publish(s, j, &result, true).await?;
-    Ok(result)
+    if grouped {
+        let mut seen = std::collections::HashSet::new();
+        ranked.retain(|v| {
+            seen.insert((
+                v["market"].clone().to_string(),
+                v["symbol"].clone().to_string(),
+            ))
+        });
+    }
+    ranked.truncate(limit);
+    ranked
+}
+
+#[cfg(test)]
+mod result_tests {
+    use super::*;
+    #[test]
+    fn historical_results_keep_the_best_verified_window_for_each_contract() {
+        let make = |s: &str, score| json!({"market":"usd_m","symbol":s,"match":{"score":score}});
+        let input = vec![
+            make("BTCUSDT", 0.7),
+            make("ETHUSDT", 0.8),
+            make("BTCUSDT", 0.9),
+            make("SOLUSDT", 0.6),
+        ];
+        let result = best_matches(input.clone(), true, 3);
+        assert_eq!(
+            result
+                .iter()
+                .map(|v| v["symbol"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+        );
+        assert_eq!(result[0]["match"]["score"], 0.9);
+        assert_eq!(best_matches(input, false, 3)[2]["symbol"], "BTCUSDT");
+    }
 }

@@ -48,6 +48,10 @@ pub struct CallFilter {
 #[derive(Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Review {
+    #[serde(default)]
+    pub trades: Vec<super::review_trades::ReviewTrade>,
+    #[serde(default)]
+    pub attachment_ids: Vec<Uuid>,
     pub expected_outcome_ids: Vec<Uuid>,
     pub call_id: Uuid,
     pub note: String,
@@ -118,6 +122,8 @@ pub struct SimilarityQuery {
     pub model_id: String,
     pub instrument: Option<String>,
     pub market: Option<String>,
+    /// Required selected screenshot interval.
+    #[schema(required = true, nullable = false)]
     pub timeframe: Option<String>,
     pub cutoff_at: Option<DateTime<Utc>>,
     pub limit: Option<i64>,

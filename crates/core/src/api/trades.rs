@@ -109,6 +109,8 @@ pub struct PositionSeedInput {
 #[derive(Clone, Serialize, Deserialize, ToSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct TradeFilter {
+    pub direction: Option<String>,
+    pub status: Option<String>,
     pub connection_id: Option<Uuid>,
     pub symbol: Option<String>,
     pub cursor: Option<String>,

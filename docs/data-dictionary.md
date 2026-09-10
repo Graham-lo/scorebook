@@ -26,12 +26,12 @@
 
 所有私有引用按 owner 查询并使用明确外键/关联表。删除不是扫描任意文本中的 UUID。行情 OHLC、逐笔成交、系统生成 SVG/PNG 不属于持久数据，禁止出现在上述表、队列、导出或日志中。原用户截图仍是长期保留的证据。
 
-## v4（迁移 0020—0041）
+## v4（迁移 0020—0043）
 
 | 模块 | 主表与语义 |
 |---|---|
 | 搜图 | `chart_analyses` 原图识别元数据；`chart_search_runs` 可取消任务和有来源坐标的结果；`image_index_status` / `image_reindex_runs` 明确旧模型切换进度 |
-| 公共历史 | `public_market.instrument_lifecycles` / `catalog_versions` 合约事实；`history_availability` 原始文件存在和 checksum 边界；`source_revisions` 文件版本；`coverage_segments` 实际区间；`features` 12 分区派生向量、`feature_locator` / `generation_features` 归属。它们不存公共 OHLC |
+| 公共历史 | `public_market.instrument_lifecycles` / `catalog_versions` 合约事实；`history_availability` 原始文件存在和 checksum 边界；`source_revisions` 文件版本；`coverage_segments` 实际区间（截图定位任务按 market/symbol/timeframe + `status='complete'` + 区间包含，再按所在 generation 的 `body->>'window_bars'` 检查 64/128/256 三档是否齐全，来决定要不要现建索引）；`features` 12 分区派生向量、`feature_locator` / `generation_features` 归属。它们不存公共 OHLC |
 | 历史订阅 | `history_subscriptions` 声明和预算；`history_subscription_plans` 本轮有界计划；`history_plan_scopes` 冻结实际来源范围；`history_subscription_cursors` 每合约/周期/尺度的下个窗口起点 |
 | 真实交易 | `exchange_connections` 账户声明；`exchange_credentials` 仅 Keychain 引用；`trade_imports` 不可变来源回执；`trade_fills` / `account_ledger_entries` 原币种 Decimal 流水；`account_asset_totals` 仅按新入库行更新的可重算汇总 |
 | 持仓投影 | `position_seeds` 期初声明；`trade_books` 账本目录；`trade_projection_runs` / `heads` 已发布快照；`trade_book_snapshots` 固定大小账本快照；`trade_epoch_cycles` 共享闭合周期；`trade_cycles` / `trade_cycle_allocations` 周期与不可变分摊；`trade_projection_checkpoints` 断点。旧 segment 表在 0038 显式删除 |
@@ -40,6 +40,7 @@
 | 正式统计 | `set_definitions` 规则定义；`set_runs` 单 SQL 快照时间；`set_sample_members` 冻结成员、结果头、代表性及排除原因；`set_group_metrics` 可分页分组；`baseline_runs` / `baseline_samples` B1；`verdict_requests` / `verdict_events` 人工裁决 |
 | 知识 | `knowledge_sources` 仅业务来源视图；`knowledge_dirty` 事务 outbox；`knowledge_documents` / `knowledge_chunks` / `knowledge_embeddings` 可重建索引；`knowledge_index_watermarks` 进度；`knowledge_repair_cursors` 分批完整性巡检。dirty 未清除的文档不参与查询 |
 | Chat | `chat_runs` 固定模型与任务；`chat_model_turns` 已确认返回；`chat_tool_calls` 确定性动作身份及结果；`chat_events` SSE 游标；`chat_source_refs` 版本引用与删除失效；`chat_tool_evidence` 为工具结果提供单独来源视图，不进入知识自索引。原图字节不进入这些表 |
+| 重温回放 | `attachment_locations` 一张截图确认过的品种/周期/起止时间，长期保存、不过期，回放窗口起点优先读它，`matched_by` 区分 `user`（本人拉框确认）和 `auto`（复盘发布后自动匹配写入），自动匹配只插入不覆盖，本人确认过的行永远不会被改写；自动匹配的把握门槛在配置里：`SCOREBOOK_AUTO_LOCATE_MIN_SCORE`（默认 0.85，即 `chart_match::rerank` 判定「同一张图」的分数线）和 `SCOREBOOK_AUTO_LOCATE_MIN_MARGIN`（默认 0.05，第一名必须比第二名高出这么多），两条都满足才写行，否则只把前三个候选放进任务结果交给本人挑；定位任务在检索之前会先保证 `[T0 − 3×256 根, T0 向下取整到周期]`（768 根）这段行情有索引，没有就在 worker 里同步补出64/128/256 三档、`stride_bars=1`、`candle-geometry-v2` 的特征，generation / coverage / published 语义与 `POST /v1/history/indexes` 相同但不写 `history_indexes` 行，结果记在 `jobs.result.index`（`built`、`feature_rows`、`range`）；它只围绕这一条记录的判断时刻发生一次，不订阅、不滚动、不扩范围，也只存向量和时间坐标，不存原始 K 线；`chart_setups` 该记录要画的均线组合，只校验形状不算指标；`replay_bars` 每次回放临时落库的展示用 K 线，带 `expires_at`，退出回放即删、worker 每小时清理过期行，不进逻辑归档，统计/结算/检索不读它 |
 | 备份 | `backup_configurations` 仓库和 Keychain 引用；`backup_runs` 上传和读回验证状态；`backup_protections` 导出原图保护；恢复不自动绑定外部凭证 |
 
-schema 41 逻辑归档包含用户业务资产和派生计算依据，排除公共行情、公共可重建向量、凭证和备份密码。知识派生索引通过恢复后的 dirty 重新建立。活动 Chat 恢复后必须创建新任务；旧模型恢复走显式离线升级及重建。
+schema 43 逻辑归档包含用户业务资产和派生计算依据，排除公共行情、公共可重建向量、凭证和备份密码。知识派生索引通过恢复后的 dirty 重新建立。活动 Chat 恢复后必须创建新任务；旧模型恢复走显式离线升级及重建。

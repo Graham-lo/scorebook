@@ -135,7 +135,7 @@ pub fn dec(s: &str) -> Result<D, String> {
     }
     Ok(v)
 }
-fn q(v: D) -> D {
+pub(crate) fn q(v: D) -> D {
     v.with_precision_round(NonZeroU64::new(34).unwrap(), RoundingMode::HalfEven)
 }
 fn ratio(a: D, b: D) -> D {
@@ -471,7 +471,11 @@ fn atr_value(atr0: &Option<String>) -> Result<D, String> {
     }
     Ok(v)
 }
-fn threshold_for(c: &Criteria, base: &D, atr0: &Option<String>) -> Result<Option<D>, String> {
+pub(crate) fn threshold_for(
+    c: &Criteria,
+    base: &D,
+    atr0: &Option<String>,
+) -> Result<Option<D>, String> {
     if matches!(c.template, Template::T1 | Template::T2 | Template::T3) {
         Ok(Some(if let Some(p) = &c.threshold_ratio {
             q(base * dec(p)?)

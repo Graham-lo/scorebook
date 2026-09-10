@@ -15,12 +15,7 @@ pub mod archives;
 pub mod boundaries;
 pub mod subscriptions;
 pub fn validate_symbol(symbol: &str) -> Result<()> {
-    if symbol.is_empty()
-        || symbol.len() > 40
-        || !symbol
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-    {
+    if !scorebook_core::domain::instrument::valid_symbol(symbol) {
         return Err(Error::bad("invalid_contract"));
     }
     Ok(())

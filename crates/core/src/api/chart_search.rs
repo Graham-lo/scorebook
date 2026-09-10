@@ -19,6 +19,8 @@ pub struct ChartSearchInput {
     pub scope: ChartScope,
     pub symbol: Option<String>,
     pub market: Option<String>,
+    /// Required selected screenshot interval; cross-interval search is not supported.
+    #[schema(required = true, nullable = false)]
     pub interval: Option<String>,
     pub cutoff_at: Option<DateTime<Utc>>,
     #[serde(default)]

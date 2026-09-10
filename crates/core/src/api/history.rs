@@ -33,6 +33,8 @@ pub struct HistorySearch {
     pub model_id: String,
     pub symbol: Option<String>,
     pub market: Option<String>,
+    /// Required selected screenshot interval; cross-interval search is not supported.
+    #[schema(required = true, nullable = false)]
     pub interval: Option<String>,
     pub cutoff_at: Option<DateTime<Utc>>,
     pub limit: Option<i64>,

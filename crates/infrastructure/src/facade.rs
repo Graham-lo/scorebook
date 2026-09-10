@@ -90,6 +90,8 @@ impl Facade {
             principal,
         } = command;
         let id = || subject.ok_or_else(|| Error::bad("subject_required"));
+        // PUT/DELETE honour an Idempotency-Key when one is sent, without demanding it.
+        let optional_key = key.clone();
         let key = || {
             key.as_deref()
                 .ok_or_else(|| Error::bad("idempotency_key_required"))
@@ -372,6 +374,27 @@ impl Facade {
             Action::Replay => {
                 app::evaluation::replay(s, owner, id()?, key()?, parse(payload)?).await
             }
+            Action::AttachmentLocationPut => {
+                app::replay::put_location(s, owner, id()?, optional_key.as_deref(), parse(payload)?)
+                    .await
+            }
+            Action::AttachmentLocationDelete => {
+                app::replay::delete_location(s, owner, id()?, optional_key.as_deref()).await
+            }
+            Action::AttachmentLocateGet => app::locate::get(s, owner, id()?).await,
+            Action::AttachmentLocateRequest => app::locate::request(s, owner, id()?, key()?).await,
+            Action::ChartSetupPut => {
+                app::replay::put_chart_setup(
+                    s,
+                    owner,
+                    id()?,
+                    optional_key.as_deref(),
+                    parse(payload)?,
+                )
+                .await
+            }
+            Action::ReplayGet => app::replay::get(s, owner, id()?).await,
+            Action::ReplayClear => app::replay::clear(s, owner, id()?).await,
             Action::OutcomeRevision => {
                 app::settlement::request_revision(s, owner, id()?, key()?, parse(payload)?).await
             }

@@ -4,6 +4,10 @@ use utoipa::ToSchema;
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DraftInput {
+    #[serde(default)]
+    pub trades: Vec<super::review_trades::ReviewTrade>,
+    #[serde(default)]
+    pub attachment_ids: Vec<uuid::Uuid>,
     pub expected_draft_revision: i64,
     pub note: String,
     pub better_play: Option<String>,

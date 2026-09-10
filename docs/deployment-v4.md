@@ -1,6 +1,20 @@
 # v4 部署与恢复
 
-当前主服务仍为 v3，主库 schema 0019。开发、测试和性能验证均使用隔离数据库；没有在本轮自动部署 v4。
+2026-09-10：Mac 主服务已切换至 v4，主库已迁移至 schema 0041。升级前数据库和原图已备份并在隔离库实际恢复验证。原有 71 条记录、57 张附件、45 条复盘保留；之后用户新上传资料继续正常保留。VPS 部署暂停。
+
+## Mac 本机入口
+
+页面：http://127.0.0.1:5178/。API 127.0.0.1:8787；视觉服务 8790；文本服务 8791。PostgreSQL 17 在本机 Docker 55432。
+
+`ops/serve-frontend.mjs` 提供构建后的前端和同源流式 API 代理，访问凭证仅在服务端读取；静态产物中没有访问令牌。默认只监听 loopback，检查 Host/Origin，并支持 SSE 和图片流。
+
+2026-09-11 已按用户要求启用 Mac 局域网访问：`http://192.168.124.9:5178/#/home`，本机仍可用 `http://127.0.0.1:5178/#/home`。局域网设备共用 Mac 上同一账户及资料，当前没有独立访客账户；设备需与 Mac 网络互通，Mac 保持开机和唤醒。IP 来自 DHCP，变化后使用 Mac 的新地址。
+
+开启或更新局域网入口：`python3 ops/install-launchd.py --services frontend --lan`。该选项监听 IPv4，Host 仅接受 loopback 和本机当前私网网卡地址，Origin 必须与请求 Host 相同，拒绝跨站请求和非私网来源。后端、数据库和模型端口仍只在本机使用。更新前端服务时需保留 `--lan`；省略该选项会恢复仅本机访问。
+
+构建前端后运行 `python3 ops/install-launchd.py`，安装 api、worker、vision、text、frontend 五个当前用户 LaunchAgent。更新单个组件使用 `--services api worker` 等参数；默认前端位置是相邻的 `scorebook-frontend/app/dist`，也可通过 `--frontend-dir` 指定。不要同时保留手动启动的旧 worker。
+
+主库测试必须使用隔离数据库。`ops/review_frontend_local.py` 建立独立库、存储、API 和代理，运行前端原始集成测试后清理。原始测试当前有未通过项，见联调报告，不要直接在主资料库运行。
 
 ## 运行组件
 
@@ -26,7 +40,7 @@
 
 ## 导出与恢复
 
-正常归档严格要求 schema 41。旧 schema 19 只能先执行：
+正常归档严格要求 schema 42。旧 schema 19 只能先执行：
 
 ```sh
 scorebook upgrade-export /absolute/old-archive /absolute/new-upgraded-archive
@@ -40,6 +54,8 @@ scorebook verify-export /absolute/new-upgraded-archive
 备份成功意味着已上传、读回并核对逻辑资料和原图。独立物理设备未确认时只能算本机副本；RPO/RTO 必须通过实际目的地演练衡量。
 
 ## 可重复验证
+
+`ops/test.sh` 每次自动创建独立临时数据库，测试结束（包括失败或中断）后立即删除，不使用主资料库或保留共享测试库。所有连库的集成测试（`tests/common/mod.rs::test_db_url`）会先断言库名以 `scorebook_test` 开头，直接用 `.env` 里的主库 URL 跑测试二进制会立刻拒绝，失败信息只回显库名不回显 URL。需要本机 `psql` 客户端，或本仓库默认的本机 PostgreSQL Compose 服务；只保留测试日志。
 
 ```sh
 ops/test.sh --workspace

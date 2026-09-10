@@ -29,11 +29,7 @@ pub fn interval_seconds(tf: &str) -> Result<i64> {
 pub fn validate(input: &HistoryIndexRequest) -> Result<()> {
     let seconds = interval_seconds(&input.interval)?;
     if !matches!(input.market.as_str(), "usd_m" | "coin_m")
-        || input.symbol.is_empty()
-        || !input
-            .symbol
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        || !scorebook_core::domain::instrument::valid_symbol(&input.symbol)
     {
         return Err(Error::bad("invalid_contract"));
     }
@@ -63,6 +59,12 @@ pub fn validate(input: &HistoryIndexRequest) -> Result<()> {
     }
     Ok(())
 }
+/// One generation per distinct index request: the request itself is the key, so
+/// the same bounded range asked for twice — over HTTP or from a locate job —
+/// shares one build, one coverage row and one set of published windows.
+const GENERATION: &str = "INSERT INTO public_market.generations(id,request_hash,body) VALUES(md5($1::jsonb::text)::uuid,md5($1::jsonb::text),$1) ON CONFLICT(request_hash) DO UPDATE SET request_hash=EXCLUDED.request_hash RETURNING id";
+const READY_COVERAGE: &str =
+    "SELECT coverage FROM public_market.generations WHERE id=$1 AND status='ready'";
 pub async fn request(
     s: &Services,
     owner: Uuid,
@@ -79,7 +81,10 @@ pub async fn request(
         return Ok(v);
     }
     let id = jobs::enqueue_tx(&mut tx, owner, "history.index", key, body.clone()).await?;
-    let generation:Uuid=sqlx::query_scalar("INSERT INTO public_market.generations(id,request_hash,body) VALUES(md5($1::jsonb::text)::uuid,md5($1::jsonb::text),$1) ON CONFLICT(request_hash) DO UPDATE SET request_hash=EXCLUDED.request_hash RETURNING id").bind(&body).fetch_one(&mut *tx).await?;
+    let generation: Uuid = sqlx::query_scalar(GENERATION)
+        .bind(&body)
+        .fetch_one(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO history_indexes(id,owner_id,body,generation_id,status) VALUES($1,$2,$3,$4,'queued') ON CONFLICT DO NOTHING").bind(id).bind(owner).bind(&body).bind(generation).execute(&mut *tx).await?;
     let v = json!({"job_id":id,"index_id":id,"generation_id":generation,"status":"queued","raw_market_storage":"none"});
     Database::finish(&mut tx, owner, "history.index", key, &body, &v).await?;
@@ -124,6 +129,75 @@ pub async fn build(s: &Services, j: &Job) -> Result<Value> {
     // payload, bars and raster images are dropped here. Nothing writes them to disk/DB.
     Ok(result)
 }
+/// The three window sizes every screenshot search looks through.
+pub const LOCATE_WINDOWS: [usize; 3] = [64, 128, 256];
+
+/// Is this range already indexed at all three window sizes? A `complete`
+/// coverage segment whose requested range contains the asked-for one is the
+/// record that a build already walked it; the window size lives on the
+/// generation's own request body, which is what `publish_index` derives the
+/// segment from.
+pub async fn covered(
+    s: &Services,
+    market: &str,
+    symbol: &str,
+    interval: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<bool> {
+    let sizes: Vec<i32> = LOCATE_WINDOWS.iter().map(|v| *v as i32).collect();
+    let found:i64=sqlx::query_scalar("SELECT count(DISTINCT (g.body->>'window_bars')::int) FROM public_market.coverage_segments c JOIN public_market.generations g ON g.id=c.generation_id WHERE c.market=$1 AND c.symbol=$2 AND c.timeframe=$3 AND c.status='complete' AND c.start_at<=$4 AND c.end_at>=$5 AND (g.body->>'window_bars')::int=ANY($6)")
+        .bind(market).bind(symbol).bind(interval).bind(start).bind(end).bind(&sizes)
+        .fetch_one(&s.db.pool).await?;
+    Ok(found as usize == LOCATE_WINDOWS.len())
+}
+
+/// Index one bounded range from inside a job that is not a `history.index` job,
+/// so there is no `history_indexes` row to hang it on. Everything else is the
+/// path `POST /v1/history/indexes` takes: the same generation key, the same
+/// REST pagination, the same feature writes, the same coverage segment and the
+/// same published flip. Vectors and time coordinates only — the bars are
+/// dropped when this returns.
+pub async fn index_range(s: &Services, j: &Job, input: &HistoryIndexRequest) -> Result<Value> {
+    validate(input)?;
+    let body = json!(input);
+    let generation: Uuid = sqlx::query_scalar(GENERATION)
+        .bind(&body)
+        .fetch_one(&s.db.pool)
+        .await?;
+    if let Some(coverage) = sqlx::query_scalar::<_, Value>(READY_COVERAGE)
+        .bind(generation)
+        .fetch_optional(&s.db.pool)
+        .await?
+    {
+        publish_index(s, j, generation, &coverage, None).await?;
+        return Ok(coverage);
+    }
+    let payload = s
+        .market
+        .klines(
+            &input.market,
+            &input.symbol,
+            &input.interval,
+            input.start_at,
+            input.end_at,
+        )
+        .await?;
+    let bars: Vec<Bar> = serde_json::from_value(payload["bars"].clone())
+        .map_err(|_| Error::bad("invalid_provider_bars"))?;
+    // A contract listed after the range starts simply has fewer bars: the index
+    // is clipped to where the data actually begins, which is a partial segment,
+    // not a failure.
+    index_generation(
+        s,
+        j,
+        generation,
+        input,
+        &bars,
+        payload["coverage_complete"] == true,
+    )
+    .await
+}
 pub async fn index_bars(
     s: &Services,
     j: &Job,
@@ -131,19 +205,32 @@ pub async fn index_bars(
     bars: &[Bar],
     complete: bool,
 ) -> Result<Value> {
-    validate(input)?;
     let generation: Uuid =
         sqlx::query_scalar("SELECT generation_id FROM history_indexes WHERE owner_id=$1 AND id=$2")
             .bind(j.owner)
             .bind(j.id)
             .fetch_one(&s.db.pool)
             .await?;
-    if let Some(coverage) = sqlx::query_scalar::<_, Value>(
-        "SELECT coverage FROM public_market.generations WHERE id=$1 AND status='ready'",
-    )
-    .bind(generation)
-    .fetch_optional(&s.db.pool)
-    .await?
+    index_generation(s, j, generation, input, bars, complete).await
+}
+/// The indexing itself, told which generation it belongs to. `index_bars` reads
+/// that from the job's own `history_indexes` row; a job of another kind — a
+/// screenshot locate building the little bit of index it needs — resolves the
+/// generation the same way `request` does and comes in here, so generation,
+/// coverage and published semantics stay identical either way.
+pub async fn index_generation(
+    s: &Services,
+    j: &Job,
+    generation: Uuid,
+    input: &HistoryIndexRequest,
+    bars: &[Bar],
+    complete: bool,
+) -> Result<Value> {
+    validate(input)?;
+    if let Some(coverage) = sqlx::query_scalar::<_, Value>(READY_COVERAGE)
+        .bind(generation)
+        .fetch_optional(&s.db.pool)
+        .await?
     {
         publish_index(s, j, generation, &coverage, None).await?;
         return Ok(coverage);
@@ -324,6 +411,7 @@ pub async fn search_mode(
     input: HistorySearch,
     persist: bool,
 ) -> Result<Value> {
+    scorebook_core::domain::chart_match::require_interval(input.interval.as_deref())?;
     let body = json!(input);
     let (vector, quality, _) = super::similarity::embed_mode(
         s,
@@ -351,7 +439,7 @@ pub async fn search_mode(
     let (model, dimension) = crate::adapters::ann::space(&input.model_id)?;
     crate::adapters::ann::configure(&mut tx).await?;
     let sql = format!(
-        "WITH ann_candidates AS MATERIALIZED (SELECT id,market,symbol,timeframe,start_at,end_at,bars_count,input_hash,embedding::vector({dimension}) <=> $5::vector({dimension}) AS distance FROM public_market.features WHERE published AND model_id='{model}' AND end_at<=$1 AND ($2::text IS NULL OR symbol=$2) AND ($3::text IS NULL OR market=$3) AND ($4::text IS NULL OR timeframe=$4) ORDER BY embedding::vector({dimension}) <=> $5::vector({dimension}) LIMIT 3000) SELECT * FROM ann_candidates ORDER BY distance+0,id LIMIT 1000"
+        "WITH ann_candidates AS MATERIALIZED (SELECT id,market,symbol,timeframe,start_at,end_at,bars_count,input_hash,embedding::vector({dimension}) <=> $5::vector({dimension}) AS distance FROM public_market.features WHERE published AND model_id='{model}' AND end_at<=$1 AND ($2::text IS NULL OR symbol=$2) AND ($3::text IS NULL OR market=$3) AND timeframe=$4 ORDER BY embedding::vector({dimension}) <=> $5::vector({dimension}) LIMIT 3000) SELECT * FROM ann_candidates ORDER BY distance+0,id LIMIT 1000"
     );
     let rows = sqlx::query(&sql)
         .bind(cutoff)

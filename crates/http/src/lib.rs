@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use scorebook_core::{
     api,
@@ -26,6 +26,7 @@ pub use scorebook_core::api::dto as types;
 pub fn router(s: Services) -> Router {
     let api = Router::new()
         .merge(chart_routes::routes())
+        .merge(replay_routes::routes())
         .merge(chat_routes::routes())
         .merge(backup_routes::routes())
         .merge(trade_routes::routes())
@@ -136,6 +137,8 @@ pub fn router(s: Services) -> Router {
                 .allow_methods([
                     axum::http::Method::GET,
                     axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::DELETE,
                     axum::http::Method::OPTIONS,
                 ])
                 .allow_headers([
@@ -292,6 +295,8 @@ mod sessions;
 use sessions::*;
 
 mod chart_routes;
+
+mod replay_routes;
 
 mod history_catalog_routes;
 

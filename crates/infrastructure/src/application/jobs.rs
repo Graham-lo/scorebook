@@ -305,6 +305,7 @@ async fn execute(s: &Services, j: &Job) -> Result<Value> {
         "trade.project" => super::trades::projection::build(s, j).await,
         "images.reindex" => super::chart_search::reindex::step(s, j).await,
         "chart.search" => super::chart_search::run(s, j).await,
+        "attachment.locate" => super::locate::run(s, j).await,
         "history.index" => super::history::build(s, j).await,
         "history.plan" => super::history_plans::step(s, j).await,
         "history.subscription" => super::history_catalog::subscriptions::step(s, j).await,

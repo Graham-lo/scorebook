@@ -1,6 +1,14 @@
 # v4 后端交付状态
 
-2026-09-10，`codex/backend-personal-v4`。实施范围为 P1、P2、P3、P4、P5、P7。P6 已取消；前端和多用户产品功能不在范围内。本机主服务、主库仍为 v3，本分支没有部署。
+2026-09-10，`codex/backend-personal-v4`。实施范围为 P1、P2、P3、P4、P5、P7。P6 已取消；前端和多用户产品功能不在范围内。2026-09-10 下午本机主服务已部署 v4，主库 schema 43；Claude 的前端已接入，当前按用户追加要求修复搜索体验。
+
+2026-09-11 追加「重温回放」后端（迁移 0042）：`attachment_locations` 长期保存截图到真实行情的定位，`chart_setups` 保存该记录要画的均线/布林/ATR 形状，`replay_bars` 是每次回放临时落库、退出即删的展示缓存。这是 README「公共行情只在内存」原则的唯一例外：`replay_bars` 只服务一次展示，带 `expires_at`，`DELETE /v1/calls/{id}/replay` 立即删除，worker 每小时兜底清理过期行；统计、结算、检索都不读它。回放不写 outcomes、manifests、events，唯一会删的行是 `replay_bars`。
+
+2026-09-11 追加「复盘走完自动匹配一次」（迁移 0043，主库 schema 43）：`POST /v1/reviews` 和引导复盘发布都在同一事务里，为该记录每张还没定位的场景截图入队一条 `attachment.locate` 任务；单飞完全靠 `jobs` 的 `UNIQUE(owner_id,kind,dedupe_key)`——自动触发的 key 就是附件 id，所以一张图自动只匹配一次，手动触发遇到 queued/running 的任务直接返回它（`deduplicated:true`）而不排第二条，没有另建锁表。任务复用 `chart_search` 的识别与检索（scope=binance_history，品种/周期由记录预填，`cutoff_at` 是判断时刻），top1 分数 ≥ `SCOREBOOK_AUTO_LOCATE_MIN_SCORE`（默认 0.85）且比 top2 高出 `SCOREBOOK_AUTO_LOCATE_MIN_MARGIN`（默认 0.05）才写 `matched_by='auto'` 的行，否则只把前 3 个候选放进 `jobs.result` 交给本人挑。自动任务只插入不覆盖：本人 `PUT location` 写下的行永远保留，任务返回 `already_located`。新增 `GET/POST /v1/attachments/{id}/locate`，`GET /v1/calls/{id}/replay` 在定位进行中多一个顶层 `locating`。回归见 `tests/auto_locate.rs`（5 项）。
+
+2026-09-11 追加「定位前按需建索引」（§1.6b，无迁移，schema 仍 43）：`chart_search` 的候选只来自 `public_market.features`，而本机按用户要求没有启动历史同步，索引为空时定位永远只能得到 `candidates: []`。现在 `attachment.locate` 在搜索之前先保证这段行情有索引：范围是 `[T0 − 3×256 根, T0 向下取整到周期]`（768 根，与回放窗口同一口径，品种/周期取记录本身），先查 `public_market.coverage_segments` 里同品种同周期、`status='complete'`、且请求区间包含该范围的段在 64/128/256 三档窗口上是否齐全（档位读所在 generation 的 `body->>'window_bars'`），齐全就直接搜；不齐全就在 worker 里同步补：`history::validate` + `s.market.klines` 的 REST 分页 + `history::index_generation` 写特征，三档各建一次、`stride_bars=1`、`models=['candle-geometry-v2']`。不新建 `history.index` 任务、不经 HTTP，也不写 `history_indexes` 行；generation 键、coverage 段和 published 翻转与 `POST /v1/history/indexes` 完全一致（`history::index_range` 与 `index_bars` 共用 `index_generation`）。上市前区间按实际起点截断，`coverage_complete=false` 记成 `partial` 段而不算失败；交易所不可用按现有重试策略重试。`jobs.result.index` 记 `{built, feature_rows, range, windows, stride_bars, actual_start}` 便于回查。索引只存向量和时间坐标，原始 K 线仍然只在内存里过一遍，README 的「公共行情只在内存」原则不受影响。
+
+真实记录实测（主库，附件 2f635b4d…、记录 a14dc89a…，2026-09-10）：第一次 POST locate 建出 3 个 generation、3 段 `complete` 覆盖（BTCUSDT/1h，2026-08-09T16:00Z–2026-09-10T16:00Z）和 1859 行已发布特征（64 档 705 行、128 档 641 行、256 档 513 行），`index.built=true`；第二次 POST 命中覆盖检查，`index.built=false, reason=already_indexed`，行数不变。结果仍是 `ambiguous`，但候选不再为空：top1 = BTCUSDT/1h 2026-08-10T07:00Z–2026-08-15T15:00Z（128 根，score 0.332），top2 = 2026-08-25T23:00Z–2026-09-05T15:00Z（256 根，0.084），top3 = 2026-09-03T11:00Z–2026-09-08T19:00Z（128 根，0.076），低于 0.85 门槛所以不写 `attachment_locations`。原因不是门槛：这张截图是**币安 App 的 30 分钟图**（截图里「30分」页签选中，x 轴 09-08 15:00 → 09-11 00:52 本地时间约 58 小时、检测到 116 根，正好 30m），而记录的 `timeframe` 是 `1h`，检索又是 `same_interval_only`，所以 1h 的索引里根本不存在这张图对应的窗口；另外 `interval_for` 也还不支持 `30m`。次要因素：识别区域 y=688 高 1581，跨到了成交量和 MACD 面板，`spacing_consistency` 只有 0.92；以及同品种候选在 `chart_search::public_candidates` 里最多保留 3 个，所以 1859 个窗口里只有 3 个进入精排。门槛未做任何调整。
 
 ## 已实现
 
@@ -40,4 +48,8 @@
 
 用户原图、原话、复盘与真实成交是资产。公共 OHLC、aggTrades 和系统行情图不进入数据库、任务、日志、Chat 或备份；只存派生特征、摘要、来源哈希和窗口坐标。币安行情为参考市场，绝不覆盖真实成交价格。币安删档或订正后，系统说明来源变化，不能承诺无行情副本时仍离线复现。
 
-新迁移目前只在隔离测试库验证至 0041。部署按 `deployment-v4.md` 切换，先保护现有资料，再显式重建派生索引。
+主库已完成 0041 迁移；迁移前数据库与原图已在隔离库验证恢复，随后切换 API/worker 并完成图像与知识重建。部署细节见 `deployment-v4.md`，新增搜索与工作流要求见 `requirements-local-2026-09-10.md`。
+
+## 2026-09-10 周期与历史测试更新
+
+截图检索现在必须先选定周期，只比较同周期。历史准备支持读取已核实上线时间至最新收盘的范围，选范围不自动下载。按用户要求暂不启动历史同步。真实小范围测试已通过，测试库/临时目录及主库演示公共历史索引已经清理；当时公开历史覆盖为空是预期状态（2026-09-11 起改为：历史同步仍未启动，但 `attachment.locate` 会围绕判断时刻现建一段有界索引，见上文 §1.6b 条目）。用户记录、原图和复盘保留。详见后端 docs/period-live-verification.json、docs/public-history-cleanup.json 及桌面 Scorebook_Claude前端重构Prompt_v4.1.md。

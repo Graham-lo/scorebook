@@ -15,6 +15,7 @@ use std::{
 type Flight =
     futures_util::future::Shared<futures_util::future::BoxFuture<'static, Result<Value, Error>>>;
 struct Entry {
+    ttl: Duration,
     completed: Arc<std::sync::Mutex<Option<Instant>>>,
     id: uuid::Uuid,
     future: Flight,
@@ -40,19 +41,40 @@ impl SharedMarket {
         key: String,
         f: impl std::future::Future<Output = Result<Value, Error>> + Send + 'static,
     ) -> Result<Value, Error> {
+        self.get_with_ttl(key, Duration::from_secs(15), f).await
+    }
+    async fn get_with_ttl(
+        &self,
+        key: String,
+        ttl: Duration,
+        f: impl std::future::Future<Output = Result<Value, Error>> + Send + 'static,
+    ) -> Result<Value, Error> {
         let (flight, id) = {
             let mut entries = self.flights.lock().await;
             entries.retain(|_, e| {
                 e.completed
                     .lock()
                     .unwrap()
-                    .is_none_or(|at| at.elapsed() < Duration::from_secs(15))
+                    .is_none_or(|at| at.elapsed() < e.ttl)
             });
             if entries.len() >= 8 && !entries.contains_key(&key) {
-                return Err(Error::deferred(
-                    "market_request_capacity",
-                    RetryDirective::After(2),
-                ));
+                // Completed cache entries must not consume the admission budget
+                // needed by the next candidate range in one historical search.
+                let oldest = entries
+                    .iter()
+                    .filter_map(|(key, e)| {
+                        (*e.completed.lock().unwrap()).map(|at| (key.clone(), at))
+                    })
+                    .min_by_key(|(_, at)| *at)
+                    .map(|(key, _)| key);
+                if let Some(oldest) = oldest {
+                    entries.remove(&oldest);
+                } else {
+                    return Err(Error::deferred(
+                        "market_request_capacity",
+                        RetryDirective::After(2),
+                    ));
+                }
             }
             let e = entries.entry(key.clone()).or_insert_with(|| {
                 let permits = self.permits.clone();
@@ -88,6 +110,7 @@ impl SharedMarket {
                     result
                 });
                 Entry {
+                    ttl,
                     completed,
                     id,
                     future: async move {
@@ -128,6 +151,16 @@ fn estimated_size(v: &Value) -> usize {
     }
 }
 impl MarketDataProvider for SharedMarket {
+    fn tickers_24h<'a>(&'a self, m: &'a str) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            let key = format!("tickers:{m}");
+            let (p, m) = (self.provider.clone(), m.to_string());
+            self.get_with_ttl(key, Duration::from_secs(60), async move {
+                p.tickers_24h(&m).await
+            })
+            .await
+        })
+    }
     fn klines<'a>(
         &'a self,
         m: &'a str,
@@ -179,6 +212,10 @@ mod tests {
     use super::*;
     struct Count(std::sync::atomic::AtomicUsize);
     impl MarketDataProvider for Count {
+        fn tickers_24h<'a>(&'a self, _: &'a str) -> scorebook_core::market::ProviderFuture<'a> {
+            Box::pin(async { unreachable!("this fixture does not request instrument popularity") })
+        }
+
         fn klines<'a>(
             &'a self,
             _: &'a str,
@@ -205,6 +242,27 @@ mod tests {
         fn exchange_info<'a>(&'a self, _: &'a str) -> ProviderFuture<'a> {
             Box::pin(async { unreachable!() })
         }
+    }
+    #[tokio::test]
+    async fn completed_ranges_do_not_exhaust_the_inflight_budget() {
+        let p = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
+        let s = SharedMarket::new(p.clone());
+        let now = Utc::now();
+        for i in 0..12 {
+            assert!(
+                s.klines(
+                    "usd_m",
+                    "BTCUSDT",
+                    "1h",
+                    now - chrono::Duration::hours(i + 2),
+                    now - chrono::Duration::hours(i + 1)
+                )
+                .await
+                .is_ok()
+            );
+        }
+        assert_eq!(p.0.load(std::sync::atomic::Ordering::SeqCst), 12);
+        assert!(s.flights.lock().await.len() <= 8);
     }
     #[tokio::test]
     async fn concurrent_identical_ranges_have_one_provider_call() {

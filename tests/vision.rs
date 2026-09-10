@@ -1,3 +1,4 @@
+mod common;
 use scorebook::{
     adapters::{db::Database, storage::Storage, vision::Vision},
     application::{Services, calls, dto::*, similarity},
@@ -5,9 +6,7 @@ use scorebook::{
 use serde_json::json;
 #[tokio::test]
 async fn real_local_dino_embedding_and_pgvector_roundtrip() {
-    let db = Database::connect(&std::env::var("DATABASE_URL").unwrap())
-        .await
-        .unwrap();
+    let db = Database::connect(&common::test_db_url()).await.unwrap();
     db.migrate().await.unwrap();
     let (o, _) = db.create_user("vision-test").await.unwrap();
     let temp = tempfile::tempdir().unwrap();
@@ -43,7 +42,14 @@ async fn real_local_dino_embedding_and_pgvector_roundtrip() {
     .await
     .unwrap();
     let aid = serde_json::from_value(a["id"].clone()).unwrap();
-    let c=serde_json::from_value(json!({"original_text":"视觉模型测试案例","instrument":"BTCUSDT","market":"usd_m","attachments":[aid]})).unwrap();
+    let c = serde_json::from_value(json!({
+        "original_text": "视觉模型测试案例",
+        "instrument": "BTCUSDT",
+        "market": "usd_m",
+        "timeframe": "4h",
+        "attachments": [aid]
+    }))
+    .unwrap();
     calls::create(&s, o, "case", c).await.unwrap();
     let (v, provenance, _) = similarity::embed(&s, o, aid, None, "dinov2-small-v1")
         .await
@@ -65,7 +71,7 @@ async fn real_local_dino_embedding_and_pgvector_roundtrip() {
             model_id: "dinov2-small-v1".into(),
             instrument: None,
             market: None,
-            timeframe: None,
+            timeframe: Some("4h".into()),
             cutoff_at: None,
             limit: Some(5),
         },

@@ -26,17 +26,61 @@ pub async fn refresh(s: &Services) -> Result<Value> {
 }
 pub async fn list(s: &Services, f: InstrumentFilter) -> Result<Value> {
     let limit = f.limit.unwrap_or(50).clamp(1, 200);
-    let pattern =
-        f.q.map(|q| format!("%{}%", q.replace('%', "\\%").replace('_', "\\_")));
-    let rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(i) FROM instrument_catalog i WHERE ($1::text IS NULL OR symbol ILIKE $1) AND market=$2 AND ($3::text IS NULL OR body->>'underlyingType'=$3) AND ($4::text IS NULL OR symbol>$4) ORDER BY symbol LIMIT $5").bind(pattern).bind(f.market.unwrap_or_else(||"usd_m".into())).bind(f.asset_class).bind(f.cursor).bind(limit+1).fetch_all(&s.db.pool).await?;
+    let input = f.q.as_deref().unwrap_or("");
+    if input.len() > 512 {
+        return Err(Error::bad("invalid_instrument_query"));
+    }
+    let query = scorebook_core::domain::instrument::search_query(input);
+    let market = f.market.unwrap_or_else(|| "usd_m".into());
+    if !matches!(market.as_str(), "usd_m" | "coin_m") {
+        return Err(Error::bad("market_not_supported"));
+    }
+    let popular = query.is_empty();
+    let ranked = if popular {
+        super::instrument_popularity::symbols(s, &market).await?
+    } else {
+        vec![]
+    };
+    let snapshot = crate::adapters::db::digest(&json!([market, f.asset_class, ranked]));
+    let cursor = if popular {
+        match f.cursor {
+            Some(cursor) => Some(
+                cursor
+                    .strip_prefix(&format!("popular:{snapshot}:"))
+                    .ok_or_else(|| Error::conflict("instrument_ranking_changed"))?
+                    .to_string(),
+            ),
+            None => None,
+        }
+    } else {
+        f.cursor
+    };
+    let rows: Vec<Value> = sqlx::query_scalar(include_str!("instruments_search.sql"))
+        .bind(query)
+        .bind(market)
+        .bind(f.asset_class)
+        .bind(cursor)
+        .bind(limit + 1)
+        .bind(ranked)
+        .fetch_all(&s.db.pool)
+        .await?;
     let more = rows.len() > limit as usize;
     let items: Vec<_> = rows.into_iter().take(limit as usize).collect();
     let next = if more {
-        items.last().map(|v| v["symbol"].clone())
+        items.last().map(|v| {
+            if popular {
+                json!(format!(
+                    "popular:{snapshot}:{}",
+                    v["symbol"].as_str().unwrap()
+                ))
+            } else {
+                v["symbol"].clone()
+            }
+        })
     } else {
         None
     };
     Ok(
-        json!({"items":items,"next_cursor":next,"default_market":"usd_m","source":"binance_contract_exchange_info","identity_policy":"contract_symbol_and_underlying_type;never_infer_from_ticker_name","price_type":"trade"}),
+        json!({"items":items,"next_cursor":next,"default_market":"usd_m","source":"binance_contract_exchange_info","identity_policy":"contract_symbol_and_underlying_type;never_infer_from_ticker_name","price_type":"trade","ordering":if popular{"trading_then_24h_quote_turnover"}else{"exact_symbol_then_base_asset_then_prefix_then_contains"},"ranking_storage":"memory_only","ranking_cache_seconds":60}),
     )
 }

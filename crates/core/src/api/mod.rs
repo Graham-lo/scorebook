@@ -5,6 +5,7 @@ pub mod instruments;
 pub mod jobs;
 pub mod lifecycle;
 pub mod record_changes;
+pub mod review_trades;
 pub mod review_workflow;
 pub mod sets;
 pub mod settlement;
@@ -24,3 +25,5 @@ pub mod knowledge_index;
 pub mod chat;
 
 pub mod backups;
+
+pub mod replay;

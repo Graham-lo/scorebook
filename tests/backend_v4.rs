@@ -1,3 +1,4 @@
+mod common;
 use scorebook::{
     adapters::{db::Database, storage::Storage, vision::Vision},
     application::{Services, chart_search, history_catalog, jobs},
@@ -5,9 +6,7 @@ use scorebook::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 async fn setup() -> (Services, Uuid, tempfile::TempDir) {
-    let db = Database::connect(&std::env::var("DATABASE_URL").expect("isolated test DB"))
-        .await
-        .unwrap();
+    let db = Database::connect(&common::test_db_url()).await.unwrap();
     db.migrate().await.unwrap();
     let (owner, _) = db.create_user("v4-test").await.unwrap();
     let tmp = tempfile::tempdir().unwrap();
@@ -22,7 +21,7 @@ async fn chart_search_cancel_is_idempotent_and_fences_old_worker() {
     let (s, owner, _tmp) = setup().await;
     let attachment = Uuid::new_v4();
     sqlx::query("INSERT INTO attachments(id,owner_id,sha256,mime,size,width,height,kind) VALUES($1,$2,'test','image/png',1,640,320,'query')").bind(attachment).bind(owner).execute(&s.db.pool).await.unwrap();
-    let input = json!({"attachment_id":attachment,"scope":"binance_history"});
+    let input = json!({"attachment_id":attachment,"scope":"binance_history","interval":"1h"});
     let a = chart_search::create(
         &s,
         owner,
@@ -805,7 +804,7 @@ async fn encrypted_backup_roundtrip_isolated_restore_and_wrong_password() {
         .execute(&s.db.pool)
         .await
         .unwrap();
-    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    let mut url = reqwest::Url::parse(&common::test_db_url()).unwrap();
     url.set_path(&format!("/{dbname}"));
     let db = Database::connect(url.as_str()).await.unwrap();
     db.migrate().await.unwrap();
@@ -1430,6 +1429,10 @@ async fn baseline_250_days_excludes_future_observations_and_resumes_exactly() {
         cutoff: chrono::DateTime<chrono::Utc>,
     }
     impl scorebook::application::ports::MarketDataProvider for Market {
+        fn tickers_24h<'a>(&'a self, _: &'a str) -> scorebook_core::market::ProviderFuture<'a> {
+            Box::pin(async { unreachable!("this fixture does not request instrument popularity") })
+        }
+
         fn klines<'a>(
             &'a self,
             _: &'a str,
@@ -1576,7 +1579,7 @@ async fn explicit_v19_archive_upgrade_restores_evidence_and_declares_missing_his
         .execute(&s.db.pool)
         .await
         .unwrap();
-    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+    let mut url = reqwest::Url::parse(&common::test_db_url()).unwrap();
     url.set_path(&format!("/{name}"));
     let db = Database::connect(url.as_str()).await.unwrap();
     db.migrate().await.unwrap();
@@ -1639,6 +1642,10 @@ async fn chart_v2_runs_ocr_public_candidate_refetch_and_source_change_exclusion(
         changed: std::sync::atomic::AtomicBool,
     }
     impl ports::MarketDataProvider for Market {
+        fn tickers_24h<'a>(&'a self, _: &'a str) -> scorebook_core::market::ProviderFuture<'a> {
+            Box::pin(async { unreachable!("this fixture does not request instrument popularity") })
+        }
+
         fn klines<'a>(
             &'a self,
             _: &'a str,
@@ -1740,4 +1747,82 @@ async fn chart_v2_runs_ocr_public_candidate_refetch_and_source_change_exclusion(
         assert!(!persisted.contains("\"bars\""));
         assert!(!persisted.contains("\"open\""));
     }
+}
+
+#[tokio::test]
+async fn screenshot_search_requires_period_before_creating_any_job() {
+    let (s, owner, _tmp) = setup().await;
+    let attachment = Uuid::new_v4();
+    let before: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    for scope in ["private", "binance_history"] {
+        for period in [
+            None,
+            Some(json!(null)),
+            Some(json!("")),
+            Some(json!(" ")),
+            Some(json!("2h")),
+        ] {
+            let mut body = json!({"attachment_id":attachment,"scope":scope});
+            if let Some(value) = period {
+                body["interval"] = value;
+            }
+            let error = chart_search::create(
+                &s,
+                owner,
+                "invalid-period",
+                serde_json::from_value(body.clone()).unwrap(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error.code,
+                if body["interval"] == "2h" {
+                    "unsupported_interval"
+                } else {
+                    "chart_interval_required"
+                }
+            );
+        }
+    }
+    for (input, public) in [
+        (
+            json!({"attachment_id":attachment,"model_id":"candle-geometry-v2"}),
+            true,
+        ),
+        (
+            json!({"attachment_id":attachment,"model_id":"hybrid-v2"}),
+            false,
+        ),
+    ] {
+        let error = if public {
+            scorebook::application::history::search(
+                &s,
+                owner,
+                "missing",
+                serde_json::from_value(input).unwrap(),
+            )
+            .await
+            .unwrap_err()
+        } else {
+            scorebook::application::similarity::search(
+                &s,
+                owner,
+                "missing",
+                serde_json::from_value(input).unwrap(),
+            )
+            .await
+            .unwrap_err()
+        };
+        assert_eq!(error.code, "chart_interval_required");
+    }
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(before, after);
 }

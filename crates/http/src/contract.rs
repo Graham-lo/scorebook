@@ -44,6 +44,10 @@ use utoipa::OpenApi;
     scorebook_core::api::history_catalog::SubscriptionBudget,
     scorebook_core::api::history_catalog::HistoryCatalogFilter,
     scorebook_core::api::history_catalog::ArchiveCatalogInput,
+    scorebook_core::api::replay::AttachmentLocation,
+    scorebook_core::api::replay::ChartSetup,
+    scorebook_core::domain::replay::Levels,
+    scorebook_core::domain::replay::TriggerLevel,
     scorebook_core::api::chart_search::ChartAnalysisInput,
     scorebook_core::api::chart_search::ChartSearchInput,
     scorebook_core::api::chart_search::SearchRunControl,
@@ -59,6 +63,7 @@ use utoipa::OpenApi;
     scorebook_core::api::jobs::RetryRequest,
     scorebook_core::api::settlement::RevisionRequest,
     scorebook_core::api::review_workflow::DraftInput,
+    scorebook_core::api::review_trades::ReviewTrade,
     scorebook_core::api::review_workflow::DiscardDraft,
     scorebook_core::api::review_workflow::HistoryFilter,
     scorebook_core::api::review_workflow::QueueFilter,
@@ -196,6 +201,13 @@ pub fn openapi() -> Value {
             "PlanControl",
         ),
         ("/v1/history/archive-catalog", "post", "ArchiveCatalogInput"),
+        ("/v1/attachments/{id}/location", "put", "AttachmentLocation"),
+        ("/v1/attachments/{id}/location", "delete", ""),
+        ("/v1/attachments/{id}/locate", "get", ""),
+        ("/v1/attachments/{id}/locate", "post", ""),
+        ("/v1/calls/{id}/chart-setup", "put", "ChartSetup"),
+        ("/v1/calls/{id}/replay", "get", ""),
+        ("/v1/calls/{id}/replay", "delete", ""),
         ("/v1/chart-analyses", "post", "ChartAnalysisInput"),
         ("/v1/chart-search/runs", "post", "ChartSearchInput"),
         ("/v1/chart-search/runs/{id}", "get", ""),
@@ -281,6 +293,9 @@ pub fn openapi() -> Value {
         ("/v1/knowledge/tools/call", "post", "ToolCall"),
     ] {
         let mut op = json!({"operationId":format!("{method}_{}",path.replace(['/','{','}'],"_")),"responses":{"200":{"description":"Success","content":{"application/json":{"schema":{"type":"object","required":["data","meta"],"properties":{"data":super::response_contract::data(path,method),"meta":{"type":"object","required":["api_version"],"properties":{"api_version":{"const":"v1"}}}}}}}},"401":{"description":"Authentication required"},"404":{"description":"Not found for authenticated owner"},"409":{"description":"Idempotency or revision conflict"},"422":{"description":"Invalid input"}},"parameters":[]});
+        if method == "delete" {
+            op["responses"] = json!({"204":{"description":"Deleted"},"401":{"description":"Authentication required"},"404":{"description":"Not found for authenticated owner"}});
+        }
         if path.contains("{id}") {
             op["parameters"].as_array_mut().unwrap().push(json!({"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}));
         }

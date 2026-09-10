@@ -138,14 +138,38 @@ fn validate_key(key: &str) -> Result<()> {
     if key.len() > 300
         || !(key.starts_with("data/futures/um/") || key.starts_with("data/futures/cm/"))
         || key.contains("..")
-        || !key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "_-/ .".contains(c))
+        || !key.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || "_-/ .".contains(c)
+                || scorebook_core::domain::instrument::symbol_character(c)
+        })
         || key.contains(' ')
     {
         return Err(Error::bad("invalid_archive_key"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::validate_key;
+    #[test]
+    fn unicode_archive_identifiers_do_not_allow_path_or_url_injection() {
+        assert!(
+            validate_key(
+                "data/futures/um/monthly/klines/币安人生USDT/1h/币安人生USDT-1h-2026-08.zip"
+            )
+            .is_ok()
+        );
+        for key in [
+            "data/futures/um/../secret",
+            "data/futures/um/币安%2FUSDT",
+            "data/futures/um/币安?x=1",
+            "https://example.com/data/futures/um/",
+        ] {
+            assert!(validate_key(key).is_err());
+        }
+    }
 }
 async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
     if response.status().as_u16() == 404 {

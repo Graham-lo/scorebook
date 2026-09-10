@@ -105,11 +105,13 @@ pub(super) const TABLES: &[&str] = &[
     "review_drafts",
     "review_preferences",
     "review_outcome_refs",
+    "attachment_locations",
+    "chart_setups",
     "requests",
     "request_refs",
     "tombstones",
 ];
-pub const ARCHIVE_SCHEMA: i64 = 41;
+pub const ARCHIVE_SCHEMA: i64 = 43;
 const CHUNK_BYTES: usize = 4 * 1024 * 1024;
 pub async fn request(s: &Services, owner: Uuid, key: &str) -> Result<Value> {
     let body = json!({});

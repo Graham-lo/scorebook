@@ -156,7 +156,24 @@ struct CycleCursor {
     filter_hash: String,
 }
 pub async fn list(s: &Services, owner: Uuid, input: TradeFilter) -> Result<Value> {
+    if input
+        .direction
+        .as_ref()
+        .is_some_and(|v| !matches!(v.as_str(), "long" | "short"))
+        || input
+            .status
+            .as_ref()
+            .is_some_and(|v| !matches!(v.as_str(), "open" | "closed" | "opening_unknown"))
+        || input
+            .start_at
+            .zip(input.end_at)
+            .is_some_and(|(a, b)| a >= b)
+    {
+        return Err(Error::bad("invalid_cycle_filter"));
+    }
     let filter_hash = digest(&json!([
+        input.direction,
+        input.status,
         input.connection_id,
         input.symbol,
         input.start_at,
@@ -180,7 +197,7 @@ pub async fn list(s: &Services, owner: Uuid, input: TradeFilter) -> Result<Value
         }
         (runs, None)
     };
-    let rows:Vec<Value>=sqlx::query_scalar("WITH members AS(SELECT s.owner_id,s.run_id,c.cycle_id FROM trade_book_snapshots s JOIN trade_epoch_cycles c ON c.owner_id=s.owner_id AND c.epoch_id=s.epoch_id AND c.symbol=s.symbol AND c.position_side=s.position_side AND c.ordinal<=s.closed_through WHERE s.owner_id=$1 AND s.run_id=ANY($2) UNION ALL SELECT owner_id,run_id,open_cycle_id FROM trade_book_snapshots WHERE owner_id=$1 AND run_id=ANY($2) AND open_cycle_id IS NOT NULL), page AS MATERIALIZED(SELECT c.id,p.run_id FROM members p JOIN trade_cycles c ON c.owner_id=p.owner_id AND c.id=p.cycle_id JOIN trade_projection_runs r ON r.owner_id=p.owner_id AND r.id=p.run_id WHERE r.status='ready' AND ($3::text IS NULL OR c.symbol=$3) AND ($4::uuid IS NULL OR c.id>$4) AND ($5::timestamptz IS NULL OR COALESCE((c.body->>'closed_at')::timestamptz,'infinity')>=$5) AND ($6::timestamptz IS NULL OR COALESCE((c.body->>'opened_at')::timestamptz,'-infinity')<$6) ORDER BY c.id LIMIT 101) SELECT jsonb_build_object('id',c.id,'connection_id',c.connection_id,'projection_run_id',r.id,'cycle',c.body,'ledger_revision',r.ledger_revision,'stale',r.ledger_revision<>e.ledger_revision) FROM page p JOIN trade_cycles c ON c.owner_id=$1 AND c.id=p.id JOIN trade_projection_runs r ON r.owner_id=$1 AND r.id=p.run_id JOIN exchange_connections e ON e.owner_id=$1 AND e.id=c.connection_id ORDER BY c.id").bind(owner).bind(&runs).bind(input.symbol).bind(after).bind(input.start_at).bind(input.end_at).fetch_all(&s.db.pool).await?;
+    let rows:Vec<Value>=sqlx::query_scalar("WITH members AS(SELECT s.owner_id,s.run_id,c.cycle_id FROM trade_book_snapshots s JOIN trade_epoch_cycles c ON c.owner_id=s.owner_id AND c.epoch_id=s.epoch_id AND c.symbol=s.symbol AND c.position_side=s.position_side AND c.ordinal<=s.closed_through WHERE s.owner_id=$1 AND s.run_id=ANY($2) UNION ALL SELECT owner_id,run_id,open_cycle_id FROM trade_book_snapshots WHERE owner_id=$1 AND run_id=ANY($2) AND open_cycle_id IS NOT NULL), page AS MATERIALIZED(SELECT c.id,p.run_id FROM members p JOIN trade_cycles c ON c.owner_id=p.owner_id AND c.id=p.cycle_id JOIN trade_projection_runs r ON r.owner_id=p.owner_id AND r.id=p.run_id WHERE r.status='ready' AND ($3::text IS NULL OR c.symbol=$3) AND ($4::uuid IS NULL OR c.id>$4) AND ($5::timestamptz IS NULL OR COALESCE((c.body->>'closed_at')::timestamptz,'infinity')>=$5) AND ($6::timestamptz IS NULL OR COALESCE((c.body->>'opened_at')::timestamptz,'-infinity')<$6) AND ($7::text IS NULL OR c.body->>'direction'=$7) AND ($8::text IS NULL OR c.body->>'status'=$8) ORDER BY c.id LIMIT 101) SELECT jsonb_build_object('id',c.id,'connection_id',c.connection_id,'projection_run_id',r.id,'cycle',c.body,'ledger_revision',r.ledger_revision,'stale',r.ledger_revision<>e.ledger_revision) FROM page p JOIN trade_cycles c ON c.owner_id=$1 AND c.id=p.id JOIN trade_projection_runs r ON r.owner_id=$1 AND r.id=p.run_id JOIN exchange_connections e ON e.owner_id=$1 AND e.id=c.connection_id ORDER BY c.id").bind(owner).bind(&runs).bind(input.symbol).bind(after).bind(input.start_at).bind(input.end_at).bind(input.direction).bind(input.status).fetch_all(&s.db.pool).await?;
     let more = rows.len() > 100;
     let items: Vec<_> = rows.into_iter().take(100).collect();
     let next = if more {

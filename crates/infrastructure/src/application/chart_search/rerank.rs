@@ -17,6 +17,7 @@ fn request(item: &Value) -> Result<ChartRequest> {
             .ok_or_else(|| Error::bad("invalid_candidate"))
     };
     Ok(ChartRequest {
+        match_end_at: None,
         source: serde_json::from_value(item["market_source"].clone())
             .map_err(|_| Error::bad("candidate_source_plan_missing"))?,
         symbol: string("symbol")?.into(),

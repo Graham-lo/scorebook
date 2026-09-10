@@ -53,20 +53,14 @@ pub async fn evidence(
         .iter()
         .filter(|o| o.confidence >= 0.98 && o.r#box[1] < 0.3)
     {
-        for word in obs
-            .text
-            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        {
+        for word in obs.text.split(|c: char| {
+            !c.is_ascii_alphanumeric() && !scorebook_core::domain::instrument::symbol_character(c)
+        }) {
             let tf = word.to_lowercase();
             if ["1m", "5m", "15m", "1h", "4h", "1d"].contains(&tf.as_str()) {
                 intervals.insert(tf);
             }
-            if word.len() >= 5
-                && word.len() <= 40
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-            {
+            if word.chars().count() >= 5 && scorebook_core::domain::instrument::valid_symbol(word) {
                 symbols.insert(word.to_string());
             }
         }

@@ -192,7 +192,16 @@ async fn main() -> anyhow::Result<()> {
                 let mut rx = rx.clone();
                 workers.spawn(async move {
                     let mut next_gc=tokio::time::Instant::now();
+                    let mut next_replay_sweep=tokio::time::Instant::now();
                     loop {
+                        // Hourly fallback for replay bars the frontend never deleted on exit.
+                        if queue=="maintenance" && tokio::time::Instant::now()>=next_replay_sweep {
+                            match scorebook::application::replay::sweep(&services).await {
+                                Ok(n)=>{if n>0 {tracing::info!(removed=n,"expired replay bars swept");}},
+                                Err(e)=>tracing::warn!(code=%e.code,"replay sweep failed"),
+                            }
+                            next_replay_sweep=tokio::time::Instant::now()+std::time::Duration::from_secs(3600);
+                        }
                         if queue=="maintenance" && tokio::time::Instant::now()>=next_gc {
                             if let Err(e)=scorebook::application::backups::schedule(&services).await {tracing::warn!(code=%e.code,"backup scheduling failed");}
                             if let Err(e)=scorebook::application::gc::schedule(&services).await {tracing::warn!(code=%e.code,"cleanup scheduling failed");}

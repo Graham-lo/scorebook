@@ -80,6 +80,7 @@ pub async fn search_single_mode(
     input: SimilarityQuery,
     persist: bool,
 ) -> Result<Value> {
+    scorebook_core::domain::chart_match::require_interval(input.timeframe.as_deref())?;
     let body = json!(input);
     // Query encoder work is outside the idempotency DB transaction.
     let (vector, quality, _) = embed_mode(
@@ -119,7 +120,7 @@ pub async fn search_single_mode(
          WHERE a.owner_id=e.owner_id AND a.id=e.attachment_id AND a.kind='scene'
          AND a.uploaded_at<=c.submitted_at AND (a.captured_at IS NULL OR a.captured_at<=c.submitted_at)
          AND c.submitted_at<=$3 AND a.uploaded_at<=$3
-         AND ($4::text IS NULL OR c.instrument=$4) AND ($5::text IS NULL OR c.market=$5) AND ($6::text IS NULL OR c.timeframe=$6) OFFSET 0)
+         AND ($4::text IS NULL OR c.instrument=$4) AND ($5::text IS NULL OR c.market=$5) AND c.timeframe=$6 OFFSET 0)
        ORDER BY e.embedding::vector({dimension}) <=> $8::vector({dimension}) LIMIT $7
       ), candidates AS (
        SELECT e.attachment_id,a.sha256,c.id AS call_id,c.submitted_at,c.original_text,c.instrument,c.market,c.timeframe,e.distance,
@@ -129,7 +130,7 @@ pub async fn search_single_mode(
        JOIN calls c ON c.owner_id=l.owner_id AND c.id=l.call_id
        WHERE a.kind='scene' AND a.uploaded_at<=c.submitted_at AND (a.captured_at IS NULL OR a.captured_at<=c.submitted_at)
          AND c.submitted_at<=$3 AND a.uploaded_at<=$3
-         AND ($4::text IS NULL OR c.instrument=$4) AND ($5::text IS NULL OR c.market=$5) AND ($6::text IS NULL OR c.timeframe=$6)
+         AND ($4::text IS NULL OR c.instrument=$4) AND ($5::text IS NULL OR c.market=$5) AND c.timeframe=$6
       ), unique_files AS(SELECT DISTINCT ON(sha256) * FROM candidates ORDER BY sha256,distance,submitted_at,call_id),
       grouped AS(SELECT DISTINCT ON(episode_key) * FROM unique_files ORDER BY episode_key,distance,submitted_at,call_id)
       SELECT * FROM grouped ORDER BY distance,call_id LIMIT $9"#

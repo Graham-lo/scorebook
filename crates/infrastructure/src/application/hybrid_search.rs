@@ -14,6 +14,7 @@ pub async fn search(
     input: SimilarityQuery,
     persist: bool,
 ) -> Result<Value> {
+    scorebook_core::domain::chart_match::require_interval(input.timeframe.as_deref())?;
     let body = json!(input);
     if persist {
         let (tx, cached) = s.db.write(owner, "similarity.hybrid", key, &body).await?;

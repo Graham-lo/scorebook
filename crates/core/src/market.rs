@@ -21,6 +21,7 @@ pub trait MarketDataProvider: Send + Sync {
         end: DateTime<Utc>,
     ) -> ProviderFuture<'a>;
     fn exchange_info<'a>(&'a self, market: &'a str) -> ProviderFuture<'a>;
+    fn tickers_24h<'a>(&'a self, market: &'a str) -> ProviderFuture<'a>;
 }
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize, utoipa::ToSchema, PartialEq)]

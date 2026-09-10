@@ -121,6 +121,13 @@ pub enum Action {
     ReviewSnooze,
     Instruments,
     Capabilities,
+    AttachmentLocationPut,
+    AttachmentLocationDelete,
+    AttachmentLocateGet,
+    AttachmentLocateRequest,
+    ChartSetupPut,
+    ReplayGet,
+    ReplayClear,
     AttachmentDownload,
     ExportDownload,
 }

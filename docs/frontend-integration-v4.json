@@ -1,0 +1,38 @@
+{
+  "isolated_database": true,
+  "unmodified_frontend_test_sha256": "4c955862ed0ddff5de3ee029693e55ad2c59584c91bf3a35d9043b1cff2d2ce5",
+  "exit_code": 1,
+  "log": "/Users/mdd/zhk/scorebook-backend/docs/frontend-integration-v4.log",
+  "binary_sha256": "5fec43a7be9a880da3671330793ab44dea8ac18bdb83dcb42ad5729068f3712b",
+  "diagnosis": {
+    "statistics_members_without_unsupported_limit": {
+      "count": 5,
+      "http_status": 200
+    },
+    "unconfigured_chat_run": {
+      "status": "queued",
+      "job_status": "blocked_capability",
+      "model_id": "unconfigured",
+      "error_code": "chat_model_not_configured",
+      "answer": null
+    },
+    "embedding_jobs_before_wait": [
+      [
+        "succeeded",
+        null,
+        6
+      ]
+    ],
+    "structure_search_after_indexing": {
+      "original_hits": 0,
+      "after_index_hits": 3
+    },
+    "embedding_jobs_after_wait": [
+      [
+        "succeeded",
+        null,
+        6
+      ]
+    ]
+  }
+}

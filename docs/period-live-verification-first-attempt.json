@@ -1,0 +1,28 @@
+{
+  "scope": {
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT"
+    ],
+    "intervals": [
+      "1h",
+      "4h"
+    ],
+    "recent_bars_per_range": 512
+  },
+  "checks": [
+    "missing/empty/unsupported period rejected before enqueue, both scopes",
+    "real local OCR and screenshot geometry executed; search period declared by test",
+    "12 bounded real Binance history index jobs completed",
+    "actual BTC listing boundary clips pre-listing range; 128 real early 1h bars tested",
+    "1h: 2 distinct-contract results, all same-period; live followthrough SVG verified"
+  ],
+  "raw_market_persisted": false,
+  "binary_sha256": "ebe3ece5430670e44b70a8788b718600dc6f1db76f14f0365ca33074b7a56afd",
+  "recognized_interval": null,
+  "status": "failed",
+  "failure": "AssertionError: ",
+  "isolated_database_deleted": true,
+  "temporary_directory_deleted": true,
+  "completed_at": "2026-09-10T10:13:50.651772+00:00"
+}

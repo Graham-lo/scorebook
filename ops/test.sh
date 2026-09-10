@@ -4,5 +4,4 @@ cd "$(dirname "$0")/.."
 set -a
 . ./.env
 set +a
-export DATABASE_URL="${DATABASE_URL%/scorebook}/scorebook_test"
-cargo test "$@" -- --test-threads=1
+exec python3 ops/run_tests.py "$@"
