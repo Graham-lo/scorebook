@@ -145,6 +145,11 @@ pub struct LocateOverride {
     pub market: Option<String>,
     #[serde(default)]
     pub interval: Option<String>,
+    /// 人已经看过并且说了「都不是」的那些候选窗口。累加的：第三轮要把前两轮
+    /// 一共六条都写在这里。给了就意味着这一次不是原地重试——索引会沿时间轴再
+    /// 往前推一段，拉没拉过的 K 线。不给就是从前那条自动定位的路，一格不变。
+    #[serde(default)]
+    pub exclude: Vec<Uuid>,
 }
 
 /// 改附件用途：把同板块对比图从 scene 降成 reference。

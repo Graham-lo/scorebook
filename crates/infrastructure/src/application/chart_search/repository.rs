@@ -22,8 +22,11 @@ pub async fn public_candidates(
 ) -> Result<Vec<Value>> {
     let mut tx = s.db.pool.begin().await?;
     crate::adapters::ann::configure(&mut tx).await?;
-    let rows=sqlx::query("WITH candidates AS MATERIALIZED (SELECT id,market,symbol,timeframe,start_at,end_at,bars_count,input_hash,embedding::vector(192) <=> $1::vector(192) AS distance FROM public_market.features WHERE model_id='candle-geometry-v2' AND published AND end_at<=$2 AND ($3::text IS NULL OR symbol=$3) AND ($4::text IS NULL OR market=$4) AND ($5::text IS NULL OR timeframe=$5) AND bars_count=ANY($6) ORDER BY embedding::vector(192) <=> $1::vector(192) LIMIT 3000) SELECT * FROM candidates ORDER BY distance+0,id LIMIT 1000")
-        .bind(pgvector::Vector::from(vector)).bind(input.cutoff_at).bind(&input.symbol).bind(&input.market).bind(&input.interval).bind(vec![64i32,128,256]).fetch_all(&mut *tx).await?;
+    // 排除写在 ANN 的那一层里，不是查完再在内存里滤：人否掉三条之后要补上三条
+    // 新的，而不是把三条空位留在结果里。`<> ALL('{}')` 恒为真，所以不给排除
+    // 列表时这一句什么都不做。
+    let rows=sqlx::query("WITH candidates AS MATERIALIZED (SELECT id,market,symbol,timeframe,start_at,end_at,bars_count,input_hash,embedding::vector(192) <=> $1::vector(192) AS distance FROM public_market.features WHERE model_id='candle-geometry-v2' AND published AND end_at<=$2 AND ($3::text IS NULL OR symbol=$3) AND ($4::text IS NULL OR market=$4) AND ($5::text IS NULL OR timeframe=$5) AND bars_count=ANY($6) AND id<>ALL($7) ORDER BY embedding::vector(192) <=> $1::vector(192) LIMIT 3000) SELECT * FROM candidates ORDER BY distance+0,id LIMIT 1000")
+        .bind(pgvector::Vector::from(vector)).bind(input.cutoff_at).bind(&input.symbol).bind(&input.market).bind(&input.interval).bind(vec![64i32,128,256]).bind(&input.exclude).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     let mut selected: Vec<Value> = Vec::new();
     for r in rows {
@@ -81,7 +84,7 @@ pub async fn private_candidates(
         let sql = format!(
             r#"WITH candidates AS MATERIALIZED (
           SELECT e.attachment_id,e.embedding::vector({dimension}) <=> $1::vector({dimension}) AS distance FROM image_embeddings e
-          WHERE e.owner_id=$2 AND e.model_id='{model}' AND e.attachment_id<>$3
+          WHERE e.owner_id=$2 AND e.model_id='{model}' AND e.attachment_id<>$3 AND e.attachment_id<>ALL($8)
           AND EXISTS(SELECT 1 FROM call_attachments l JOIN calls c ON c.owner_id=l.owner_id AND c.id=l.call_id JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id WHERE l.owner_id=e.owner_id AND l.attachment_id=e.attachment_id AND c.submitted_at<=$4 AND a.kind='scene' AND a.uploaded_at<=c.submitted_at AND (a.captured_at IS NULL OR a.captured_at<=c.submitted_at) AND ($5::text IS NULL OR c.instrument=$5) AND ($6::text IS NULL OR c.market=$6) AND ($7::text IS NULL OR c.timeframe=$7) OFFSET 0)
           ORDER BY e.embedding::vector({dimension}) <=> $1::vector({dimension}) LIMIT 3000), ranked AS (
           SELECT DISTINCT ON(a.sha256) e.attachment_id,c.id AS call_id,e.distance,a.sha256,c.timeframe,
@@ -99,6 +102,8 @@ pub async fn private_candidates(
             .bind(&input.symbol)
             .bind(&input.market)
             .bind(&input.interval)
+            // 人否掉过的那几张图不再参加这一轮的 ANN 取数，理由同公开那一条。
+            .bind(&input.exclude)
             .fetch_all(&mut *tx)
             .await?;
         tx.commit().await?;

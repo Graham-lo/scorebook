@@ -102,10 +102,22 @@ fn checked_override(input: &LocateOverride) -> Result<LocateOverride> {
         Some(v) => Some(super::replay::interval_for(Some(&v))?),
         None => None,
     };
+    // 同一条候选被点两次「都不是」（前端重画、两张图同 id）不该占两个名额，
+    // 所以先去重再看上限，顺序照人否掉的先后留着。
+    let mut exclude: Vec<Uuid> = Vec::new();
+    for id in &input.exclude {
+        if !exclude.contains(id) {
+            exclude.push(*id);
+        }
+    }
+    if exclude.len() > super::chart_search::MAX_EXCLUDE {
+        return Err(Error::bad("locate_exclude_too_many"));
+    }
     Ok(LocateOverride {
         symbol,
         market,
         interval,
+        exclude,
     })
 }
 
@@ -209,6 +221,8 @@ async fn screenshot_reading(s: &Services, owner: Uuid, attachment: Uuid) -> Loca
         symbol,
         market,
         interval,
+        // 读图只回答「这是什么」，与人否掉过什么无关。
+        exclude: Vec::new(),
     }
 }
 
@@ -360,6 +374,11 @@ pub async fn request(
             body[name] = json!(v);
         }
     }
+    // 人否掉的那几条也进指纹：同一把 Idempotency-Key 换了排除集合就是另一次
+    // 请求。没否过任何东西时这一格整个不出现，指纹仍旧逐字节和从前一样。
+    if !over.exclude.is_empty() {
+        body["exclude"] = json!(over.exclude);
+    }
     let (mut tx, cached) = s.db.write(owner, "attachment.locate", key, &body).await?;
     if let Some(v) = cached {
         return Ok(v);
@@ -390,12 +409,18 @@ pub async fn request(
             // 一份「这几格是人选的」：其余几格只是当天记录的标的，事后不该拿它
             // 去盖图上写着的东西。
             let chosen = chosen_fields(&over);
+            let mut job_body = json!({"call_id":call,"attachment_id":attachment,"trigger":"manual","symbol":symbol,"market":market,"interval":interval,"chosen":chosen});
+            // 排除集合只在真有的时候写进去：没有它的 job 体和从前一模一样，
+            // worker 读到的东西也就一个字节没动。
+            if !over.exclude.is_empty() {
+                job_body["exclude"] = json!(over.exclude);
+            }
             let id = jobs::enqueue_tx(
                 &mut tx,
                 owner,
                 KIND,
                 &format!("{attachment}:manual:{done}"),
-                json!({"call_id":call,"attachment_id":attachment,"trigger":"manual","symbol":symbol,"market":market,"interval":interval,"chosen":chosen}),
+                job_body,
             )
             .await?;
             sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'status',j.status,'result',j.result,'created_at',j.created_at) FROM jobs j WHERE j.id=$1")
@@ -503,6 +528,7 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
         symbol: j.body["symbol"].as_str().map(str::to_string),
         market: j.body["market"].as_str().map(str::to_string),
         interval: j.body["interval"].as_str().map(str::to_string),
+        exclude: serde_json::from_value(j.body["exclude"].clone()).unwrap_or_default(),
     };
     if let Some(location) = existing {
         // 已经钉住的图就按钉住的那份回显，不去猜记录写的是什么。
@@ -559,8 +585,14 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     // Nothing can be recognised against an index that does not exist. This
     // machine deliberately runs no history sync, so the windows this search
     // needs are built here, now, around this one judgment moment.
-    let index = ensure_index(s, j, &market, &symbol, &interval, judgment).await?;
-    let input = json!({"attachment_id":attachment,"region":null,"scope":"binance_history","symbol":&symbol,"market":&market,"interval":&interval,"cutoff_at":judgment,"reverse":false,"red_up":false,"limit":3});
+    // 人点过「都不是」才把索引往更早推：那句话的意思是「这段历史里没有」，不是
+    // 「再算一遍」。自动定位和第一次手动都照旧只看判断时刻前面那一段。
+    let widen = j.body["trigger"].as_str() == Some("manual") && !over.exclude.is_empty();
+    let index = ensure_index(s, j, &market, &symbol, &interval, judgment, widen).await?;
+    let mut input = json!({"attachment_id":attachment,"region":null,"scope":"binance_history","symbol":&symbol,"market":&market,"interval":&interval,"cutoff_at":judgment,"reverse":false,"red_up":false,"limit":3});
+    if !over.exclude.is_empty() {
+        input["exclude"] = json!(over.exclude);
+    }
     // This job is the search run, so its candidates stay readable afterwards at
     // GET /v1/chart-search/runs/{id} and the written location can cite it.
     sqlx::query("INSERT INTO chart_search_runs(id,owner_id,attachment_id,body) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET body=EXCLUDED.body,result=NULL,completed_at=NULL")
@@ -587,6 +619,35 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     Ok(decided)
 }
 
+/// 一段有多长：判断时刻往前 768 根，和重温窗口自己的宽度一样。
+const SPAN: i64 = 3 * super::history::LOCATE_WINDOWS[2] as i64;
+
+/// 最多往前推几段。1h 周期上 8 段是 6144 根、约八个半月；再往前，「这张截图拍的
+/// 是这个合约的哪一段」已经不是一次检索能回答的问题了。
+const MAX_SPANS: i64 = 8;
+
+/// 第 n 段（n 从 0 起）的边界，以及它名义上有多少根。
+///
+/// 第 0 段就是从前唯一的那一段：`[T0 − 768 根, T0 向下取整]`。往前推的每一段接着
+/// 上一段的起点再退 768 根，但**结尾往后放宽 255 根**——一个 256 根的窗口要是正好
+/// 横跨两段的交界，两段都不完整包含它，不放宽就会在交界处留一个谁也没建的洞。
+/// 多出来的那截会重复建一遍 feature，这不要紧：`public_market.features` 的 id 是
+/// 坐标和输入的 md5，插入一律 `ON CONFLICT DO NOTHING`，本来就是幂等的。
+fn span_of(
+    iv: super::history::Interval,
+    base: DateTime<Utc>,
+    n: i64,
+) -> (DateTime<Utc>, DateTime<Utc>, i64) {
+    let overlap = if n == 0 {
+        0
+    } else {
+        super::history::LOCATE_WINDOWS[2] as i64 - 1
+    };
+    let start = iv.add_bars(base, -(n + 1) * SPAN);
+    let end = iv.add_bars(base, -n * SPAN + overlap);
+    (start, end, SPAN + overlap)
+}
+
 /// The bounded index this one match needs, and not one bar more.
 ///
 /// The range is the replay window's own: `[T0 − 3×256 bars, T0 floored to the
@@ -599,6 +660,11 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
 /// This is not history sync: it subscribes to nothing, rolls forward nowhere,
 /// and stores vectors plus time coordinates only. It happens once, with the
 /// match, and the bars are dropped when it returns.
+///
+/// `widen` 是「人看了候选，说都不是」。这时候在同一批永久索引上重跑毫无意义——
+/// 阈值没变、窗口没变，检索必然逐字节吐回同样三条。所以它改的是**去哪儿找**：
+/// 从第 0 段往上数，找第一段还没建过的，把那一段的 K 线拉回来建成窗口。轮次由
+/// 这里自己数出来，不由调用方传——客户端算错一轮，人就白点一次。
 pub async fn ensure_index(
     s: &Services,
     j: &Job,
@@ -606,18 +672,44 @@ pub async fn ensure_index(
     symbol: &str,
     interval: &str,
     judgment: DateTime<Utc>,
+    widen: bool,
 ) -> Result<Value> {
     let iv = super::history::interval_of(interval)?;
-    let end = iv.floor(judgment);
-    let bars = 3 * super::history::LOCATE_WINDOWS[2] as i64;
     // 按根数后退，1w/1M 这种对齐特殊或长度可变的周期也才是真的 768 根。
-    let start = iv.add_bars(end, -bars);
-    let range = json!({"market":market,"symbol":symbol,"interval":interval,"start_at":start,"end_at":end,"bars":bars});
-    if super::history::covered(s, market, symbol, interval, start, end).await? {
-        return Ok(json!({"built":false,"reason":"already_indexed","range":range}));
+    let base = iv.floor(judgment);
+    // `range` 保持从前的形状不动，第几段单独一格说：第 0 段的那条自动定位路径，
+    // 记下来的范围得和从前一个字节不差。
+    let described = |start: DateTime<Utc>, end: DateTime<Utc>, bars: i64| {
+        json!({"market":market,"symbol":symbol,"interval":interval,"start_at":start,"end_at":end,"bars":bars})
+    };
+    let limit = if widen { MAX_SPANS } else { 1 };
+    let mut chosen = None;
+    for n in 0..limit {
+        let (start, end, bars) = span_of(iv, base, n);
+        if !super::history::covered(s, market, symbol, interval, start, end).await? {
+            chosen = Some((n, start, end, bars));
+            break;
+        }
     }
+    let Some((n, start, end, bars)) = chosen else {
+        let (start, end, bars) = span_of(iv, base, limit - 1);
+        let range = described(start, end, bars);
+        // 没点过「都不是」的那条路照旧只看第 0 段，命中就是 already_indexed；
+        // 推到上限还段段都建过了，才是真的没地方再往前推。
+        let reason = if widen {
+            "range_exhausted"
+        } else {
+            "already_indexed"
+        };
+        return Ok(
+            json!({"built":false,"reason":reason,"range":range,"span":limit-1,"exhausted":widen}),
+        );
+    };
+    let range = described(start, end, bars);
     let mut feature_rows = 0i64;
     let mut actual_start: Option<Value> = None;
+    let mut fetched = 0i64;
+    let mut clipped = false;
     for window_bars in super::history::LOCATE_WINDOWS {
         let coverage = super::history::index_range(
             s,
@@ -636,13 +728,27 @@ pub async fn ensure_index(
         )
         .await?;
         feature_rows += coverage["feature_rows"].as_i64().unwrap_or(0);
+        fetched = fetched.max(coverage["source_bars_fetched"].as_i64().unwrap_or(0));
+        // `index_range` 对上市日晚于请求起点的合约是「少几根」而不是报错，所以
+        // 实际起点追不到请求起点，就是这个合约的历史到头了。
+        if coverage["actual_start"]
+            .as_str()
+            .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+            .is_some_and(|v| v.with_timezone(&Utc) > start)
+        {
+            clipped = true;
+        }
         if actual_start.is_none() && !coverage["actual_start"].is_null() {
             actual_start = Some(coverage["actual_start"].clone());
         }
     }
-    Ok(
-        json!({"built":true,"feature_rows":feature_rows,"range":range,"windows":super::history::LOCATE_WINDOWS,"stride_bars":1,"actual_start":actual_start,"raw_market_storage":"none"}),
-    )
+    // 拉回来就是空的，或者只拿到上市之后那一截：能建的都建了，再往前没有了。
+    let exhausted = fetched == 0 || clipped || n + 1 >= MAX_SPANS;
+    let mut built = json!({"built":true,"feature_rows":feature_rows,"range":range,"windows":super::history::LOCATE_WINDOWS,"stride_bars":1,"actual_start":actual_start,"raw_market_storage":"none","span":n,"exhausted":exhausted});
+    if exhausted && widen {
+        built["reason"] = json!("range_exhausted");
+    }
+    Ok(built)
 }
 
 /// The decision, kept apart from where the windows came from: either the best
@@ -722,6 +828,7 @@ mod provenance_tests {
                 symbol: None,
                 market: None,
                 interval: some("15m"),
+                exclude: Vec::new(),
             }),
             ["interval"]
         );
@@ -730,6 +837,7 @@ mod provenance_tests {
                 symbol: some("SNDKUSDT"),
                 market: some("usd_m"),
                 interval: some("1h"),
+                exclude: Vec::new(),
             }),
             ["symbol", "market", "interval"]
         );

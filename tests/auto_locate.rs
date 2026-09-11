@@ -335,7 +335,7 @@ async fn a_match_builds_the_window_index_around_the_judgment_moment_once() {
     let start = end - Duration::hours(768);
     assert_eq!(index_rows(&s, start, end).await, (0, 0));
 
-    let built = locate::ensure_index(&s, &j, "usd_m", "ETHUSDT", "1h", judgment)
+    let built = locate::ensure_index(&s, &j, "usd_m", "ETHUSDT", "1h", judgment, false)
         .await
         .unwrap();
     assert_eq!(built["built"], true);
@@ -357,13 +357,192 @@ async fn a_match_builds_the_window_index_around_the_judgment_moment_once() {
 
     // Asked for again: already covered, so nothing is fetched and nothing is
     // written a second time.
-    let again = locate::ensure_index(&s, &j, "usd_m", "ETHUSDT", "1h", judgment)
+    let again = locate::ensure_index(&s, &j, "usd_m", "ETHUSDT", "1h", judgment, false)
         .await
         .unwrap();
     assert_eq!(again["built"], false);
     assert_eq!(again["reason"], "already_indexed");
     assert_eq!(again["range"], built["range"]);
     assert_eq!(index_rows(&s, start, end).await, (features, segments));
+}
+
+/// 「都不是」不该是原地重试。
+///
+/// 线上那五条 job 的候选逐字节相同，因为第二次起 `covered()` 就命中了第 0 段，
+/// 检索永远在同一批窗口上跑。人说「都不是」的意思是「这段历史里没有」，所以索引
+/// 要沿时间轴往前推一段，拉没拉过的 K 线；推到第几段由后端自己数，不指望客户端
+/// 算对轮次。
+#[tokio::test]
+async fn saying_none_of_these_pushes_the_index_one_span_further_back_each_time() {
+    let (s, o, _tmp) = setup().await;
+    let (call, _attachment) = record(&s, o, "widen").await;
+    knowledge::review(&s, o, "review", review_of(call))
+        .await
+        .unwrap();
+    let j = claim_locate(&s, o).await;
+    let judgment = Utc::now() - Duration::days(4);
+    let base = DateTime::from_timestamp(judgment.timestamp() / 3600 * 3600, 0).unwrap();
+
+    // 第 0 段：从前唯一的那一段，逐字节不变。
+    let first = locate::ensure_index(&s, &j, "usd_m", "WIDENUSDT", "1h", judgment, false)
+        .await
+        .unwrap();
+    assert_eq!(first["built"], true);
+    assert_eq!(first["span"], 0);
+    assert_eq!(first["range"]["start_at"], json!(base - Duration::hours(768)));
+    assert_eq!(first["range"]["end_at"], json!(base));
+    assert_eq!(first["range"]["bars"], 768);
+
+    // 人点了「都不是」：第 0 段已经建过，往前推到第 1 段。结尾比第 0 段的起点
+    // 晚 255 根，正是为了让横跨交界的 256 根窗口也有人建。
+    let second = locate::ensure_index(&s, &j, "usd_m", "WIDENUSDT", "1h", judgment, true)
+        .await
+        .unwrap();
+    assert_eq!(second["built"], true);
+    assert_eq!(second["span"], 1);
+    assert_eq!(
+        second["range"]["start_at"],
+        json!(base - Duration::hours(1536))
+    );
+    assert_eq!(
+        second["range"]["end_at"],
+        json!(base - Duration::hours(768 - 255))
+    );
+    assert_eq!(second["range"]["bars"], 768 + 255);
+    assert_eq!(second["exhausted"], false);
+
+    // 第三轮再往前一段，起点必须比上一轮更早——同一段上重跑没有任何意义。
+    let third = locate::ensure_index(&s, &j, "usd_m", "WIDENUSDT", "1h", judgment, true)
+        .await
+        .unwrap();
+    assert_eq!(third["span"], 2);
+    assert_eq!(
+        third["range"]["start_at"],
+        json!(base - Duration::hours(2304))
+    );
+    assert!(
+        third["range"]["start_at"].as_str().unwrap() < second["range"]["start_at"].as_str().unwrap()
+    );
+
+    // 交界处不留洞：第 0 段的起点前后各 256 根里，三种窗口尺寸都建得出来。
+    let across:i64=sqlx::query_scalar("SELECT count(*) FROM public_market.features WHERE symbol='WIDENUSDT' AND timeframe='1h' AND bars_count=256 AND start_at<$1 AND end_at>$1")
+        .bind(base - Duration::hours(768))
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(across, 255);
+
+    // 没点「都不是」的那条路一格没动：照旧只看第 0 段，命中就什么都不建。
+    let auto = locate::ensure_index(&s, &j, "usd_m", "WIDENUSDT", "1h", judgment, false)
+        .await
+        .unwrap();
+    assert_eq!(auto["built"], false);
+    assert_eq!(auto["reason"], "already_indexed");
+    assert_eq!(auto["span"], 0);
+    assert_eq!(auto["range"], first["range"]);
+}
+
+/// 往前推是有尽头的，到了就要说到了，不能继续假装还能再找。
+///
+/// 两种尽头：段数走到上限，和这个合约的历史本来就没那么早。
+#[tokio::test]
+async fn pushing_back_stops_at_the_limit_and_at_the_listing_date() {
+    let (s, o, _tmp) = setup().await;
+    let (call, _attachment) = record(&s, o, "exhaust").await;
+    knowledge::review(&s, o, "review", review_of(call))
+        .await
+        .unwrap();
+    let j = claim_locate(&s, o).await;
+    let judgment = Utc::now() - Duration::days(4);
+    let base = DateTime::from_timestamp(judgment.timestamp() / 3600 * 3600, 0).unwrap();
+
+    // 八段全都有人建过了（直接写覆盖记录，省掉八轮真的建索引）：再往前没有段
+    // 可推，报 range_exhausted，一根 K 线都不拉。
+    for window_bars in [64, 128, 256] {
+        let id = Uuid::new_v4();
+        let body = json!({"market":"usd_m","symbol":"EXHAUSTUSDT","interval":"1h","window_bars":window_bars});
+        sqlx::query("INSERT INTO public_market.generations(id,request_hash,body,status,published_at) VALUES($1,$2,$3,'ready',now())")
+            .bind(id).bind(format!("exhaust-{window_bars}")).bind(&body)
+            .execute(&s.db.pool).await.unwrap();
+        sqlx::query("INSERT INTO public_market.coverage_segments(generation_id,market,symbol,timeframe,start_at,end_at,status) VALUES($1,'usd_m','EXHAUSTUSDT','1h',$2,$3,'complete')")
+            .bind(id).bind(base - Duration::hours(100_000)).bind(base + Duration::hours(1))
+            .execute(&s.db.pool).await.unwrap();
+    }
+    let before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM public_market.features WHERE symbol='EXHAUSTUSDT'")
+            .fetch_one(&s.db.pool)
+            .await
+            .unwrap();
+    let out = locate::ensure_index(&s, &j, "usd_m", "EXHAUSTUSDT", "1h", judgment, true)
+        .await
+        .unwrap();
+    assert_eq!(out["built"], false);
+    assert_eq!(out["reason"], "range_exhausted");
+    assert_eq!(out["exhausted"], true);
+    let after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM public_market.features WHERE symbol='EXHAUSTUSDT'")
+            .fetch_one(&s.db.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+
+    // 另一种尽头：这个合约上市就在第 0 段中间。行情源只给上市之后的 K 线，
+    // 实际起点追不到请求起点，能建的还是建进去，但要照实说再往前没有了。
+    let s = s.with_market(std::sync::Arc::new(Listed {
+        listed: base - Duration::hours(500),
+    }));
+    let out = locate::ensure_index(&s, &j, "usd_m", "NEWUSDT", "1h", judgment, true)
+        .await
+        .unwrap();
+    assert_eq!(out["built"], true);
+    assert_eq!(out["span"], 0);
+    assert_eq!(out["exhausted"], true);
+    assert_eq!(out["reason"], "range_exhausted");
+    assert!(out["feature_rows"].as_i64().unwrap() > 0);
+}
+
+/// 上市日晚于请求起点的合约：少几根，不是错。
+struct Listed {
+    listed: DateTime<Utc>,
+}
+impl MarketDataProvider for Listed {
+    fn tickers_24h<'a>(&'a self, _: &'a str) -> scorebook_core::market::ProviderFuture<'a> {
+        Box::pin(async { unreachable!("the stage never ranks instruments") })
+    }
+    fn klines<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a str,
+        _: &'a str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> scorebook::application::ports::ProviderFuture<'a> {
+        let listed = self.listed;
+        Box::pin(async move {
+            let mut at = start.max(listed);
+            let mut bars = vec![];
+            while at + Duration::hours(1) <= end {
+                bars.push(json!({"start":at,"end":at+Duration::hours(1),"open":"100","high":"101","low":"99","close":"100"}));
+                at += Duration::hours(1);
+            }
+            Ok(json!({"bars":bars,"coverage_complete":true}))
+        })
+    }
+    fn trades<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a str,
+        _: DateTime<Utc>,
+        _: DateTime<Utc>,
+    ) -> scorebook::application::ports::ProviderFuture<'a> {
+        Box::pin(async { unreachable!("the stage never reads trades") })
+    }
+    fn exchange_info<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> scorebook::application::ports::ProviderFuture<'a> {
+        Box::pin(async { unreachable!("the stage never reads the catalog") })
+    }
 }
 
 /// 同板块对比图：记录写的是 ETHUSDT，这张截图画的却是别的合约。按图指定的
@@ -525,6 +704,7 @@ async fn the_worker_searches_the_instrument_the_screenshot_named() {
         j.body["symbol"].as_str().unwrap(),
         j.body["interval"].as_str().unwrap(),
         judgment,
+        false,
     )
     .await
     .unwrap();

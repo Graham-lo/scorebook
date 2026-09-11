@@ -1749,6 +1749,212 @@ async fn chart_v2_runs_ocr_public_candidate_refetch_and_source_change_exclusion(
         assert!(!persisted.contains("\"open\""));
     }
 }
+/// 排除列表是有上限的：人一轮否掉三条，攒到一百条已经是三十几轮，再往上不是
+/// 「继续找」而是这张图根本不该在这里找。越界在建任务之前就拒收，一条 SQL 里
+/// 不会绑进无限长的数组。反过来，不给排除列表时任务体里连这一格都不出现——
+/// 自动定位那条路的请求体、去重键和契约因此一格未动。
+#[tokio::test]
+async fn a_rejection_list_has_a_ceiling_and_an_absent_one_leaves_the_request_untouched() {
+    let (s, owner, _tmp) = setup().await;
+    let attachment = Uuid::new_v4();
+    sqlx::query("INSERT INTO attachments(id,owner_id,sha256,mime,size,width,height,kind) VALUES($1,$2,'test','image/png',1,640,320,'query')").bind(attachment).bind(owner).execute(&s.db.pool).await.unwrap();
+    let plain = json!({"attachment_id":attachment,"scope":"binance_history","interval":"1h"});
+    let ids = |n: usize| (0..n).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
+
+    let mut over = plain.clone();
+    over["exclude"] = json!(ids(101));
+    let error = chart_search::create(&s, owner, "too-many", serde_json::from_value(over).unwrap())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "chart_exclude_too_many");
+    // 422：这是请求本身不成立，不是暂时失败。
+    assert_eq!(
+        error.kind,
+        scorebook::error::ErrorKind::Invalid,
+        "an over-long rejection list is an invalid request"
+    );
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(queued, 0, "nothing may be enqueued for a refused request");
+
+    // 不给排除列表：任务体和从前逐字节相同，连 `"exclude"` 这个键都没有。
+    let created = chart_search::create(
+        &s,
+        owner,
+        "plain",
+        serde_json::from_value(plain.clone()).unwrap(),
+    )
+    .await
+    .unwrap();
+    let body: Value = sqlx::query_scalar("SELECT body FROM jobs WHERE owner_id=$1 AND id=$2")
+        .bind(owner)
+        .bind(serde_json::from_value::<Uuid>(created["job_id"].clone()).unwrap())
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert!(
+        body.get("exclude").is_none(),
+        "an empty rejection list must not appear in the job body: {body}"
+    );
+
+    // 正好一百条仍旧收下，并且确实写进了任务体。
+    let hundred = ids(100);
+    let mut at_limit = plain;
+    at_limit["exclude"] = json!(hundred);
+    let created = chart_search::create(
+        &s,
+        owner,
+        "at-limit",
+        serde_json::from_value(at_limit).unwrap(),
+    )
+    .await
+    .unwrap();
+    let body: Value = sqlx::query_scalar("SELECT body FROM jobs WHERE owner_id=$1 AND id=$2")
+        .bind(owner)
+        .bind(serde_json::from_value::<Uuid>(created["job_id"].clone()).unwrap())
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(body["exclude"], json!(hundred));
+}
+
+/// 人点「都不是」之后再搜一次，被否掉的那几个窗口必须真的不在结果里，而且腾出
+/// 来的名额要补上新的候选——排除发生在取 top-N 之前，不是查完再在内存里滤掉，
+/// 否则否掉三条就只剩三个空位。
+#[tokio::test]
+#[ignore = "native OCR required; synthetic market verifies the exclusion path, not real screenshot quality"]
+async fn windows_the_person_rejected_do_not_come_back_in_the_next_round() {
+    use scorebook::application::{calls, history, ports};
+    struct Market {
+        bars: Vec<scorebook::domain::criteria::Bar>,
+    }
+    impl ports::MarketDataProvider for Market {
+        fn tickers_24h<'a>(&'a self, _: &'a str) -> scorebook_core::market::ProviderFuture<'a> {
+            Box::pin(async { unreachable!("this fixture does not request instrument popularity") })
+        }
+        fn klines<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+            start: chrono::DateTime<chrono::Utc>,
+            end: chrono::DateTime<chrono::Utc>,
+        ) -> ports::ProviderFuture<'a> {
+            Box::pin(async move {
+                let bars: Vec<_> = self
+                    .bars
+                    .iter()
+                    .filter(|b| b.start >= start && b.end <= end)
+                    .cloned()
+                    .collect();
+                Ok(json!({"bars":bars,"coverage_complete":true}))
+            })
+        }
+        fn trades<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: chrono::DateTime<chrono::Utc>,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> ports::ProviderFuture<'a> {
+            Box::pin(async { panic!("not used") })
+        }
+        fn exchange_info<'a>(&'a self, _: &'a str) -> ports::ProviderFuture<'a> {
+            Box::pin(async { panic!("not used") })
+        }
+    }
+    let (s, o, _tmp) = setup().await;
+    let symbol = catalog_fixture(&s).await;
+    let start: chrono::DateTime<chrono::Utc> = "2024-01-01T00:00:00Z".parse().unwrap();
+    // 二百四十根、每六十四根一个窗口：够切出十来个互不重叠的候选，人否掉三个
+    // 之后后面还有得挑。
+    let bars: Vec<_> = (0..240)
+        .map(|i| {
+            let p = 100. + (i as f64) * 0.8 + ((i as f64) * 0.4).sin() * 5.;
+            scorebook::domain::criteria::Bar {
+                start: start + chrono::Duration::hours(i),
+                end: start + chrono::Duration::hours(i + 1),
+                open: p.to_string(),
+                high: (p + 2.).to_string(),
+                low: (p - 1.).to_string(),
+                close: (p + 0.5).to_string(),
+                volume: None,
+            }
+        })
+        .collect();
+    let end = start + chrono::Duration::hours(240);
+    let mut png = std::io::Cursor::new(Vec::new());
+    scorebook::domain::chart::raster(&bars[..64])
+        .unwrap()
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let s = s.with_market(std::sync::Arc::new(Market { bars }));
+    let attachment = calls::upload(&s, o, "query", png.into_inner(), "query".into(), None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE jobs SET status='cancelled' WHERE owner_id=$1")
+        .bind(o)
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    history::request(&s,o,"index",serde_json::from_value(json!({"symbol":symbol,"market":"usd_m","interval":"1h","start_at":start,"end_at":end,"window_bars":64,"stride_bars":16})).unwrap()).await.unwrap();
+    let j = jobs::claim_for(&s, Some(o)).await.unwrap().unwrap();
+    let result = history::build(&s, &j).await;
+    jobs::complete(&s, &j, result).await.unwrap();
+
+    let search = |key: &'static str, exclude: Vec<Value>| {
+        let s = &s;
+        let attachment = attachment["id"].clone();
+        let symbol = symbol.clone();
+        async move {
+            let mut body = json!({"attachment_id":attachment,"scope":"binance_history","symbol":symbol,"market":"usd_m","interval":"1h","cutoff_at":end});
+            if !exclude.is_empty() {
+                body["exclude"] = json!(exclude);
+            }
+            chart_search::create(s, o, key, serde_json::from_value(body).unwrap())
+                .await
+                .unwrap();
+            let j = jobs::claim_for(s, Some(o)).await.unwrap().unwrap();
+            let result = chart_search::run(s, &j).await.unwrap();
+            jobs::complete(s, &j, Ok(result.clone())).await.unwrap();
+            result
+        }
+    };
+    let first = search("round-1", vec![]).await;
+    let shown: Vec<Value> = first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].clone())
+        .collect();
+    assert!(
+        shown.len() >= 2,
+        "the fixture must offer several windows to reject: {}",
+        first["items"]
+    );
+    assert_eq!(first["rejected_by_hand"], 0);
+
+    // 人说了「都不是」：同一张图再搜一次，这几条不许再出现。
+    let second = search("round-2", shown.clone()).await;
+    let again: Vec<Value> = second["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].clone())
+        .collect();
+    for id in &shown {
+        assert!(!again.contains(id), "rejected window {id} came back");
+    }
+    assert_eq!(second["rejected_by_hand"], shown.len());
+    // 名额是补齐的，不是空着的：排除写在 ANN 那一层，所以还有候选就还有结果。
+    assert!(
+        !again.is_empty(),
+        "excluding the first round must free room for new candidates, not leave holes"
+    );
+}
 
 #[tokio::test]
 async fn screenshot_search_requires_period_before_creating_any_job() {

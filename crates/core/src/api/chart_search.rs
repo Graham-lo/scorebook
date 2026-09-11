@@ -30,6 +30,14 @@ pub struct ChartSearchInput {
     pub limit: Option<usize>,
     #[serde(default)]
     pub interval_policy: IntervalPolicy,
+    /// 已经给人看过、人说了「不是」的那些候选，这一次不必再算一遍。
+    ///
+    /// 公开历史里是 `public_market.features` 的窗口 id，私有记录里是附件 id：
+    /// 结果条目自己带的那个 id 就是这里要写的东西。排除在取 top-N **之前**生效，
+    /// 否则排掉三条就只剩不足三条了。空的时候整个字段不出现在请求体里，行为、
+    /// 指纹和契约都与从前一样。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<Uuid>,
 }
 #[derive(Clone, Serialize, Deserialize, ToSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]

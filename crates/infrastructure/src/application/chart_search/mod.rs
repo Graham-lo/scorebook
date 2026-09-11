@@ -95,6 +95,17 @@ fn check_interval(input: &ChartSearchInput) -> Result<()> {
     Ok(())
 }
 
+/// 人一轮否掉三条，累加到一百条就是三十几轮：再多不是「继续找」，是这张图根本
+/// 不该在这里找。给它一个上限，免得一条 SQL 里绑进无限长的数组。
+pub const MAX_EXCLUDE: usize = 100;
+
+fn check_exclude(exclude: &[Uuid]) -> Result<()> {
+    if exclude.len() > MAX_EXCLUDE {
+        return Err(Error::bad("chart_exclude_too_many"));
+    }
+    Ok(())
+}
+
 pub async fn create(
     s: &Services,
     owner: Uuid,
@@ -109,6 +120,7 @@ pub async fn create(
     {
         return Err(Error::bad("invalid_chart_search"));
     }
+    check_exclude(&input.exclude)?;
     check_interval(&input)?;
     let original = json!(input);
     let (mut tx, cached) = s.db.write(owner, "chart.search", key, &original).await?;
@@ -171,6 +183,7 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     let input: ChartSearchInput =
         serde_json::from_value(j.body.clone()).map_err(|_| Error::bad("invalid_search_job"))?;
     check_interval(&input)?;
+    check_exclude(&input.exclude)?;
     let (query, _, _) = analysis::evidence(
         s,
         j.owner,
@@ -206,7 +219,7 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
         IntervalPolicy::AnyInterval => "any_interval",
     };
     let ranked = best_matches(ranked, grouped, input.limit.unwrap_or(3));
-    let result = json!({"search_run_id":j.id,"protocol":chart_match::PROTOCOL,"status":"final","items":ranked,"excluded_candidates":excluded,"scope":input.scope,"interval":input.interval,"interval_policy":interval_policy,"cutoff_at":input.cutoff_at,"quality_validated":false,"query_quality":query.quality,"coverage":"published_geometry_v2_only","candidate_budget":3000,"rerank_budget":30,"grouping":if grouped {"best_verified_window_per_contract"} else if input.scope == ChartScope::BinanceHistory {"best_verified_windows_of_the_named_contract"} else {"exact_image_then_confirmed_episode"},"raw_market_storage":"none"});
+    let result = json!({"search_run_id":j.id,"protocol":chart_match::PROTOCOL,"status":"final","items":ranked,"excluded_candidates":excluded,"scope":input.scope,"interval":input.interval,"interval_policy":interval_policy,"rejected_by_hand":input.exclude.len(),"cutoff_at":input.cutoff_at,"quality_validated":false,"query_quality":query.quality,"coverage":"published_geometry_v2_only","candidate_budget":3000,"rerank_budget":30,"grouping":if grouped {"best_verified_window_per_contract"} else if input.scope == ChartScope::BinanceHistory {"best_verified_windows_of_the_named_contract"} else {"exact_image_then_confirmed_episode"},"raw_market_storage":"none"});
     repository::publish(s, j, &result, true).await?;
     Ok(result)
 }
