@@ -53,7 +53,22 @@ CREATE TABLE replay_bars(
 CREATE INDEX replay_bars_expiry ON replay_bars(expires_at);
 ```
 
-`chart_setups.body` 形状：`{"ma":[20,50,200],"ema":[],"boll":null|{"n":20,"k":"2"},"atr":null|{"n":14}}`。后端只校验形状（数组元素 1..500 的整数，最多 6 条线），不算指标。
+`chart_setups.body` 形状（2026-09-11 扩成整套指标，字段全部可缺省，老的四字段体照样能存能读）：
+
+```jsonc
+{
+  "ma": [30,120,256], "ema": [],
+  "boll": null|{"n":20,"k":"2"},
+  "atr": null|{"n":14},
+  "volume": null|{"ma":[5,10,30,60,120]},   // 非 null 就是要画 VOL 副图
+  "macd": null|{"fast":10,"slow":30,"signal":9},
+  "rsi": null|{"n":14}
+}
+```
+
+后端只校验形状、只存，不算任何指标值，前端自己画：`ma+ema` 合计 ≤ 8 条（`chart_setup_too_many_lines`）、所有周期 1..=500（`invalid_chart_setup_period`）、`volume.ma` ≤ 6 条（`chart_setup_too_many_lines`）、`macd` 要 `fast < slow`（`invalid_chart_setup_macd`）、`boll.k` 仍按 Decimal 字符串校验。多余字段照旧拒收。
+
+`migrations/0045_replay_bar_volume.sql`：`ALTER TABLE replay_bars ADD COLUMN volume text;`——VOL 副图要成交量，判决从不读它；旧缓存行留 null，24 小时过期清扫会自然换成带量的新行。REST（kline 第 6 列）和月度归档（CSV volume 列）两条取数路径都填。
 
 ### 1.3 接口
 
@@ -85,7 +100,8 @@ CREATE INDEX replay_bars_expiry ON replay_bars(expires_at);
     "end_at": null, "signed_return": null, "mfe": null, "mae": null,
     "mfe_at": "..."|null, "mae_at": "..."|null   // 在窗口 bars 里找到的极值所在 bar 的 start；找不到为 null
   },
-  "bars": [ {"start","end","open","high","low","close"} ],
+  "bars": [ {"start","end","open","high","low","close","volume"} ],   // volume 可为 null（旧缓存行 / 不带量的来源）
+  "bars_included": true,               // bars=none 时为 false，bars 为 []
   "storage_policy": "temporary;expires_at=…"
 }
 ```
@@ -93,6 +109,7 @@ CREATE INDEX replay_bars_expiry ON replay_bars(expires_at);
 - 判断时刻 = `body.original_claimed_at ?? submitted_at`。窗口起点 = 场景截图有 location 就取 `location.start_at`，否则判断时刻前 120 根；终点 = `min(now, marks.end_at ?? levels.horizon_end_at ?? 判断时刻+120 根)`；总数封顶 2000 根，超了从终点截断并 `truncated:true`。
 - bars 先查 `replay_bars`（同一次回放里前端可能多次请求，或上次退出没来得及删），缺的区间按 source 走现有 `market::data` 的取数路径（REST 分页或月度归档）从币安取，写入 `replay_bars`（`expires_at = now()+24h`），再返回。
 - `base_price`/`atr0` 的来源和结算路径保持一致（看 `assessment_monitor` / `domain/watch.rs` 的 `submission_base` / `atr_at_submission` 怎么来的，用同一个来源；拿不到就 null，不要自己另算一套）。
+- 查询参数 `bars`：不给或 `full` = 上面这套（取数、落缓存、续 `expires_at`）；`none` = 只交代舞台的坐标，**不调 REST/归档、不写 `replay_bars`、不续 `expires_at`**，`bars` 返回 `[]` 且 `bars_included:false`，`window.coverage_complete` 与 `marks.mfe_at/mae_at` 只按已经缓存着的 bars 算（没缓存就是 false / null），其余字段照常。别的取值 → `invalid_bars_mode`（本仓库把 Invalid 统一映射成 422，见 §1.7）。给自己直连币安拉 K 线、拉不到再回来要 full 的前端用。
 - 不写 outcomes、manifests、events。
 
 **`DELETE /v1/calls/{id}/replay`** → 用户退出回放时调用：删除这条记录窗口内的 `replay_bars` 行（按 market/symbol/interval/窗口范围），204。
@@ -146,12 +163,22 @@ ALTER TABLE attachment_locations ADD COLUMN matched_by text NOT NULL DEFAULT 'us
 ```
 
 **接口**：
-- `GET /v1/attachments/{id}/locate` → `{ location: {...}|null, job: { id, status, result, created_at }|null }`（job 取该附件最近一个 locate 任务）。
-- `POST /v1/attachments/{id}/locate` → 手动触发，规则见上；返回同样的形状，外加 `deduplicated: bool`。
+- `GET /v1/attachments/{id}/locate` → `{ location: {...}|null, job: {...}|null, symbol, market, interval }`（job 取该附件最近一个 locate 任务；后三项是这张图实际在用的三元组，见 §1.7）。
+- `POST /v1/attachments/{id}/locate` → 手动触发，规则见上；返回同样的形状，外加 `deduplicated: bool`；可带体 `{symbol?, market?, interval?}` 按图指定要找的品种。
 - `GET /v1/calls/{id}/replay`：没有 location 但有 queued/running 的 locate 任务时，照常按默认窗口返回 bars，外加顶层 `locating: { job_id, status }`；前端据此显示「正在定位」并轮询 `GET locate`，定位完成后重新拉 replay。有 location 时 `locating` 为 null。
 - `GET /v1/calls/{id}` 的 `attachments[].location` 带 `matched_by`。
 
 **验收**：复盘发布后 jobs 里出现一条 locate 任务；索引为空时跑一次定位任务后 `coverage_segments` 出现该品种周期围绕 T0 的 `complete` 段、`features` 有三档窗口的行，真实记录 a14dc89a 的场景截图第二次 POST 后 `outcome` 不再因 `candidates: []` 而 ambiguous（要么 located，要么给出 top3 真实候选）；重复发布/连点不产生第二条；任务跑完 `attachment_locations` 出现 `matched_by='auto'` 的行（用测试替身返回一个高分候选）；替身返回两个分数接近的候选时不写行、result 为 ambiguous；任务 running 时调 POST locate 返回 `deduplicated:true` 且 jobs 行数不变；任务 running 时调 replay 返回 `locating` 非空、不新建任务；用户 PUT location 后自动任务不覆盖。
+
+### 1.7 按图指定品种、改用途、只要坐标（用户 2026-09-11 补充）
+
+一条记录的三张场景截图可能分别是 SKHYUSDT / SNDKUSDT / MUUSDT 的同板块对比图，只按记录自己的 `instrument` 去找必然找不着；上传时按 scene 传了的对比图事后应该改得成 reference；自己能直连币安的前端不该为了拿窗口坐标逼后端去取一遍 K 线。
+
+- **`POST /v1/attachments/{id}/locate` 体 `{symbol?, market?, interval?}`**：三项都可缺省，缺的格回落到记录的 `instrument`/`market`/`timeframe`。`symbol` 过 `history_catalog::validate_symbol`（不合法 → `invalid_contract`），`market` 只认 `usd_m`/`coin_m`（否则 `invalid_market`），`interval` 过 `Interval::parse`（否则 `replay_interval_unsupported`）。空体、无体的行为与从前逐字节相同。实际用的三元组在入队时就定下来写进 job 体，worker 读的是它（跑的时候记录被改成别的品种也不影响这一次），`ensure_index` 用的是同一组；`GET`/`POST` 与 `jobs.result` 都回显实际在用的 `symbol`/`market`/`interval`，候选仍各自带自己的 `symbol`/`market`。指定值进幂等指纹：同一把 `Idempotency-Key` 换了品种是另一次请求（不给覆盖时指纹与从前完全一致）。复盘发布后的自动定位仍只对 `kind='scene'`、仍只用记录本身的品种。
+- **`PATCH /v1/attachments/{id}` 体 `{"kind":"scene"|"supplement"|"reference"}`**：owner 隔离，沿用 `replay.rs` 的 begin/end 幂等与审计；返回的行形状与记录详情里的 attachments 一项相同（`to_jsonb(attachments)-'owner_id'` 加 `location`）。不碰 `attachment_locations`（位置是这张图自己的事实，跟它派什么用场无关），改成 scene 也不触发自动定位。认不得的值 → `invalid_kind`，不存在的图 → 404。为此 `migrations/0046_attachment_kind_is_correctable.sql` 把 attachments 上的整行不可变触发器换成"只有 `kind` 一列可改"的触发器：字节、sha256、尺寸、上传时间照旧一格都动不得（证据不可变这条没松，松的只是"用途"这个判断）。
+- **`GET /v1/calls/{id}/replay?bars=none`**：见 §1.3。
+- **`GET /v1/instruments` 离线兜底**：清单本来就只从 `instrument_catalog` 读，唯一的实时调用是热度排序用的 24 小时成交额；现在它失败不再让整张清单打不开——退回目录自己的顺序，响应里 `source` 为 `cached`、`ordering` 为 `trading_then_symbol`，并始终带 `refreshed_at`（目录这份是什么时候刷进来的）。实时拿不到且目录从来没刷进来过才 503 `instruments_unavailable`。worker 的 maintenance 队列每 6 小时刷一次目录，启动先刷一次，失败只记日志、目录原样留着。
+- **状态码差异**：契约里写的 400（`invalid_bars_mode`、`invalid_kind`）在本仓库落成 422——`ErrorKind::Invalid` 全库统一映射 422（`crates/http/src/error.rs`），错误码字符串与契约一致。前端按 `error.code` 判断即可。
 
 ## 2. 前端
 
