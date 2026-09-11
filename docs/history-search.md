@@ -36,28 +36,31 @@
 
 按用户 2026-09-10 最新要求，只交付功能，不启动历史同步。实际测试用 BTC/ETH 两品种、1h/4h 两周期、每范围 512 根近期真实 K 线，另测 BTC 上线附近 128 根 1h K 线。193 条临时特征通过同周期检索与后续图验证后，隔离库与临时目录立即删除。
 
-上面那句「不启动历史同步」说的是**滚动订阅**，这一条至今没变；但「公共特征和覆盖均为 0」从 2026-09-11 起不再成立：`attachment.locate` 的按需建索引和 `history.universe` 的月档扇出都会往公共索引里写行，后者是人一条一条排的作业，不是订阅。2026-09-11 16:4x 实测主库，都是那一刻的事实、不是承诺，也都在当天那轮补跑开始之前测的（补跑的结果另记）：
+上面那句「不启动历史同步」说的是**滚动订阅**，这一条至今没变；但「公共特征和覆盖均为 0」从 2026-09-11 起不再成立：`attachment.locate` 的按需建索引和 `history.universe` 的月档扇出都会往公共索引里写行，后者是人一条一条排的作业，不是订阅。下面是 2026-09-11 当天那一轮 1d 补跑**跑完之后**的实测，是那一刻的事实、不是承诺：
 
-- `public_market.features` 已发布的行：1d 70862、1h 9758、30m 137、3d 29。
-- `public_market.coverage_segments`：1d 467 段 `complete` / 475 段 `partial`，1h 21 段 `complete`，30m 1 段，3d 1 段。
-- 那 475 段 1d `partial` 要分两种看：其中 167 段各是某个品种最早的一段、`actual_start` 就是它的上线日期——那是照实截断，永远不会变成 `complete`；剩下 308 段是月档没下全，属于 2026-09-11「建了一半的世代得留着让人补齐」那一改之后重新补得回来的（补跑能把段从 `partial` 升成 `complete`，规则见 docs/status.md 当日条目）。
+- `public_market.features` 已发布的行：1d 79374、1h 9758、30m 137、3d 29。
+- `public_market.coverage_segments` 的 1d 部分共 942 行，但**行数不是段数**：一个工作单元会给 64/128/256 三档窗口各建一个世代，而这张表按 `generation_id` 记，所以同一个 `(symbol, start_at, end_at)` 最多占三行。按单元去重后是 401 个单元、187 个品种，其中 221 个 `complete`、180 个 `partial`。拿 942 这个行数去分类会把同一个单元数三遍，得出来的结论是错的。
+- 那 180 个 `partial` 单元分两种，两种都**不是**「重跑就能补上」：166 个是某品种最早的一段、`actual_start` 就是它的上线日期，照实截断；另外 14 个全部是 `2022-01-01..2024-01-01` 这一段（SOLUSDT、XRPUSDT、LTCUSDT、TRXUSDT 等），月档一个没掉、首尾都顶到范围两端，断的是中间——币安自己的 `2022-02` 归档只到 2 月 25 日、`2022-04` 归档从 4 月 3 日才开始，缺的 5 天在上游就没有。
+- 这一轮补跑（a63bfbd 放开 ready 短路之后的第一轮）把 24 个单元实打实地从 `partial` 升成了 `complete`，那些是真掉了月档、重下就补回来的。作业本身 200/200 跑完，下了 2786 个月档，2 个品种在列归档时就 `archive_not_available`。
 - `replay_bars` 131 行（一次性展示缓存，带 `expires_at`，与索引无关）。
 
 数字会过期，查询不会。要当下的实况，自己跑这几条：
 
 ```sql
 SELECT timeframe, count(*) FROM public_market.features WHERE published GROUP BY 1 ORDER BY 2 DESC;
-SELECT timeframe, status, count(*) FROM public_market.coverage_segments GROUP BY 1,2 ORDER BY 1,2;
 SELECT count(*) FROM replay_bars;
 SELECT status, count(*) FROM history_subscriptions GROUP BY 1;   -- 滚动的历史订阅有没有开
--- 1d 的 partial 段分成「上市晚、照实截断」和「月档没下全、还补得回来」两类
-WITH seg AS (
-  SELECT symbol, status, start_at, actual_start,
-         row_number() OVER (PARTITION BY symbol ORDER BY start_at) AS no
-  FROM public_market.coverage_segments WHERE market='usd_m' AND timeframe='1d')
-SELECT count(*) FILTER (WHERE no=1 AND actual_start>start_at) AS listed_late,
-       count(*) FILTER (WHERE NOT (no=1 AND actual_start>start_at)) AS recoverable
-FROM seg WHERE status='partial';
+-- 覆盖按单元算，不按行算；并把 partial 拆成「上市晚」和「上游归档有缺口」两类
+WITH u AS (
+  SELECT DISTINCT ON (symbol, start_at, end_at)
+         symbol, start_at, end_at, actual_start, status
+  FROM public_market.coverage_segments WHERE market='usd_m' AND timeframe='1d'),
+n AS (SELECT *, row_number() OVER (PARTITION BY symbol ORDER BY start_at) AS no FROM u)
+SELECT status,
+       count(*) FILTER (WHERE no=1 AND actual_start>start_at) AS listed_late,
+       count(*) FILTER (WHERE NOT (no=1 AND actual_start>start_at)) AS other,
+       count(*) AS units
+FROM n GROUP BY status ORDER BY status;
 ```
 
 用户原图、记录和复盘保留。2026-09-10 的清理证据见 period-live-verification.json、public-history-cleanup.json——它们记的是那一天的状态，不是现在的。真实截图质量盲测与大规模性能仍未完成，「币安全部历史已建成」的覆盖结论也仍然没有发布。

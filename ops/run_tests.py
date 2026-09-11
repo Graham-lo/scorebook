@@ -34,7 +34,7 @@ def main():
     admin(f'CREATE DATABASE {name};')
     try:
         env['DATABASE_URL'] = urlunsplit(config._replace(path='/' + name))
-        result = subprocess.run(['cargo', 'test', *sys.argv[1:], '--', '--test-threads=1'], cwd=root, env=env)
+        result = subprocess.run(['cargo', 'test', '--workspace', *sys.argv[1:], '--', '--test-threads=1'], cwd=root, env=env)
         return result.returncode
     finally:
         admin(f'DROP DATABASE {name} WITH (FORCE);')
