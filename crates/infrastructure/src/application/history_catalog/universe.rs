@@ -97,8 +97,13 @@ impl Tally {
 /// 里会把整个作业挂成 `awaiting_input` 等人来管——对一个要扫两百个品种的扇出来说，
 /// 一个缺失的月份不该有这种杀伤力。所以这里只把「租约丢了」往外抛（那是真的该停），
 /// 其余一律记下来继续走。
+///
+/// 只认 `lease_lost` 这一个码。`generation_lease_lost` 长得像但不是一回事：那是某一份
+/// generation 的生产者被别人抢走了，只影响这一个单元，抢不走作业本身的租约——真的丢了
+/// 作业租约的话，连写进度都写不进去。第一次跑 1d 就是栽在这里：扫到第 199 个品种时冒出
+/// 一个带 lease 字样的 generation 冲突，被当成致命错误把整个作业带走了。
 fn fatal(e: &Error) -> bool {
-    e.code.contains("lease")
+    e.code == "lease_lost"
 }
 
 fn at(year: i32, month: u32) -> Result<DateTime<Utc>> {
