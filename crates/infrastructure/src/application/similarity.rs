@@ -120,6 +120,16 @@ pub async fn search_single_mode(
     crate::adapters::ann::configure(&mut tx).await?;
     // Keep eligibility as an index scan filter, then enrich a bounded image set.
     // OFFSET 0 prevents pull-up into a join/sort that defeats iterative HNSW ordering.
+    //
+    // 证据池的两道闸门都在下面这段 EXISTS 里，缺一不可：
+    // 一、`l.superseded_at IS NULL`——只收生效的那一张。人换掉一张图就是说它不
+    //     代表这条记录，被接替的图不该再替这条记录出来作证。
+    // 二、`a.uploaded_at<=c.submitted_at`（连同 captured_at）——这道闸门一个字都
+    //     不放松。放松了，换图就成了事后诸葛亮的后门：看完行情怎么走了再换一张
+    //     「我当时看的是这个」。记录成立那一刻还不存在的图，不算「你当时看到
+    //     的」，重温可以用它（那是给人看的），证据池不收。
+    // 两道一起的后果是明说的：提交之后才换的图，这条记录在证据池里就不出现了。
+    // 记录本身、旧图、blob 一个都没少，只是不再拿一张自己都不认的图去作证。
     let sql = format!(
         r#"WITH embedding_candidates AS MATERIALIZED (
        SELECT e.attachment_id,e.embedding::vector({dimension}) <=> $8::vector({dimension}) AS distance
@@ -127,7 +137,7 @@ pub async fn search_single_mode(
        WHERE e.owner_id=$1 AND e.model_id='{model}' AND e.attachment_id<>$2
        AND EXISTS(SELECT 1 FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id
          JOIN calls c ON c.owner_id=l.owner_id AND c.id=l.call_id
-         WHERE a.owner_id=e.owner_id AND a.id=e.attachment_id AND a.kind='scene'
+         WHERE a.owner_id=e.owner_id AND a.id=e.attachment_id AND a.kind='scene' AND l.superseded_at IS NULL
          AND a.uploaded_at<=c.submitted_at AND (a.captured_at IS NULL OR a.captured_at<=c.submitted_at)
          AND c.submitted_at<=$3 AND a.uploaded_at<=$3
          AND ($4::text IS NULL OR c.instrument=$4) AND ($5::text IS NULL OR c.market=$5) AND c.timeframe=$6 OFFSET 0)
@@ -138,7 +148,7 @@ pub async fn search_single_mode(
        FROM embedding_candidates e JOIN attachments a ON a.owner_id=$1 AND a.id=e.attachment_id
        JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id
        JOIN calls c ON c.owner_id=l.owner_id AND c.id=l.call_id
-       WHERE a.kind='scene' AND a.uploaded_at<=c.submitted_at AND (a.captured_at IS NULL OR a.captured_at<=c.submitted_at)
+       WHERE a.kind='scene' AND l.superseded_at IS NULL AND a.uploaded_at<=c.submitted_at AND (a.captured_at IS NULL OR a.captured_at<=c.submitted_at)
          AND c.submitted_at<=$3 AND a.uploaded_at<=$3
          AND ($4::text IS NULL OR c.instrument=$4) AND ($5::text IS NULL OR c.market=$5) AND c.timeframe=$6
       ), unique_files AS(SELECT DISTINCT ON(sha256) * FROM candidates ORDER BY sha256,distance,submitted_at,call_id),

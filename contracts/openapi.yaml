@@ -132,6 +132,15 @@ components:
         market:
           type: string
         score:
+          description: '匹配分。线上一直是字符串，因为库里是 `numeric`，回显时走 `score::text`，
+
+            不让它路过 f64 掉精度。但前端把刚拿到的 `match.score` 原样回填时它是个
+
+            JSON 数字，整个请求体会被 Json 提取器直接顶掉，报出来的只是一句
+
+            `invalid_request`——哪个字段错了都看不见。所以收的时候两种都认，数字按
+
+            它的十进制写法收下；发出去的仍然只有字符串一种形状。'
           type:
           - string
           - 'null'
@@ -2064,6 +2073,27 @@ components:
           type:
           - string
           - 'null'
+      type: object
+    SceneSelection:
+      additionalProperties: false
+      description: '换一张场景图，或把先前那一张重新指回来生效。
+
+
+        `attachment_id` 必须是 `kind=''scene''` 的附件：还没挂到这条记录上的会顺手挂上，
+
+        已经挂着的（包括已经被接替的那一张）直接重新生效。这条记录上其它在生效的
+
+        场景图链接一律置成已接替——一条记录的场景图本来就是单数的。'
+      properties:
+        attachment_id:
+          format: uuid
+          type: string
+        expected_revision:
+          format: int64
+          type: integer
+      required:
+      - attachment_id
+      - expected_revision
       type: object
     SearchRunControl:
       additionalProperties: false
@@ -4482,6 +4512,21 @@ paths:
                           type:
                           - object
                           - 'null'
+                        scene:
+                          properties:
+                            attachment_id:
+                              format: uuid
+                              type: string
+                            replaced_after_submission:
+                              type: boolean
+                          type:
+                          - object
+                          - 'null'
+                        scene_replaced_after_submission:
+                          description: true when the scene in effect was uploaded
+                            after the record was submitted; the superseded originals
+                            stay retrievable from GET /v1/calls/{id}
+                          type: boolean
                         source:
                           type: string
                         storage_policy:
@@ -4990,6 +5035,90 @@ paths:
                       type:
                       - object
                       - array
+                    - properties:
+                        deleted:
+                          const: true
+                      required:
+                      - deleted
+                      type: object
+                    - properties:
+                        expired:
+                          const: true
+                      required:
+                      - expired
+                      type: object
+                  meta:
+                    properties:
+                      api_version:
+                        const: v1
+                    required:
+                    - api_version
+                    type: object
+                required:
+                - data
+                - meta
+                type: object
+          description: Success
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+        '409':
+          description: Idempotency or revision conflict
+        '422':
+          description: Invalid input
+      x-required-permission: records.write
+  /v1/calls/{id}/scene:
+    put:
+      operationId: put__v1_calls__id__scene
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SceneSelection'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  data:
+                    anyOf:
+                    - additionalProperties: true
+                      properties:
+                        attachment_id:
+                          format: uuid
+                          type: string
+                        call_id:
+                          format: uuid
+                          type: string
+                        original_evidence_unchanged:
+                          const: true
+                        revision:
+                          type: integer
+                        scene_replaced_after_submission:
+                          type: boolean
+                        superseded:
+                          items:
+                            format: uuid
+                            type: string
+                          type: array
+                      required:
+                      - call_id
+                      - attachment_id
+                      - revision
+                      - superseded
+                      - scene_replaced_after_submission
+                      - original_evidence_unchanged
+                      type: object
                     - properties:
                         deleted:
                           const: true

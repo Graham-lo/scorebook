@@ -61,6 +61,7 @@ pub fn router(s: Services) -> Router {
         .route("/v1/calls/{id}/history", get(call_history))
         .route("/v1/calls/{id}/void", post(call_void))
         .route("/v1/calls/{id}/attachments", post(attachment_link))
+        .route("/v1/calls/{id}/scene", put(scene_put))
         .route("/v1/calls/{id}/corrections", post(correction_create))
         .route("/v1/calls/{id}/revisions", post(revision_create))
         .route(
