@@ -10,10 +10,12 @@ import { pathToFileURL } from 'node:url';
 
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 
+/** RFC 1918 private ranges plus 100.64.0.0/10 (CGNAT, used by Tailscale for the user's own devices). */
 function privateIPv4(address) {
   const parts = address.split('.').map(Number);
   return parts.length === 4 && parts.every(n => Number.isInteger(n) && n >= 0 && n <= 255) &&
-    (parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168));
+    (parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168) ||
+      (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127));
 }
 
 export async function createFrontendServer({ dist, tokenFile, api, port, lan = false, interfaces = networkInterfaces }) {
@@ -40,7 +42,10 @@ export async function createFrontendServer({ dist, tokenFile, api, port, lan = f
       const peer = req.socket.remoteAddress;
       if (peer !== '127.0.0.1' && !privateIPv4(peer ?? '')) return reject(res, 403);
     }
-    if (!allowedHosts.has(req.headers.host) || (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) || req.headers['sec-fetch-site'] === 'cross-site') return reject(res, 403);
+    // A top-level GET navigation from another site (a link in a chat app, a bookmark page, the OS "open") is how people
+    // arrive; only cross-site sub-resource / API requests are rejected, which is what the CSRF check is for.
+    const crossSiteNavigation = req.method === 'GET' && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document';
+    if (!allowedHosts.has(req.headers.host) || (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) || (req.headers['sec-fetch-site'] === 'cross-site' && !crossSiteNavigation)) return reject(res, 403);
     if (!req.url?.startsWith('/') || req.url.startsWith('//')) return reject(res, 400);
     let url;
     try { url = new URL(req.url, origin); } catch { return reject(res, 400); }

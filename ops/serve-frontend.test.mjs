@@ -22,7 +22,7 @@ for (const lan of [false, true]) test(`${lan ? 'LAN' : 'loopback'} frontend serv
     res.end('event: done\ndata: {}\n\n');
   });
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
-  let addresses = [{ family: 'IPv4', address: '192.168.124.9', internal: false }, { family: 'IPv4', address: '203.0.113.2', internal: false }];
+  let addresses = [{ family: 'IPv4', address: '192.168.124.9', internal: false }, { family: 'IPv4', address: '203.0.113.2', internal: false }, { family: 'IPv4', address: '100.72.84.39', internal: false }];
   const options = { dist, tokenFile: join(dir, 'token'), api: `http://127.0.0.1:${upstream.address().port}`, port: 5178, lan, interfaces: () => ({ en0: addresses }) };
   const app = await createFrontendServer(options);
   app.listen(0, '127.0.0.1'); await once(app, 'listening');
@@ -41,11 +41,16 @@ for (const lan of [false, true]) test(`${lan ? 'LAN' : 'loopback'} frontend serv
   assert.equal((await request('/', { host: 'attacker.invalid:5178' })).status, 403);
   assert.equal((await request('/api/v1/calls', { origin: 'https://attacker.invalid' }, 'POST', '{}')).status, 403);
   assert.equal((await request('/api/v1/calls', { 'sec-fetch-site': 'cross-site' })).status, 403);
+  assert.equal((await request('/api/v1/calls', { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' }, 'POST', '{}')).status, 403);
+  assert.equal((await request('/', { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' })).status, 200);
+  assert.equal((await request('/', { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' })).status, 403);
   assert.equal(calls.length, 0);
   assert.equal((await request('/', { host: 'localhost:5178' })).status, 200);
   assert.equal((await request('/', { host: '192.168.124.9:5178', origin: 'http://192.168.124.9:5178' })).status, lan ? 200 : 403);
   assert.equal((await request('/', { host: '192.168.124.10:5178' })).status, 403);
   assert.equal((await request('/', { host: '203.0.113.2:5178' })).status, 403);
+  assert.equal((await request('/', { host: '100.72.84.39:5178', origin: 'http://100.72.84.39:5178' })).status, lan ? 200 : 403);
+  assert.equal((await request('/', { host: '100.200.0.1:5178' })).status, 403);
   assert.equal((await request('/', { host: '192.168.124.9:5178', origin: 'http://attacker.invalid:5178' })).status, 403);
   if (lan) {
     addresses = [{ family: 'IPv4', address: '192.168.124.11', internal: false }];

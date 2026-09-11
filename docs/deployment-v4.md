@@ -8,9 +8,9 @@
 
 `ops/serve-frontend.mjs` 提供构建后的前端和同源流式 API 代理，访问凭证仅在服务端读取；静态产物中没有访问令牌。默认只监听 loopback，检查 Host/Origin，并支持 SSE 和图片流。
 
-2026-09-11 已按用户要求启用 Mac 局域网访问：`http://192.168.124.9:5178/#/home`，本机仍可用 `http://127.0.0.1:5178/#/home`。局域网设备共用 Mac 上同一账户及资料，当前没有独立访客账户；设备需与 Mac 网络互通，Mac 保持开机和唤醒。IP 来自 DHCP，变化后使用 Mac 的新地址。
+2026-09-11 已按用户要求启用 Mac 局域网访问：`http://192.168.124.9:5178/#/home`，本机仍可用 `http://127.0.0.1:5178/#/home`。局域网设备共用 Mac 上同一账户及资料，当前没有独立访客账户；设备需与 Mac 网络互通，Mac 保持开机和唤醒。IP 来自 DHCP，变化后使用 Mac 的新地址。同日追加 Tailscale 入口：不在同一 Wi-Fi 时用 Mac 的 Tailscale 地址 `http://100.72.84.39:5178/#/home`（Tailscale 的 100.64.0.0/10 段与 RFC 1918 三段同样视为私网，其余公网来源仍拒绝）。
 
-开启或更新局域网入口：`python3 ops/install-launchd.py --services frontend --lan`。该选项监听 IPv4，Host 仅接受 loopback 和本机当前私网网卡地址，Origin 必须与请求 Host 相同，拒绝跨站请求和非私网来源。后端、数据库和模型端口仍只在本机使用。更新前端服务时需保留 `--lan`；省略该选项会恢复仅本机访问。
+开启或更新局域网入口：`python3 ops/install-launchd.py --services frontend --lan`。该选项监听 IPv4，Host 仅接受 loopback 和本机当前私网网卡地址，Origin 必须与请求 Host 相同，拒绝跨站请求和非私网来源；从其它站点或聊天软件点链接进入的顶层 GET 导航（浏览器带 `Sec-Fetch-Site: cross-site`、`Sec-Fetch-Mode: navigate`）放行，只有跨站的子资源和 API 请求才被拒绝，否则 Chrome 从外部链接打开会显示 Forbidden。后端、数据库和模型端口仍只在本机使用。更新前端服务时需保留 `--lan`；省略该选项会恢复仅本机访问。
 
 构建前端后运行 `python3 ops/install-launchd.py`，安装 api、worker、vision、text、frontend 五个当前用户 LaunchAgent。更新单个组件使用 `--services api worker` 等参数；默认前端位置是相邻的 `scorebook-frontend/app/dist`，也可通过 `--frontend-dir` 指定。不要同时保留手动启动的旧 worker。
 
