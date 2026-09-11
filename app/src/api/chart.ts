@@ -97,6 +97,13 @@ export interface ChartSearchInput {
   red_up?: boolean
   /** 1…30。 */
   limit?: number
+  /**
+   * 人已经看过并且说了「都不是」的那几条，累加的：第三轮要把前两轮一共六条都
+   * 写在这里。排除在取 top-N **之前**生效，所以否掉三条换回来的是另外三条，
+   * 不是三个空位。一条都没否过的时候这一格整个不出现，请求体、幂等键和契约都
+   * 与从前一样。上限 100 条，再多后端回 `chart_exclude_too_many`。
+   */
+  exclude?: Uuid[]
 }
 
 export interface SearchStarted {
@@ -164,6 +171,17 @@ export type SearchCandidate = HistoryCandidate | PrivateCandidate
 
 export function isHistoryCandidate(item: SearchCandidate): item is HistoryCandidate {
   return 'id' in item && 'symbol' in item
+}
+
+/**
+ * 要把这一条报给 `exclude` 的时候写哪个 id。
+ *
+ * 两条路上这个 id 不是同一样东西：公开历史里是那一段行情的窗口 id，私库里是那
+ * 张截图的附件 id。结果条目自己带的那个就是要写的东西，所以这件事跟着契约放在
+ * 这里，而不是让界面那一层各自去猜。
+ */
+export function excludeId(item: SearchCandidate): Uuid {
+  return isHistoryCandidate(item) ? item.id : item.attachment_id
 }
 
 /** 被排除的候选：来源核验没过，或者那张图的 K 线结构读不出来。 */

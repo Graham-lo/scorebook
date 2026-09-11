@@ -8,22 +8,26 @@
 import { ApiError } from '../../api/errors'
 import { Latest } from '../../api/http'
 import { cancelSearch, searchRun, startSearch, type ChartSearchInput, type ChartSearchRun } from '../../api/chart'
+import type { Uuid } from '../../api/types'
 import { h } from '../../ui/dom'
 import { empty, note, spinner } from '../../ui/states'
 import { problem, toast } from '../../ui/toast'
-import { MAX_HITS, cancelAction, forgetRun, lane, moving, period, searchAction, state, rememberRun, queryFingerprint, searchVersion, finishSubmission, type SearchCtx } from './state'
+import { MAX_HITS, cancelAction, forgetRun, lane, moving, period, rejectedExcludes, searchAction, state, rememberRun, queryFingerprint, searchVersion, finishSubmission, type SearchCtx } from './state'
 
 /** 同一时间只有一条轮询在跑。 */
 let pollingVersion = 0
 
-export async function runSearch(ctx: SearchCtx): Promise<void> {
-  if (!state.queryId || state.submitting || (state.runId && (!state.run || moving(state.run.status)))) return
-  if (!period.chosen) {
-    problem('请先说清楚截图的 K 线周期，或者明说不限周期。')
-    return
-  }
-  const input: ChartSearchInput = {
-    attachment_id: state.queryId,
+/**
+ * 这一次要发出去的请求体。
+ *
+ * 单独拎出来是因为它有一处不能想当然：人一条都没否过的时候，`exclude` 整个字段
+ * 都不许出现——写成空数组，请求体和幂等键就跟从前不一样了，而这一次问的其实是
+ * 同一件事。
+ */
+export function searchBody(queryId: Uuid): ChartSearchInput {
+  const excluded = rejectedExcludes()
+  return {
+    attachment_id: queryId,
     scope: state.scope,
     ...(state.region ? { region: state.region } : {}),
     ...(state.symbol ? { symbol: state.symbol } : {}),
@@ -35,7 +39,17 @@ export async function runSearch(ctx: SearchCtx): Promise<void> {
     ...(state.reverse ? { reverse: true } : {}),
     ...(state.redUp ? { red_up: true } : {}),
     limit: Math.min(MAX_HITS, Math.max(1, state.limit)),
+    ...(excluded.length ? { exclude: excluded } : {}),
   }
+}
+
+export async function runSearch(ctx: SearchCtx): Promise<void> {
+  if (!state.queryId || state.submitting || (state.runId && (!state.run || moving(state.run.status)))) return
+  if (!period.chosen) {
+    problem('请先说清楚截图的 K 线周期，或者明说不限周期。')
+    return
+  }
+  const input = searchBody(state.queryId)
   forgetRun()
   const version = searchVersion
   const fingerprint = queryFingerprint()
@@ -43,6 +57,8 @@ export async function runSearch(ctx: SearchCtx): Promise<void> {
   ctx.repaintControls()
   ctx.resultPane.replaceChildren(spinner('正在安排这次检索…'))
   try {
+    // 幂等键跟着请求体走，否决集合也在里面：连着按两次「都不是」报的不是同一
+    // 份集合，于是这是两次不同的检索，而不是被当成同一次重发。
     const started = await startSearch(input, searchAction.keyFor(input))
     searchAction.reset()
     if (version !== searchVersion || fingerprint !== queryFingerprint()) return

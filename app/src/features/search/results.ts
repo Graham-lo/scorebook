@@ -3,7 +3,7 @@
 // 中途出现的 provisional 只是候选，会照样画出来但明说还没定；任务说做完了却没
 // 有最终结果，就照实说，不拿候选冒充结论。
 
-import { CHART_MATCH_PROTOCOL, type ChartSearchRun, type ExcludedCandidate, type FinalResult } from '../../api/chart'
+import { CHART_MATCH_PROTOCOL, excludeId, type ChartSearchRun, type ExcludedCandidate, type FinalResult, type SearchCandidate } from '../../api/chart'
 import { explain } from '../../api/errors'
 import * as jobs from '../../api/jobs'
 import type { JobStatus } from '../../api/types'
@@ -13,7 +13,7 @@ import { empty, foldout, note, progressLine } from '../../ui/states'
 import { kvRow } from './bits'
 import { hitList } from './hits'
 import { scopePane } from './scope'
-import { moving, state, type SearchCtx } from './state'
+import { MAX_EXCLUDE, moving, rejectAll, rejectedCount, rejectionFull, state, type SearchCtx } from './state'
 
 export function paintResults(ctx: SearchCtx): void {
   const pane = ctx.resultPane
@@ -107,17 +107,25 @@ function periodLabel(result: FinalResult): string {
 function paintFinal(ctx: SearchCtx, result: FinalResult, run: ChartSearchRun): void {
   const pane = ctx.resultPane
   const items = result.items ?? []
+  const refused = rejectedCount()
   if (!items.length) {
     pane.appendChild(
-      empty({
-        title: '没有找到结构接近的片段',
-        tip:
-          result.scope !== 'private'
-            ? '只在已经准备好并发布的范围里找。换个条件，或者先把更多时间段准备出来。'
-            : anyInterval(result)
-              ? '只有已经算过特征的现场截图才会被搜到。这次已经不按周期筛了，还是没有形状接近的；放宽品种范围，或者等更多截图索引出来。'
-              : '只有已经算过特征的现场截图才会被搜到。可放宽品种范围，或补全记录周期并等待截图索引；不会改用其他周期。'
-      }),
+      // 人一路否过来，这一次连一条没看过的都没换回来：这就是这些条件下的全部
+      // 了。说清楚是「找完了」，不是「搜坏了」——两者要人做的事不一样。
+      refused
+        ? empty({
+            title: '没有别的了',
+            tip: `你已经否掉 ${refused} 条，按同样的条件再找，没有更多没看过的了。换个周期、换个品种，或者放宽范围再问一次。`,
+          })
+        : empty({
+            title: '没有找到结构接近的片段',
+            tip:
+              result.scope !== 'private'
+                ? '只在已经准备好并发布的范围里找。换个条件，或者先把更多时间段准备出来。'
+                : anyInterval(result)
+                  ? '只有已经算过特征的现场截图才会被搜到。这次已经不按周期筛了，还是没有形状接近的；放宽品种范围，或者等更多截图索引出来。'
+                  : '只有已经算过特征的现场截图才会被搜到。可放宽品种范围，或补全记录周期并等待截图索引；不会改用其他周期。'
+          }),
     )
   } else {
     pane.append(
@@ -133,6 +141,7 @@ function paintFinal(ctx: SearchCtx, result: FinalResult, run: ChartSearchRun): v
       ),
       hitList(ctx, items, true),
     )
+    pane.appendChild(rejectRow(ctx, items, refused))
     pane.appendChild(
       note(
         'info',
@@ -149,6 +158,47 @@ function paintFinal(ctx: SearchCtx, result: FinalResult, run: ChartSearchRun): v
   if (result.excluded_candidates?.length) pane.appendChild(excludedPane(result.excluded_candidates))
   pane.appendChild(metaPane(result))
   pane.appendChild(scopePane(ctx))
+}
+
+/**
+ * 「都不是」：把这一屏报上去，下一次别再拿它们出来。
+ *
+ * 只挂在最终结果上。中途那批还只是候选，精排之后本来就可能整条换掉，对着它们
+ * 说「不是」并没有否掉什么东西。
+ *
+ * 这一页的候选池横跨很多合约和周期，所以排除本身就够了：把这三条摘掉，下一轮
+ * 浮上来的是另外三条——多半是别的品种，而不是同一段行情旁边挪几根 K 线。这里
+ * 不动检索范围，也不往更早的历史里推，那是重温那条路上的事。
+ */
+function rejectRow(ctx: SearchCtx, items: SearchCandidate[], refused: number): HTMLElement {
+  // 报上去之前先算一遍条数：满了还摆着按钮，按下去换回来的只是一个 422。
+  if (rejectionFull(items.length)) {
+    return h(
+      'div.acts',
+      { style: 'margin-top:10px' },
+      h('span.faint', {
+        text: `已经否掉 ${refused} 条，再加这一屏就超过一次能报的 ${MAX_EXCLUDE} 条了。接着找得换个条件重新搜。`,
+      }),
+    )
+  }
+  return h(
+    'div.acts',
+    { style: 'margin-top:10px' },
+    h('button.btn.sm.ghost', {
+      text: '都不是',
+      on: {
+        click: () => {
+          rejectAll(items.map(excludeId))
+          ctx.runSearch()
+        },
+      },
+    }),
+    h('span.faint', {
+      text: refused
+        ? `把这 ${items.length} 条也排掉，再找一批没看过的。之前已经排掉 ${refused} 条。`
+        : `把这 ${items.length} 条排掉，按同样的条件再找一批没看过的。`,
+    }),
+  )
 }
 
 /* ------------------------------------------------------ 被排掉的候选 */
