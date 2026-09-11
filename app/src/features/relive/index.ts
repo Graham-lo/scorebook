@@ -336,6 +336,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
         price: replay.judgment.base_price ? Number(replay.judgment.base_price) : null,
         label: badge || '这一刻',
         sub: words ? cut(words, 60) : null,
+        brief: true,
         kind: 'judgment',
         ...(words.length > 60 ? { onClick: () => showWords(words) } : {}),
       },
@@ -348,7 +349,8 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       judgmentAt: replay.judgment.at,
     })
     built.showUpTo(judgeIndex)
-    built.zoom({ from: 0, to: judgeIndex })
+    // 判断点右边留一段空白：判断气泡站在空白里，不压住判断前那几根。
+    built.zoom({ from: 0, to: judgeIndex + Math.max(6, Math.ceil((judgeIndex + 1) * 0.16)) })
 
     const shot = sceneShot(call)
     if (shot) {

@@ -222,8 +222,16 @@
   letter-spacing: -0.02em;
   color: color-mix(in srgb, var(--board-ink2) 92%, transparent);
   white-space: nowrap;
+  /* 读数接在名字后面，长了截掉，别撞上价格轴。 */
+  max-width: calc(100% - 70px);
+  overflow: hidden;
 }
 .rlv-plab i { font-style: normal; color: color-mix(in srgb, var(--board-ink2) 66%, transparent) }
+/* 副图的读数写在自己的名字后面，不跟主图挤成一块盖住 K 线。 */
+.rlv-plab .pv { display: inline-flex; gap: 8px; margin-left: 6px; white-space: nowrap }
+.rlv-plab .pv .o { display: inline-flex; align-items: baseline; gap: 3px }
+.rlv-plab .pv .o i { font-style: normal; color: var(--board-ink2) }
+.rlv-plab .pv .o b { font-weight: 500; color: var(--board-ink) }
 
 .rlv-level { stroke-width: 1.2; stroke-dasharray: 7 5; opacity: 0; animation: rlvLevel 0.5s var(--e-out) forwards; animation-delay: calc(var(--i, 0) * 90ms + 160ms) }
 @keyframes rlvLevel { from { opacity: 0 } to { opacity: 0.9 } }
@@ -309,8 +317,10 @@
   transition: opacity var(--t2) var(--e-out);
   text-align: left;
 }
-.rlv-pin.on { opacity: 1; visibility: visible; animation: rlvPin 0.4s var(--e-spring) both }
-button.rlv-pin.on { pointer-events: auto; cursor: pointer }
+.rlv-pin.on { opacity: 1; visibility: visible; animation: rlvPin 0.4s var(--e-spring) both; pointer-events: auto }
+button.rlv-pin.on { cursor: pointer }
+/* 不能点的气泡也得能停上去看全文，但别改光标：底下还是十字线／抓手。 */
+span.rlv-pin { cursor: inherit }
 @keyframes rlvPin { from { opacity: 0; transform: translate(0, calc(-50% + 8px)) } to { opacity: 1; transform: translate(0, -50%) } }
 .rlv-pin .d {
   width: 9px;
@@ -329,10 +339,15 @@ button.rlv-pin.on { pointer-events: auto; cursor: pointer }
   background: color-mix(in srgb, var(--board) 82%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--board3) 90%, transparent);
   backdrop-filter: blur(6px);
-  max-width: 240px;
+  /* --room 是挂的那一边还剩多少地方，placeMarks() 量出来的。 */
+  max-width: min(240px, var(--room, 240px));
 }
 .rlv-pin .t b { font-size: 12px; font-weight: 600; color: var(--board-ink); line-height: 1.35 }
 .rlv-pin .t .s { font-family: var(--mono); font-size: 10.5px; color: var(--board-ink2); line-height: 1.35 }
+/* 长句子平时收起来，停上去才展开：摊在图上会盖住 K 线。 */
+.rlv-pin.brief .t .s { display: none }
+.rlv-pin.brief:hover .t .s,
+.rlv-pin.brief:focus-visible .t .s { display: block }
 .rlv-pin.flip { flex-direction: row-reverse; transform: translate(-100%, -50%) }
 .rlv-pin.flip.on { animation-name: rlvPinFlip }
 @keyframes rlvPinFlip { from { opacity: 0; transform: translate(-100%, calc(-50% + 8px)) } to { opacity: 1; transform: translate(-100%, -50%) } }
@@ -386,24 +401,28 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
 .rlv-band.k-threshold { background: color-mix(in srgb, var(--realized) 24%, transparent) }
 .rlv-band.k-threshold .bl { color: #b6f0d3 }
 
-/* ---------- 十字线读数 ---------- */
+/* ---------- 读数 ---------- */
+
+/* 主图的读数占顶上留出来的那一行，不再是一块浮在 K 线上的面板。 */
 
 .rlv-read {
   position: absolute;
-  top: 8px;
+  top: 5px;
   left: 8px;
+  right: 66px;
+  height: 16px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 6px 11px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--board) 78%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--board3) 86%, transparent);
-  backdrop-filter: blur(8px);
+  gap: 10px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  overflow: hidden;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
   pointer-events: none;
 }
-.rlv-read.right { left: auto; right: 66px }
 .rlv-read .t { font-family: var(--mono); font-size: 11px; color: var(--board-ink) }
 .rlv-read .o { display: inline-flex; align-items: baseline; gap: 4px }
 .rlv-read .o i { font-style: normal; font-size: 10.5px; color: var(--board-ink2) }
@@ -504,12 +523,15 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
 
 /* ---------- 角落里那张截图 ---------- */
 
-/* 判断时刻永远在右边，参考图挂右下角会正好压住那几根 K 线和价格轴，所以挂左下角。 */
+/* 只待在主图那一块里（底下是副图的名字和读数，压不得），上下两个角挑空着的那个，
+   平时缩着，停上去才长大。 */
 .rlv-shot {
   position: absolute;
-  left: 14px;
-  bottom: 30px;
-  width: min(150px, 26%);
+  left: 12px;
+  bottom: calc(100% - var(--rlv-main-bottom, calc(100% - 20px)) + 8px);
+  width: min(140px, 22%);
+  z-index: 3;
+  transition: width var(--t2) var(--e);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -517,19 +539,28 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
   animation: rlvShot 0.6s var(--e-out) 0.3s both;
 }
 @keyframes rlvShot { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
-.rlv-shot .shot-slot { width: 100%; max-height: 170px; background: none; border-radius: 6px }
+/* 头上那条是读数，别骑上去。 */
+.rlv-stage[data-shot="top"] .rlv-shot { bottom: auto; top: 30px }
+.rlv-shot .shot-slot { width: 100%; background: none; border-radius: 6px }
 .rlv-shot img {
   width: 100%;
-  max-height: 170px;
   object-fit: contain;
   object-position: bottom left;
   display: block;
   border-radius: 6px;
   cursor: zoom-in;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--board3) 92%, transparent), var(--shadow-lift);
-  transition: transform var(--t2) var(--e);
 }
-.rlv-shot img:hover { transform: scale(1.03) }
+.rlv-stage[data-shot="top"] .rlv-shot img { object-position: top left }
+/* 缩着的时候整张（连底下那行小字）都得待在主图里：56px 是让开读数条和上下的空。 */
+.rlv-shot .shot-slot, .rlv-shot img {
+  max-height: min(150px, calc(var(--rlv-main-bottom, 400px) - 56px));
+  transition: max-height var(--t2) var(--e);
+}
+@media (hover: hover) {
+  .rlv-shot:hover { width: min(300px, 42%) }
+  .rlv-shot:hover .shot-slot, .rlv-shot:hover img { max-height: 320px }
+}
 .rlv-shotl { font-size: 10.5px; color: var(--board-ink2) }
 
 /* ---------- 后来 ---------- */
@@ -801,9 +832,11 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
   .rlv-facts { grid-template-columns: repeat(2, 1fr) }
   .rlv-facts .f b { font-size: 13.5px }
   .rlv-status { margin-left: 0; width: 100% }
-  .rlv-shot { width: 96px; left: 8px; bottom: 26px }
-  .rlv-shot .shot-slot, .rlv-shot img { max-height: 108px }
-  .rlv-pin .t { max-width: 150px }
+  .rlv-shot { width: 96px; left: 8px }
+  .rlv-shot:hover { width: 96px }
+  .rlv-shot .shot-slot, .rlv-shot img,
+  .rlv-shot:hover .shot-slot, .rlv-shot:hover img { max-height: min(108px, calc(var(--rlv-main-bottom, 300px) - 56px)) }
+  .rlv-pin .t { max-width: min(150px, var(--room, 150px)) }
   .rlv-pin .t b { font-size: 11px }
   .rlv-card .shot-slot, .rlv-card img { height: 180px }
   .rlv-later { padding: 14px 16px }
@@ -829,7 +862,6 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
 @media (pointer: coarse) {
   .rlv-stage { cursor: default }
   .rlv-cand:hover { transform: none }
-  .rlv-shot img:hover { transform: none }
 }
 
 /* ============================================================

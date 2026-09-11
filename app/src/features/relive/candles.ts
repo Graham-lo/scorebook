@@ -43,6 +43,8 @@ export interface StageMark {
   price?: number | null
   label: string
   sub?: string | null
+  /** 副文字默认收起，鼠标停上去（或点开）才展开：长句子挂在图上会盖住 K 线。 */
+  brief?: boolean
   kind:
     | 'judgment'
     | 'trigger'
@@ -215,7 +217,8 @@ export function createCandles(options: CandlesOptions): CandleStage {
 
   const padR = 58
   const padB = 20
-  const padT = 10
+  // 顶上留一条给读数：读数条不再浮在 K 线上面，而是占自己的一行。
+  const padT = 26
   const PANE_GAP = 9
 
   let width = 720
@@ -351,6 +354,7 @@ export function createCandles(options: CandlesOptions): CandleStage {
       {},
       h('b', { text: spec.title }),
       spec.note ? h('i', { text: spec.note }) : null,
+      h('span.pv'),
     )
     tags.appendChild(label)
     const pane: Pane = {
@@ -634,6 +638,8 @@ export function createCandles(options: CandlesOptions): CandleStage {
   /* -------------------------------------------------------------- 标注 */
 
   const markNodes = new Map<string, HTMLElement>()
+  /** 气泡收起状态下的自然宽度，量一次记住：决定往哪边挂要用。 */
+  const markWidths = new Map<string, number>()
   const bandNodes = new Map<string, HTMLElement>()
 
   function buildBands(): void {
@@ -672,6 +678,7 @@ export function createCandles(options: CandlesOptions): CandleStage {
   function buildMarks(): void {
     for (const el of markNodes.values()) el.remove()
     markNodes.clear()
+    markWidths.clear()
     for (const mark of marks) {
       const dot = h('i.d')
       const body = h(
@@ -683,7 +690,7 @@ export function createCandles(options: CandlesOptions): CandleStage {
       const pin = h(
         mark.onClick ? 'button' : 'span',
         {
-          class: ['rlv-pin', `k-${mark.kind}`],
+          class: ['rlv-pin', `k-${mark.kind}`, mark.brief && mark.sub ? 'brief' : ''],
           ...(mark.onClick ? { on: { click: mark.onClick } } : {}),
         },
         dot,
@@ -705,10 +712,9 @@ export function createCandles(options: CandlesOptions): CandleStage {
 
   function currentView(): { from: number; to: number } {
     if (fixedView) {
-      return {
-        from: Math.max(0, Math.min(fixedView.from, bars.length - 1)),
-        to: Math.max(0, Math.min(fixedView.to, bars.length - 1)),
-      }
+      // to 允许越过最后一根：第 1 屏故意在判断点右边留一段空白，让气泡有地方站。
+      const from = Math.max(0, Math.min(fixedView.from, bars.length - 1))
+      return { from, to: Math.max(from, fixedView.to) }
     }
     const last = Math.max(0, shown - 1)
     const cap = options.window ?? 320
@@ -797,6 +803,31 @@ export function createCandles(options: CandlesOptions): CandleStage {
     placeBands()
     placeJudge()
     paintXAxis()
+    node.style.setProperty('--rlv-main-bottom', `${Math.round(padT + mainH)}px`)
+    pickShotCorner()
+    renderReadout()
+  }
+
+  /**
+   * 角落那张截图挂在主图的哪个角：看最左边那段 K 线偏上还是偏下，挑空着的那个角。
+   * 中间一段不切换，免得拖图的时候来回跳。
+   */
+  function pickShotCorner(): void {
+    const span = Math.max(1, view.to - view.from + 1)
+    const until = Math.min(shown, view.from + Math.max(3, Math.ceil(span * 0.3)))
+    let sum = 0
+    let n = 0
+    for (let i = view.from; i < until; i += 1) {
+      const bar = bars[i] as Num | undefined
+      if (!bar) continue
+      sum += (bar.high + bar.low) / 2
+      n += 1
+    }
+    if (!n) return
+    const ratio = (sum / n - yMin) / Math.max(1e-12, yMax - yMin)
+    if (ratio < 0.45) node.dataset.shot = 'top'
+    else if (ratio > 0.55) node.dataset.shot = 'bottom'
+    else if (!node.dataset.shot) node.dataset.shot = 'bottom'
   }
 
   function xOf(index: number): number {
@@ -864,8 +895,18 @@ export function createCandles(options: CandlesOptions): CandleStage {
       pin.classList.toggle('rail', Boolean(mark.rail))
       pin.style.left = `${Math.round(x)}px`
       pin.style.top = `${Math.round(Math.max(padT, Math.min(height - padB, y)))}px`
-      pin.classList.toggle('flip', x > plotWidth() * 0.62)
-      pin.classList.toggle('low', y < 74)
+      // 右边放得下就往右挂，放不下才翻到左边：翻过去会压住判断点前面那几根。
+      let w = markWidths.get(mark.id) ?? 0
+      if (!w && visible) {
+        w = pin.offsetWidth
+        if (w) markWidths.set(mark.id, w)
+      }
+      const roomR = plotWidth() - x - 6
+      const roomL = x - 6
+      const flip = w > 0 ? w > roomR && roomL > roomR : x > plotWidth() * 0.62
+      pin.classList.toggle('flip', flip)
+      pin.style.setProperty('--room', `${Math.max(40, Math.round(flip ? roomL : roomR))}px`)
+      pin.classList.toggle('low', y < padT + 48)
     }
   }
 
@@ -1012,6 +1053,48 @@ export function createCandles(options: CandlesOptions): CandleStage {
     return h('span.o', {}, h('i', { text: label }), h('b', { text: value }))
   }
 
+  /** 鼠标停在哪一根上；不停就读最后一根。 */
+  let hoverIndex: number | null = null
+
+  /**
+   * 读数条：主图的读数占顶上那一行（padT 留出来的），每个副图的读数写在自己的标题后面。
+   * 这样读数不会再叠成一块盖在 K 线上。
+   */
+  function renderReadout(): void {
+    const i = hoverIndex ?? shown - 1
+    const bar = bars[i]
+    if (!bar) {
+      readout.hidden = true
+      for (const pane of panes) pane.label.querySelector('.pv')?.replaceChildren()
+      return
+    }
+    readout.hidden = false
+    const rows: HTMLElement[] = [
+      h('span.t', { text: dateTime(bar.iso) }),
+      cell('开', formatPrice(bar.open, digits)),
+      cell('高', formatPrice(bar.high, digits)),
+      cell('低', formatPrice(bar.low, digits)),
+      cell('收', formatPrice(bar.close, digits)),
+    ]
+    // 主图上开着的每一条线，都把这一根的值报出来——看图的人不用去数颜色。
+    for (const s of series) {
+      const v = s.values[i]
+      rows.push(cell(s.name, v === null || v === undefined ? '—' : formatPrice(v, digits)))
+    }
+    readout.replaceChildren(...rows)
+    for (const pane of panes) {
+      const cells: HTMLElement[] = []
+      for (const [label, text] of pane.read(i)) cells.push(cell(label, text))
+      if (pane.kind === 'vol') {
+        for (const line of pane.lines) {
+          const v = line.values[i]
+          cells.push(cell(line.name, v === null || v === undefined ? '—' : formatVolume(v)))
+        }
+      }
+      pane.label.querySelector('.pv')?.replaceChildren(...cells)
+    }
+  }
+
   function showCross(clientX: number, clientY: number): void {
     if (!shown) return
     const box = plate.getBoundingClientRect()
@@ -1034,35 +1117,18 @@ export function createCandles(options: CandlesOptions): CandleStage {
     crossY.setAttribute('y1', String(py))
     crossY.setAttribute('y2', String(py))
     cross.setAttribute('opacity', '1')
-    readout.hidden = false
-    const rows: HTMLElement[] = [
-      h('span.t', { text: dateTime(bar.iso) }),
-      cell('开', formatPrice(bar.open, digits)),
-      cell('高', formatPrice(bar.high, digits)),
-      cell('低', formatPrice(bar.low, digits)),
-      cell('收', formatPrice(bar.close, digits)),
-    ]
-    // 主图上开着的每一条线，都把光标那一根的值报出来——看图的人不用去数颜色。
-    for (const s of series) {
-      const v = s.values[i]
-      rows.push(cell(s.name, v === null || v === undefined ? '—' : formatPrice(v, digits)))
+    if (hoverIndex !== i) {
+      hoverIndex = i
+      renderReadout()
     }
-    for (const pane of panes) {
-      for (const [label, text] of pane.read(i)) rows.push(cell(label, text))
-      for (const line of pane.lines) {
-        const v = line.values[i]
-        if (pane.kind === 'vol') {
-          rows.push(cell(line.name, v === null || v === undefined ? '—' : formatVolume(v)))
-        }
-      }
-    }
-    readout.replaceChildren(...rows)
-    readout.classList.toggle('right', x > plotWidth() * 0.5)
   }
 
   function hideCross(): void {
     cross.setAttribute('opacity', '0')
-    readout.hidden = true
+    if (hoverIndex !== null) {
+      hoverIndex = null
+      renderReadout()
+    }
   }
 
   /* -------------------------------------------------- 缩放 / 平移 */
