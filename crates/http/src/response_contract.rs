@@ -138,15 +138,24 @@ pub fn data(path: &str, method: &str) -> Value {
         ("/v1/attachments/{id}/locate", method) => {
             let location = json!({"type":["object","null"],"additionalProperties":true});
             let job = json!({"type":["object","null"],"properties":{"id":uuid(),"status":text(),"result":{"type":["object","null"],"additionalProperties":true},"created_at":{"type":"string","format":"date-time"}}});
+            // symbol/market/interval 是这张图实际按哪个品种去找的回显。
+            let used = json!({"type":["string","null"]});
             if method == "post" {
                 object(
-                    json!({"location":location,"job":job,"deduplicated":{"type":"boolean"}}),
+                    json!({"location":location,"job":job,"deduplicated":{"type":"boolean"},"symbol":used,"market":used,"interval":used}),
                     &["location", "job", "deduplicated"],
                 )
             } else {
-                object(json!({"location":location,"job":job}), &["location", "job"])
+                object(
+                    json!({"location":location,"job":job,"symbol":used,"market":used,"interval":used}),
+                    &["location", "job"],
+                )
             }
         }
+        ("/v1/attachments/{id}", "patch") => object(
+            json!({"id":uuid(),"kind":text(),"digest":text(),"uploaded_at":{"type":"string","format":"date-time"},"location":{"type":["object","null"],"additionalProperties":true}}),
+            &["id", "kind"],
+        ),
         ("/v1/calls/{id}/chart-setup", _) => object(
             json!({"call_id":uuid(),"body":any_object(),"updated_at":{"type":"string","format":"date-time"}}),
             &["call_id", "body", "updated_at"],
@@ -158,7 +167,8 @@ pub fn data(path: &str, method: &str) -> Value {
                 "levels":{"$ref":"#/components/schemas/Levels"},
                 "marks":{"type":["object","null"],"additionalProperties":true},
                 "locating":{"type":["object","null"],"properties":{"job_id":uuid(),"status":text()}},
-                "bars":{"type":"array","items":object(json!({"start":{"type":"string","format":"date-time"},"end":{"type":"string","format":"date-time"},"open":text(),"high":text(),"low":text(),"close":text()}),&["start","end","open","high","low","close"])},
+                "bars":{"type":"array","items":object(json!({"start":{"type":"string","format":"date-time"},"end":{"type":"string","format":"date-time"},"open":text(),"high":text(),"low":text(),"close":text(),"volume":{"type":["string","null"]}}),&["start","end","open","high","low","close"])},
+                "bars_included":{"type":"boolean","description":"false when bars=none: metadata only, the caller fetches the klines itself"},
                 "storage_policy":text()}),
             &[
                 "call_id",
@@ -169,6 +179,7 @@ pub fn data(path: &str, method: &str) -> Value {
                 "judgment",
                 "levels",
                 "bars",
+                "bars_included",
                 "storage_policy",
             ],
         ),

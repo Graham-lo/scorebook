@@ -19,7 +19,7 @@ use crate::{
 use chrono::{DateTime, Duration, Utc};
 use scorebook_core::domain::interval::Interval;
 use scorebook_core::{
-    api::replay::{AttachmentLocation, ChartSetup},
+    api::replay::{AttachmentLocation, ChartSetup, ReplayQuery},
     market::HistorySource,
 };
 use serde_json::{Value, json};
@@ -34,7 +34,7 @@ const MAX_BARS: i64 = 2000;
 /// Writes follow the idempotency convention when a key is supplied; without one
 /// the upsert simply runs, because an auto-derived key would replay a cached
 /// response after the row had been deleted again.
-async fn begin<'a>(
+pub(crate) async fn begin<'a>(
     s: &'a Services,
     owner: Uuid,
     op: &str,
@@ -53,7 +53,7 @@ async fn begin<'a>(
         }
     }
 }
-async fn end(
+pub(crate) async fn end(
     tx: &mut Transaction<'_, Postgres>,
     owner: Uuid,
     op: &str,
@@ -188,25 +188,46 @@ pub async fn delete_location(
 }
 
 /// Shape only: the backend stores which overlays to draw and never computes one.
+///
+/// 校验的只是"能不能画"，不是"画出来对不对"：周期范围、条数上限、快慢线顺序。
 fn validate_setup(setup: &ChartSetup) -> Result<()> {
-    if setup.ma.len() + setup.ema.len() > 6 {
-        return Err(Error::bad("chart_setup_too_many_lines"));
-    }
-    for n in setup.ma.iter().chain(setup.ema.iter()) {
+    let period = |n: &u32| -> Result<()> {
         if !(1..=500).contains(n) {
             return Err(Error::bad("invalid_chart_setup_period"));
         }
+        Ok(())
+    };
+    if setup.ma.len() + setup.ema.len() > 8 {
+        return Err(Error::bad("chart_setup_too_many_lines"));
+    }
+    for n in setup.ma.iter().chain(setup.ema.iter()) {
+        period(n)?;
     }
     if let Some(b) = &setup.boll {
-        if !(1..=500).contains(&b.n) {
-            return Err(Error::bad("invalid_chart_setup_period"));
-        }
+        period(&b.n)?;
         crate::domain::criteria::dec(&b.k).map_err(Error::bad)?;
     }
-    if let Some(a) = &setup.atr
-        && !(1..=500).contains(&a.n)
-    {
-        return Err(Error::bad("invalid_chart_setup_period"));
+    if let Some(a) = &setup.atr {
+        period(&a.n)?;
+    }
+    if let Some(v) = &setup.volume {
+        if v.ma.len() > 6 {
+            return Err(Error::bad("chart_setup_too_many_lines"));
+        }
+        for n in &v.ma {
+            period(n)?;
+        }
+    }
+    if let Some(m) = &setup.macd {
+        for n in [&m.fast, &m.slow, &m.signal] {
+            period(n)?;
+        }
+        if m.fast >= m.slow {
+            return Err(Error::bad("invalid_chart_setup_macd"));
+        }
+    }
+    if let Some(r) = &setup.rsi {
+        period(&r.n)?;
     }
     Ok(())
 }
@@ -405,7 +426,7 @@ struct Cached {
 }
 
 async fn cached(s: &Services, p: &Plan) -> Result<Vec<Cached>> {
-    let rows = sqlx::query("SELECT bar_start,bar_end,open,high,low,close,source FROM replay_bars WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5 AND expires_at>now() ORDER BY bar_start")
+    let rows = sqlx::query("SELECT bar_start,bar_end,open,high,low,close,volume,source FROM replay_bars WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5 AND expires_at>now() ORDER BY bar_start")
         .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(p.start).bind(p.end).fetch_all(&s.db.pool).await?;
     Ok(rows
         .iter()
@@ -417,6 +438,7 @@ async fn cached(s: &Services, p: &Plan) -> Result<Vec<Cached>> {
                 high: r.get("high"),
                 low: r.get("low"),
                 close: r.get("close"),
+                volume: r.get("volume"),
             },
             source: r.get("source"),
         })
@@ -464,14 +486,15 @@ async fn store(s: &Services, p: &Plan, bars: &[Bar], source: &str) -> Result<()>
     let high: Vec<String> = bars.iter().map(|b| b.high.clone()).collect();
     let low: Vec<String> = bars.iter().map(|b| b.low.clone()).collect();
     let close: Vec<String> = bars.iter().map(|b| b.close.clone()).collect();
-    sqlx::query(r#"INSERT INTO replay_bars(market,symbol,interval,bar_start,bar_end,open,high,low,close,source,expires_at)
-        SELECT $1,$2,$3,t.s,t.e,t.o,t.h,t.l,t.c,$4,now()+make_interval(hours=>$11::int)
-        FROM UNNEST($5::timestamptz[],$6::timestamptz[],$7::text[],$8::text[],$9::text[],$10::text[]) AS t(s,e,o,h,l,c)
+    let volume: Vec<Option<String>> = bars.iter().map(|b| b.volume.clone()).collect();
+    sqlx::query(r#"INSERT INTO replay_bars(market,symbol,interval,bar_start,bar_end,open,high,low,close,volume,source,expires_at)
+        SELECT $1,$2,$3,t.s,t.e,t.o,t.h,t.l,t.c,t.v,$4,now()+make_interval(hours=>$11::int)
+        FROM UNNEST($5::timestamptz[],$6::timestamptz[],$7::text[],$8::text[],$9::text[],$10::text[],$12::text[]) AS t(s,e,o,h,l,c,v)
         ON CONFLICT(market,symbol,interval,bar_start) DO UPDATE SET bar_end=EXCLUDED.bar_end,open=EXCLUDED.open,high=EXCLUDED.high,
-        low=EXCLUDED.low,close=EXCLUDED.close,source=EXCLUDED.source,fetched_at=now(),expires_at=EXCLUDED.expires_at"#)
+        low=EXCLUDED.low,close=EXCLUDED.close,volume=EXCLUDED.volume,source=EXCLUDED.source,fetched_at=now(),expires_at=EXCLUDED.expires_at"#)
         .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(source)
         .bind(&starts).bind(&ends).bind(&open).bind(&high).bind(&low).bind(&close)
-        .bind(CACHE_HOURS as i32)
+        .bind(CACHE_HOURS as i32).bind(&volume)
         .execute(&s.db.pool).await?;
     Ok(())
 }
@@ -498,7 +521,18 @@ fn extreme_at(bars: &[Bar], from: DateTime<Utc>, to: DateTime<Utc>, high: bool) 
     best.map(|(b, _)| json!(b.start))
 }
 
-pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
+/// `bars=none` 只交代舞台的坐标，不取数、不落缓存、不续命：前端自己直连币安
+/// 拉 K 线，拉不到再回来要 full。
+fn bars_included(query: &ReplayQuery) -> Result<bool> {
+    match query.bars.as_deref().map(str::trim) {
+        None | Some("") | Some("full") => Ok(true),
+        Some("none") => Ok(false),
+        Some(_) => Err(Error::bad("invalid_bars_mode")),
+    }
+}
+
+pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> Result<Value> {
+    let included = bars_included(&query)?;
     let p = plan(s, owner, call).await?;
     let expected = p.iv.bars_between(p.start, p.end).max(0);
     let mut have = cached(s, &p).await?;
@@ -506,7 +540,7 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
         .first()
         .map(|c| c.source.clone())
         .unwrap_or_else(|| source_name(&p.source).into());
-    if (have.len() as i64) < expected {
+    if included && (have.len() as i64) < expected {
         // One merged range covers every hole; the window is at most 2000 bars.
         let present: std::collections::HashSet<i64> =
             have.iter().map(|c| c.bar.start.timestamp()).collect();
@@ -537,9 +571,12 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
         }
     }
     // A cache hit still keeps the window alive for the rest of the session.
-    sqlx::query("UPDATE replay_bars SET expires_at=now()+make_interval(hours=>$6::int) WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5")
-        .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(p.start).bind(p.end).bind(CACHE_HOURS as i32)
-        .execute(&s.db.pool).await?;
+    // Metadata-only reads renew nothing: they never asked for the bars.
+    if included {
+        sqlx::query("UPDATE replay_bars SET expires_at=now()+make_interval(hours=>$6::int) WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5")
+            .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(p.start).bind(p.end).bind(CACHE_HOURS as i32)
+            .execute(&s.db.pool).await?;
+    }
     let bars: Vec<Bar> = have.into_iter().map(|c| c.bar).collect();
     let coverage_complete = (bars.len() as i64) == expected
         && bars.first().is_some_and(|b| b.start == p.start)
@@ -596,7 +633,8 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
         "levels":p.levels,
         "marks":marks,
         "locating":super::locate::locating_for_call(s,owner,p.call).await?,
-        "bars":bars,
+        "bars":if included{json!(bars)}else{json!([])},
+        "bars_included":included,
         "storage_policy":format!("temporary;expires_at={}",expires.to_rfc3339()),
     }))
 }

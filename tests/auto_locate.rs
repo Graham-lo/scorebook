@@ -73,6 +73,16 @@ async fn setup() -> (Services, Uuid, tempfile::TempDir) {
     (s, o, dir)
 }
 
+/// 契约里 bars 不给就等于 full；这些用例只关心舞台本身。
+fn full() -> scorebook_core::api::replay::ReplayQuery {
+    Default::default()
+}
+
+/// 这张图上要找的品种，按图单独指定。
+fn over(v: Value) -> scorebook_core::api::replay::LocateOverride {
+    serde_json::from_value(v).unwrap()
+}
+
 fn png() -> Vec<u8> {
     let mut b = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
@@ -190,7 +200,7 @@ async fn a_running_match_is_joined_not_duplicated() {
     let j = claim_locate(&s, o).await;
 
     // While it runs the stage says so, and asking to look again joins it.
-    let stage = replay::get(&s, o, call).await.unwrap();
+    let stage = replay::get(&s, o, call, full()).await.unwrap();
     assert_eq!(stage["locating"]["job_id"], json!(j.id));
     assert_eq!(stage["locating"]["status"], "running");
     assert!(stage["window"]["start_at"].is_string());
@@ -202,7 +212,7 @@ async fn a_running_match_is_joined_not_duplicated() {
         .await
         .unwrap();
 
-    let asked = locate::request(&s, o, attachment, "manual-1")
+    let asked = locate::request(&s, o, attachment, "manual-1", Default::default())
         .await
         .unwrap();
     assert_eq!(asked["deduplicated"], true);
@@ -254,7 +264,7 @@ async fn only_an_unmistakable_window_becomes_an_automatic_location() {
     let shown = calls::get(&s, o, call2).await.unwrap();
     assert_eq!(shown["attachments"][0]["location"]["matched_by"], "auto");
     // A pinned record is no longer waiting on anything.
-    assert!(replay::get(&s, o, call2).await.unwrap()["locating"].is_null());
+    assert!(replay::get(&s, o, call2, full()).await.unwrap()["locating"].is_null());
     // The stage's bar cache is shared public market data, keyed by contract and
     // not by owner; this test's window must not linger for the next one.
     sqlx::query("DELETE FROM replay_bars")
@@ -354,4 +364,219 @@ async fn a_match_builds_the_window_index_around_the_judgment_moment_once() {
     assert_eq!(again["reason"], "already_indexed");
     assert_eq!(again["range"], built["range"]);
     assert_eq!(index_rows(&s, start, end).await, (features, segments));
+}
+
+/// 同板块对比图：记录写的是 ETHUSDT，这张截图画的却是别的合约。按图指定的
+/// 三元组要一路走到 job 体里，worker 读的就是它，回显也照它说。
+#[tokio::test]
+async fn a_screenshot_can_name_its_own_instrument_for_the_match() {
+    let (s, o, _tmp) = setup().await;
+    let (call, attachment) = record(&s, o, "over").await;
+
+    // 不指定就还是记录自己的三元组，一个字节都没变。
+    let plain = locate::request(&s, o, attachment, "plain-1", Default::default())
+        .await
+        .unwrap();
+    assert_eq!(plain["symbol"], "ETHUSDT");
+    assert_eq!(plain["market"], "usd_m");
+    assert_eq!(plain["interval"], "1h");
+    let body: Value = sqlx::query_scalar(
+        "SELECT body FROM jobs WHERE owner_id=$1 AND kind='attachment.locate' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(o)
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    assert_eq!(body["symbol"], "ETHUSDT");
+    assert_eq!(body["market"], "usd_m");
+    assert_eq!(body["interval"], "1h");
+    assert_eq!(body["call_id"], json!(call));
+
+    // 同一把钥匙换了品种就是另一次请求，不该把上一次的结果照抄回去。
+    assert_eq!(
+        locate::request(
+            &s,
+            o,
+            attachment,
+            "plain-1",
+            over(json!({"symbol":"SKHYUSDT"}))
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "idempotency_content_conflict"
+    );
+
+    // 上一次得先结束，手动键才让下一次进来。
+    sqlx::query(
+        "UPDATE jobs SET status='succeeded' WHERE owner_id=$1 AND kind='attachment.locate'",
+    )
+    .bind(o)
+    .execute(&s.db.pool)
+    .await
+    .unwrap();
+    let asked = locate::request(
+        &s,
+        o,
+        attachment,
+        "over-1",
+        over(json!({"symbol":"SKHYUSDT","market":"coin_m","interval":"4h"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(asked["deduplicated"], false);
+    assert_eq!(asked["symbol"], "SKHYUSDT");
+    assert_eq!(asked["market"], "coin_m");
+    assert_eq!(asked["interval"], "4h");
+    let body: Value = sqlx::query_scalar(
+        "SELECT body FROM jobs WHERE owner_id=$1 AND kind='attachment.locate' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(o)
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    assert_eq!(body["symbol"], "SKHYUSDT");
+    assert_eq!(body["market"], "coin_m");
+    assert_eq!(body["interval"], "4h");
+    assert_eq!(body["trigger"], "manual");
+    // 记录本身没被改动：改的是这张图怎么找，不是这条记录说了什么。
+    let shown = calls::get(&s, o, call).await.unwrap();
+    assert_eq!(shown["instrument"], "ETHUSDT");
+    // 看一眼也说的是这次实际在用的三元组。
+    let seen = locate::get(&s, o, attachment).await.unwrap();
+    assert_eq!(seen["symbol"], "SKHYUSDT");
+    assert_eq!(seen["market"], "coin_m");
+    assert_eq!(seen["interval"], "4h");
+
+    // 只覆盖一格，其余照记录。
+    sqlx::query(
+        "UPDATE jobs SET status='succeeded' WHERE owner_id=$1 AND kind='attachment.locate'",
+    )
+    .bind(o)
+    .execute(&s.db.pool)
+    .await
+    .unwrap();
+    let one = locate::request(&s, o, attachment, "over-2", over(json!({"interval":"15m"})))
+        .await
+        .unwrap();
+    assert_eq!(one["symbol"], "ETHUSDT");
+    assert_eq!(one["market"], "usd_m");
+    assert_eq!(one["interval"], "15m");
+}
+
+/// 认不得的品种/市场/周期当场拒绝，不让它们混进 job 体去给 worker 找麻烦。
+#[tokio::test]
+async fn an_unusable_override_is_refused_before_anything_is_queued() {
+    let (s, o, _tmp) = setup().await;
+    let (_call, attachment) = record(&s, o, "bad").await;
+    for (n, (input, code)) in [
+        (json!({"symbol":"BTC/USDT"}), "invalid_contract"),
+        (json!({"market":"spot"}), "invalid_market"),
+        (json!({"interval":"7h"}), "replay_interval_unsupported"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            locate::request(&s, o, attachment, &format!("bad-{n}"), over(input))
+                .await
+                .unwrap_err()
+                .code,
+            code
+        );
+    }
+    assert_eq!(locate_jobs(&s, o).await, 0);
+    // 空的一格等于没给，照旧走记录本身。
+    let blank = locate::request(
+        &s,
+        o,
+        attachment,
+        "blank-1",
+        over(json!({"symbol":"  ","market":null})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(blank["symbol"], "ETHUSDT");
+}
+
+/// worker 按 job 体里写着的品种去建索引、去找图，而不是回头读记录。
+#[tokio::test]
+async fn the_worker_searches_the_instrument_the_screenshot_named() {
+    let (s, o, _tmp) = setup().await;
+    let (call, attachment) = record(&s, o, "worker").await;
+    locate::request(
+        &s,
+        o,
+        attachment,
+        "worker-1",
+        over(json!({"symbol":"SOLUSDT","interval":"1h"})),
+    )
+    .await
+    .unwrap();
+    let j = claim_locate(&s, o).await;
+    assert_eq!(j.body["symbol"], "SOLUSDT");
+
+    // 索引只建在这张图说的品种上；记录写的 ETHUSDT 一行都不该多出来。
+    let judgment = Utc::now() - Duration::days(4);
+    let built = locate::ensure_index(
+        &s,
+        &j,
+        j.body["market"].as_str().unwrap(),
+        j.body["symbol"].as_str().unwrap(),
+        j.body["interval"].as_str().unwrap(),
+        judgment,
+    )
+    .await
+    .unwrap();
+    assert_eq!(built["built"], true);
+    let mine: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public_market.features WHERE symbol='SOLUSDT' AND market='usd_m' AND timeframe='1h'",
+    )
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    assert_eq!(mine, 1859);
+
+    // 已经钉住的图直接回显钉住的那份，顺带说清这次用的是哪三样。
+    let now = Utc::now();
+    replay::put_location(
+        &s,
+        o,
+        attachment,
+        Some("pin-1"),
+        serde_json::from_value(
+            json!({"symbol":"SOLUSDT","market":"usd_m","interval":"1h","start_at":now-Duration::hours(64),"end_at":now,"source":"rest","score":"0.9"}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let out = locate::run(&s, &j).await.unwrap();
+    assert_eq!(out["outcome"], "already_located");
+    assert_eq!(out["symbol"], "SOLUSDT");
+    assert_eq!(out["market"], "usd_m");
+    assert_eq!(out["interval"], "1h");
+    assert_eq!(out["location"]["symbol"], "SOLUSDT");
+    let _ = call;
+}
+
+/// 复盘发布后的那一次自动定位仍然只认记录本身写的品种：按图指定是手动的事。
+#[tokio::test]
+async fn the_automatic_match_still_follows_the_record() {
+    let (s, o, _tmp) = setup().await;
+    let (call, attachment) = record(&s, o, "auto").await;
+    knowledge::review(&s, o, "review", review_of(call))
+        .await
+        .unwrap();
+    let body: Value =
+        sqlx::query_scalar("SELECT body FROM jobs WHERE owner_id=$1 AND kind='attachment.locate'")
+            .bind(o)
+            .fetch_one(&s.db.pool)
+            .await
+            .unwrap();
+    assert_eq!(body["trigger"], "review_published");
+    assert!(body["symbol"].is_null());
+    let seen = locate::get(&s, o, attachment).await.unwrap();
+    assert_eq!(seen["symbol"], "ETHUSDT");
+    assert_eq!(seen["interval"], "1h");
 }

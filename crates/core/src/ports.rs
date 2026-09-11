@@ -126,6 +126,7 @@ pub enum Action {
     AttachmentLocateGet,
     AttachmentLocateRequest,
     ChartSetupPut,
+    AttachmentKindPut,
     ReplayGet,
     ReplayClear,
     AttachmentDownload,

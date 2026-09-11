@@ -15,6 +15,7 @@ use super::{
 };
 use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
+use scorebook_core::api::replay::LocateOverride;
 use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -74,6 +75,107 @@ async fn owned(tx: &mut Transaction<'_, Postgres>, owner: Uuid, attachment: Uuid
     }
 }
 
+/// 这张图上指定的品种。三项都可省；给了就必须是真能去找的东西。
+///
+/// 同板块对比图是常态：一条记录的三张场景图可以各是各的标的，所以"按图指定"
+/// 才是对的，记录自己的 instrument 只是默认值。
+fn checked_override(input: &LocateOverride) -> Result<LocateOverride> {
+    let trimmed = |v: &Option<String>| -> Option<String> {
+        v.as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let symbol = trimmed(&input.symbol);
+    let market = trimmed(&input.market);
+    let interval = trimmed(&input.interval);
+    if let Some(symbol) = &symbol {
+        super::history_catalog::validate_symbol(symbol)?;
+    }
+    if market
+        .as_deref()
+        .is_some_and(|v| !matches!(v, "usd_m" | "coin_m"))
+    {
+        return Err(Error::bad("invalid_market"));
+    }
+    let interval = match interval {
+        Some(v) => Some(super::replay::interval_for(Some(&v))?),
+        None => None,
+    };
+    Ok(LocateOverride {
+        symbol,
+        market,
+        interval,
+    })
+}
+
+/// 记录本身的三元组，作为没被覆盖时的默认值。
+async fn call_target(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: Uuid,
+    call: Uuid,
+) -> Result<(String, String, String)> {
+    let row =
+        sqlx::query("SELECT instrument,market,timeframe FROM calls WHERE owner_id=$1 AND id=$2")
+            .bind(owner)
+            .bind(call)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or_else(Error::not_found)?;
+    let symbol: Option<String> = row.get("instrument");
+    let symbol = symbol
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| Error::conflict("replay_needs_instrument"))?;
+    let market: Option<String> = row.get("market");
+    let timeframe: Option<String> = row.get("timeframe");
+    Ok((
+        symbol,
+        market.unwrap_or_else(|| "usd_m".into()),
+        super::replay::interval_for(timeframe.as_deref())?,
+    ))
+}
+
+/// 实际用来找图的三元组：这次给的覆盖值最优先，其次是最近一次 job 里记下的，
+/// 最后才是记录本身的。任何一格查不出来就留 null，不编。
+async fn resolved(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: Uuid,
+    attachment: Uuid,
+    over: &LocateOverride,
+) -> Result<Value> {
+    let job: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('symbol',j.body->>'symbol','market',j.body->>'market','interval',j.body->>'interval') FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id'=$2::text ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
+        .bind(owner)
+        .bind(attachment.to_string())
+        .fetch_optional(&mut **tx)
+        .await?;
+    let call = sqlx::query_scalar::<_, Uuid>("SELECT c.id FROM calls c JOIN call_attachments l ON l.owner_id=c.owner_id AND l.call_id=c.id WHERE l.owner_id=$1 AND l.attachment_id=$2 ORDER BY c.submitted_at,c.id LIMIT 1")
+        .bind(owner)
+        .bind(attachment)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let from_call = match call {
+        Some(call) => call_target(tx, owner, call).await.ok(),
+        None => None,
+    };
+    let pick = |given: Option<&str>, key: &str, fallback: Option<&str>| -> Value {
+        given
+            .map(str::to_string)
+            .or_else(|| {
+                job.as_ref()
+                    .and_then(|v| v[key].as_str())
+                    .map(str::to_string)
+            })
+            .or_else(|| fallback.map(str::to_string))
+            .map(Value::String)
+            .unwrap_or(Value::Null)
+    };
+    Ok(json!({
+        "symbol":pick(over.symbol.as_deref(),"symbol",from_call.as_ref().map(|t|t.0.as_str())),
+        "market":pick(over.market.as_deref(),"market",from_call.as_ref().map(|t|t.1.as_str())),
+        "interval":pick(over.interval.as_deref(),"interval",from_call.as_ref().map(|t|t.2.as_str())),
+    }))
+}
+
 const LOCATION: &str = "SELECT (to_jsonb(al)-'owner_id'-'score')||jsonb_build_object('score',al.score::text) FROM attachment_locations al WHERE al.owner_id=$1 AND al.attachment_id=$2";
 const LATEST_JOB: &str = "SELECT jsonb_build_object('id',j.id,'status',j.status,'result',j.result,'created_at',j.created_at) FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id'=$2::text ORDER BY j.created_at DESC,j.id DESC LIMIT 1";
 
@@ -91,14 +193,17 @@ pub async fn get(s: &Services, owner: Uuid, attachment: Uuid) -> Result<Value> {
         .bind(attachment.to_string())
         .fetch_optional(&mut *tx)
         .await?;
+    let used = resolved(&mut tx, owner, attachment, &LocateOverride::default()).await?;
     tx.commit().await?;
-    Ok(json!({"location":location,"job":job}))
+    Ok(
+        json!({"location":location,"job":job,"symbol":used["symbol"],"market":used["market"],"interval":used["interval"]}),
+    )
 }
 
 /// The record this screenshot can be matched against: it has to name an
 /// instrument and a timeframe, because a match without them has nothing to
 /// search in.
-async fn matchable_call(
+pub async fn matchable_call(
     tx: &mut Transaction<'_, Postgres>,
     owner: Uuid,
     attachment: Uuid,
@@ -114,8 +219,26 @@ async fn matchable_call(
 /// Manual trigger. A queued or running job is returned as it is; only when
 /// nothing is in flight does a new attempt start, under its own key so the
 /// once-ever automatic key stays untouched.
-pub async fn request(s: &Services, owner: Uuid, attachment: Uuid, key: &str) -> Result<Value> {
-    let body = json!({"attachment_id":attachment});
+pub async fn request(
+    s: &Services,
+    owner: Uuid,
+    attachment: Uuid,
+    key: &str,
+    input: LocateOverride,
+) -> Result<Value> {
+    let over = checked_override(&input)?;
+    // 覆盖值进指纹：同一把 Idempotency-Key 换了品种就是另一次请求，不该回放旧结果。
+    // 不给覆盖时指纹与从前逐字节相同。
+    let mut body = json!({"attachment_id":attachment});
+    for (name, value) in [
+        ("symbol", &over.symbol),
+        ("market", &over.market),
+        ("interval", &over.interval),
+    ] {
+        if let Some(v) = value {
+            body[name] = json!(v);
+        }
+    }
     let (mut tx, cached) = s.db.write(owner, "attachment.locate", key, &body).await?;
     if let Some(v) = cached {
         return Ok(v);
@@ -132,6 +255,12 @@ pub async fn request(s: &Services, owner: Uuid, attachment: Uuid, key: &str) -> 
         Some(v) => v,
         None => {
             let call = matchable_call(&mut tx, owner, attachment).await?;
+            // worker 读的是 job 体，所以实际用的三元组在这里就定下来，
+            // 它跑的时候记录被改成别的品种也不影响这一次。
+            let (symbol, market, interval) = call_target(&mut tx, owner, call).await?;
+            let symbol = over.symbol.clone().unwrap_or(symbol);
+            let market = over.market.clone().unwrap_or(market);
+            let interval = over.interval.clone().unwrap_or(interval);
             // Every earlier job for this screenshot is finished, so their count
             // is what makes this attempt's key unique.
             let done:i64=sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1 AND kind='attachment.locate' AND body->>'attachment_id'=$2::text")
@@ -141,7 +270,7 @@ pub async fn request(s: &Services, owner: Uuid, attachment: Uuid, key: &str) -> 
                 owner,
                 KIND,
                 &format!("{attachment}:manual:{done}"),
-                json!({"call_id":call,"attachment_id":attachment,"trigger":"manual"}),
+                json!({"call_id":call,"attachment_id":attachment,"trigger":"manual","symbol":symbol,"market":market,"interval":interval}),
             )
             .await?;
             sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'status',j.status,'result',j.result,'created_at',j.created_at) FROM jobs j WHERE j.id=$1")
@@ -153,7 +282,8 @@ pub async fn request(s: &Services, owner: Uuid, attachment: Uuid, key: &str) -> 
         .bind(attachment)
         .fetch_optional(&mut *tx)
         .await?;
-    let v = json!({"location":location,"job":job,"deduplicated":deduplicated});
+    let used = resolved(&mut tx, owner, attachment, &LocateOverride::default()).await?;
+    let v = json!({"location":location,"job":job,"deduplicated":deduplicated,"symbol":used["symbol"],"market":used["market"],"interval":used["interval"]});
     crate::adapters::db::Database::finish(&mut tx, owner, "attachment.locate", key, &body, &v)
         .await?;
     tx.commit().await?;
@@ -236,9 +366,28 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
         .bind(attachment)
         .fetch_optional(&s.db.pool)
         .await?;
+    // 这张图上指定的品种；手动请求已经把实际要用的三元组写进 job 体了。
+    let over = LocateOverride {
+        symbol: j.body["symbol"].as_str().map(str::to_string),
+        market: j.body["market"].as_str().map(str::to_string),
+        interval: j.body["interval"].as_str().map(str::to_string),
+    };
     if let Some(location) = existing {
+        // 已经钉住的图就按钉住的那份回显，不去猜记录写的是什么。
+        let echo = |key: &str, given: Option<&str>| -> Value {
+            given
+                .map(str::to_string)
+                .or_else(|| location[key].as_str().map(str::to_string))
+                .map(Value::String)
+                .unwrap_or(Value::Null)
+        };
+        let (symbol, market, interval) = (
+            echo("symbol", over.symbol.as_deref()),
+            echo("market", over.market.as_deref()),
+            echo("interval", over.interval.as_deref()),
+        );
         return Ok(
-            json!({"outcome":"already_located","attachment_id":attachment,"location":location}),
+            json!({"outcome":"already_located","attachment_id":attachment,"location":location,"symbol":symbol,"market":market,"interval":interval}),
         );
     }
     let row = sqlx::query(
@@ -250,13 +399,22 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     .await?
     .ok_or_else(Error::not_found)?;
     let symbol: Option<String> = row.get("instrument");
-    let symbol = symbol
-        .filter(|v| !v.trim().is_empty())
+    let symbol = over
+        .symbol
+        .clone()
+        .or_else(|| symbol.filter(|v| !v.trim().is_empty()))
         .ok_or_else(|| Error::conflict("replay_needs_instrument"))?;
     let market: Option<String> = row.get("market");
-    let market = market.unwrap_or_else(|| "usd_m".into());
+    let market = over
+        .market
+        .clone()
+        .or(market)
+        .unwrap_or_else(|| "usd_m".into());
     let timeframe: Option<String> = row.get("timeframe");
-    let interval = super::replay::interval_for(timeframe.as_deref())?;
+    let interval = match &over.interval {
+        Some(v) => super::replay::interval_for(Some(v))?,
+        None => super::replay::interval_for(timeframe.as_deref())?,
+    };
     let submitted: DateTime<Utc> = row.get("submitted_at");
     let body: Value = row.get("body");
     // The judgment moment, exactly as the replay window uses it: nothing the
@@ -270,7 +428,7 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     // machine deliberately runs no history sync, so the windows this search
     // needs are built here, now, around this one judgment moment.
     let index = ensure_index(s, j, &market, &symbol, &interval, judgment).await?;
-    let input = json!({"attachment_id":attachment,"region":null,"scope":"binance_history","symbol":symbol,"market":market,"interval":interval,"cutoff_at":judgment,"reverse":false,"red_up":false,"limit":3});
+    let input = json!({"attachment_id":attachment,"region":null,"scope":"binance_history","symbol":&symbol,"market":&market,"interval":&interval,"cutoff_at":judgment,"reverse":false,"red_up":false,"limit":3});
     // This job is the search run, so its candidates stay readable afterwards at
     // GET /v1/chart-search/runs/{id} and the written location can cite it.
     sqlx::query("INSERT INTO chart_search_runs(id,owner_id,attachment_id,body) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET body=EXCLUDED.body,result=NULL,completed_at=NULL")
@@ -290,6 +448,9 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     let mut decided = decide(s, j, attachment, &top).await?;
     if let Some(o) = decided.as_object_mut() {
         o.insert("index".into(), index);
+        o.insert("symbol".into(), json!(symbol));
+        o.insert("market".into(), json!(market));
+        o.insert("interval".into(), json!(interval));
     }
     Ok(decided)
 }

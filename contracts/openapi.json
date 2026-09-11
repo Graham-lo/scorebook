@@ -132,6 +132,19 @@
         ],
         "type": "object"
       },
+      "AttachmentKindUpdate": {
+        "additionalProperties": false,
+        "description": "改附件用途：把同板块对比图从 scene 降成 reference。",
+        "properties": {
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
       "AttachmentLink": {
         "additionalProperties": false,
         "properties": {
@@ -268,6 +281,13 @@
           "start": {
             "format": "date-time",
             "type": "string"
+          },
+          "volume": {
+            "description": "成交量，与价格一样是 Decimal 字符串。缓存里的旧行和不带量的来源为 null，\n判决从不读它，只有重温舞台的 VOL 副图画它。",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -530,7 +550,7 @@
       },
       "ChartSetup": {
         "additionalProperties": false,
-        "description": "Which overlays the replay stage draws. The backend stores the shape only and\nnever computes an indicator.",
+        "description": "Which overlays the replay stage draws. The backend stores the shape only and\nnever computes an indicator.\n\n每个字段都有默认值，所以旧的 `{\"ma\":[],\"ema\":[]}` 依然能解出来；未知字段仍然拒收。",
         "properties": {
           "atr": {
             "oneOf": [
@@ -567,6 +587,37 @@
               "type": "integer"
             },
             "type": "array"
+          },
+          "macd": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MacdSetup"
+              }
+            ]
+          },
+          "rsi": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RsiSetup"
+              }
+            ]
+          },
+          "volume": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VolumeSetup",
+                "description": "非 null 即表示要画 VOL 副图；`ma` 是 MAVOL 的周期。"
+              }
+            ]
           }
         },
         "type": "object"
@@ -2051,6 +2102,57 @@
         ],
         "type": "object"
       },
+      "LocateOverride": {
+        "additionalProperties": false,
+        "description": "手动定位时按这张图指定品种：三张同板块对比图各归各的标的。\n三项都可省，省掉的沿用记录本身的 instrument/market/timeframe。",
+        "properties": {
+          "interval": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "market": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "MacdSetup": {
+        "additionalProperties": false,
+        "properties": {
+          "fast": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signal": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slow": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fast",
+          "slow",
+          "signal"
+        ],
+        "type": "object"
+      },
       "MarketRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2444,6 +2546,19 @@
         ],
         "type": "object"
       },
+      "ReplayQuery": {
+        "additionalProperties": false,
+        "description": "`GET /v1/calls/{id}/replay` 的查询串。`bars=none` 只要元数据：前端自己直连\n币安拉 K 线，后端这一次既不取数也不写缓存。",
+        "properties": {
+          "bars": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "RetryRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2668,6 +2783,20 @@
           "claim_no",
           "expected_outcome_id",
           "reason"
+        ],
+        "type": "object"
+      },
+      "RsiSetup": {
+        "additionalProperties": false,
+        "properties": {
+          "n": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "n"
         ],
         "type": "object"
       },
@@ -3399,6 +3528,20 @@
           "evidence"
         ],
         "type": "object"
+      },
+      "VolumeSetup": {
+        "additionalProperties": false,
+        "properties": {
+          "ma": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -3768,6 +3911,129 @@
           }
         },
         "x-required-permission": "knowledge.read"
+      },
+      "patch": {
+        "operationId": "patch__v1_attachments__id_",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentKindUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "digest": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "location": {
+                              "additionalProperties": true,
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
+                            "uploaded_at": {
+                              "format": "date-time",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "deleted": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "deleted"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "expired": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "expired"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "meta": {
+                      "properties": {
+                        "api_version": {
+                          "const": "v1"
+                        }
+                      },
+                      "required": [
+                        "api_version"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found for authenticated owner"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "x-required-permission": "records.write"
       }
     },
     "/v1/attachments/{id}/index": {
@@ -3905,6 +4171,12 @@
                         {
                           "additionalProperties": true,
                           "properties": {
+                            "interval": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
                             "job": {
                               "properties": {
                                 "created_at": {
@@ -3935,6 +4207,18 @@
                               "additionalProperties": true,
                               "type": [
                                 "object",
+                                "null"
+                              ]
+                            },
+                            "market": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "symbol": {
+                              "type": [
+                                "string",
                                 "null"
                               ]
                             }
@@ -4028,6 +4312,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocateOverride"
+              }
+            }
+          },
+          "required": false
+        },
         "responses": {
           "200": {
             "content": {
@@ -4041,6 +4335,12 @@
                           "properties": {
                             "deduplicated": {
                               "type": "boolean"
+                            },
+                            "interval": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "job": {
                               "properties": {
@@ -4072,6 +4372,18 @@
                               "additionalProperties": true,
                               "type": [
                                 "object",
+                                "null"
+                              ]
+                            },
+                            "market": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "symbol": {
+                              "type": [
+                                "string",
                                 "null"
                               ]
                             }
@@ -6172,6 +6484,17 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "bars",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -6208,6 +6531,12 @@
                                   "start": {
                                     "format": "date-time",
                                     "type": "string"
+                                  },
+                                  "volume": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -6221,6 +6550,10 @@
                                 "type": "object"
                               },
                               "type": "array"
+                            },
+                            "bars_included": {
+                              "description": "false when bars=none: metadata only, the caller fetches the klines itself",
+                              "type": "boolean"
                             },
                             "call_id": {
                               "format": "uuid",
@@ -6329,6 +6662,7 @@
                             "judgment",
                             "levels",
                             "bars",
+                            "bars_included",
                             "storage_policy"
                           ],
                           "type": "object"

@@ -24,6 +24,7 @@ fn input(template: Template) -> EvaluationInput {
                 high: "104".into(),
                 low: "99".into(),
                 close: "103".into(),
+                volume: None,
             },
             Bar {
                 start: t("2026-09-01T01:00:00Z"),
@@ -32,6 +33,7 @@ fn input(template: Template) -> EvaluationInput {
                 high: "103".into(),
                 low: "100".into(),
                 close: "102".into(),
+                volume: None,
             },
         ],
         trades: vec![],
@@ -217,6 +219,7 @@ fn atr_excludes_unclosed_day() {
             high: "102".into(),
             low: "98".into(),
             close: "100".into(),
+            volume: None,
         })
         .collect();
     let at = start + Duration::days(15);

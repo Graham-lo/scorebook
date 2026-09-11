@@ -146,6 +146,7 @@ mod tests {
             high: high.into(),
             low: low.into(),
             close: close.into(),
+            volume: None,
         }
     }
 

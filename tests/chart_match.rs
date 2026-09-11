@@ -40,6 +40,7 @@ fn screenshot_to_direct_ohlc_alignment() {
             high: c.0[1].to_string(),
             low: c.0[2].to_string(),
             close: c.0[3].to_string(),
+            volume: None,
         })
         .collect();
     let im = scorebook::domain::chart::raster(&bars).unwrap();
@@ -68,6 +69,7 @@ fn followthrough_chart_marks_the_original_boundary_and_refuses_hidden_gaps() {
             high: c.0[1].to_string(),
             low: c.0[2].to_string(),
             close: c.0[3].to_string(),
+            volume: None,
         })
         .collect();
     let boundary = bars[31].end;

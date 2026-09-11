@@ -37,6 +37,7 @@ fn bar(n: i64, p: &str) -> Bar {
         high: p.into(),
         low: p.into(),
         close: p.into(),
+        volume: None,
     }
 }
 #[test]

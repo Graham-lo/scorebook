@@ -166,6 +166,7 @@ impl Binance {
                     high: string(2)?,
                     low: string(3)?,
                     close: string(4)?,
+                    volume: Some(string(5)?),
                 });
             }
             raw.extend(page.iter().cloned());

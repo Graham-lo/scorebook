@@ -77,6 +77,10 @@ pub struct Bar {
     pub high: String,
     pub low: String,
     pub close: String,
+    /// 成交量，与价格一样是 Decimal 字符串。缓存里的旧行和不带量的来源为 null，
+    /// 判决从不读它，只有重温舞台的 VOL 副图画它。
+    #[serde(default)]
+    pub volume: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Trade {

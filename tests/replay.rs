@@ -67,7 +67,7 @@ impl MarketDataProvider for Recorder {
             while iv.add_bars(at, 1) <= end {
                 let to = iv.add_bars(at, 1);
                 bars.push(
-                    json!({"start":at,"end":to,"open":"100","high":"101","low":"99","close":"100"}),
+                    json!({"start":at,"end":to,"open":"100","high":"101","low":"99","close":"100","volume":"12.5"}),
                 );
                 at = to;
             }
@@ -116,6 +116,13 @@ fn png() -> Vec<u8> {
 }
 fn location(start: DateTime<Utc>, end: DateTime<Utc>) -> Value {
     json!({"symbol":"BTCUSDT","market":"usd_m","interval":"1h","start_at":start,"end_at":end,"source":"rest","score":"0.94"})
+}
+/// 默认就是 full 模式：契约里 bars 不给就等于给 full。
+fn full() -> scorebook_core::api::replay::ReplayQuery {
+    Default::default()
+}
+fn mode(v: &str) -> scorebook_core::api::replay::ReplayQuery {
+    serde_json::from_value(json!({ "bars": v })).unwrap()
 }
 async fn bar_rows(s: &Services) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM replay_bars")
@@ -193,7 +200,9 @@ async fn chart_setup_is_shape_checked_and_returned_with_the_record() {
         .await
         .unwrap();
     let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
-    let good = json!({"ma":[20,50,200],"ema":[],"boll":{"n":20,"k":"2"},"atr":{"n":14}});
+    // 截图上真正画着的那一套：MA30/120/256、VOL+MAVOL、MACD(10,30,9)。
+    let good = json!({"ma":[30,120,256],"ema":[],"boll":{"n":20,"k":"2"},"atr":{"n":14},
+        "volume":{"ma":[5,10,30,60,120]},"macd":{"fast":10,"slow":30,"signal":9},"rsi":{"n":14}});
     let v = replay::put_chart_setup(
         &s,
         o,
@@ -206,34 +215,74 @@ async fn chart_setup_is_shape_checked_and_returned_with_the_record() {
     assert_eq!(v["body"], good);
     assert_eq!(calls::get(&s, o, id).await.unwrap()["chart_setup"], good);
 
-    let too_many = json!({"ma":[5,10,20,30,40],"ema":[60,120],"boll":null,"atr":null});
-    assert_eq!(
+    // 老的四字段 body 还得能解出来，解出来的新字段是 null/空。
+    let old: scorebook_core::api::replay::ChartSetup =
+        serde_json::from_value(json!({"ma":[20],"ema":[],"boll":null,"atr":null})).unwrap();
+    assert!(old.volume.is_none() && old.macd.is_none() && old.rsi.is_none());
+    let stored = replay::put_chart_setup(&s, o, id, Some("setup-old"), old)
+        .await
+        .unwrap();
+    assert_eq!(stored["body"]["ma"], json!([20]));
+    assert_eq!(stored["body"]["volume"], Value::Null);
+
+    // 主图均线上限从 6 抬到 8：7 条现在是允许的，9 条还是太多。
+    let seven = json!({"ma":[5,10,20,30,40],"ema":[60,120]});
+    assert!(
         replay::put_chart_setup(
             &s,
             o,
             id,
-            Some("setup-2"),
-            serde_json::from_value(too_many).unwrap()
+            Some("setup-7"),
+            serde_json::from_value(seven).unwrap()
         )
         .await
-        .unwrap_err()
-        .code,
-        "chart_setup_too_many_lines"
+        .is_ok()
     );
-    let out_of_range = json!({"ma":[0],"ema":[],"boll":null,"atr":null});
-    assert_eq!(
-        replay::put_chart_setup(
-            &s,
-            o,
-            id,
-            Some("setup-3"),
-            serde_json::from_value(out_of_range).unwrap()
-        )
-        .await
-        .unwrap_err()
-        .code,
-        "invalid_chart_setup_period"
-    );
+    for (key, body, code) in [
+        (
+            "setup-9",
+            json!({"ma":[5,10,20,30,40,50],"ema":[60,120,240]}),
+            "chart_setup_too_many_lines",
+        ),
+        (
+            "setup-vol",
+            json!({"volume":{"ma":[5,10,20,30,60,120,240]}}),
+            "chart_setup_too_many_lines",
+        ),
+        (
+            "setup-range",
+            json!({"ma":[0],"ema":[],"boll":null,"atr":null}),
+            "invalid_chart_setup_period",
+        ),
+        (
+            "setup-volrange",
+            json!({"volume":{"ma":[501]}}),
+            "invalid_chart_setup_period",
+        ),
+        (
+            "setup-macd",
+            json!({"macd":{"fast":30,"slow":10,"signal":9}}),
+            "invalid_chart_setup_macd",
+        ),
+        (
+            "setup-macd-eq",
+            json!({"macd":{"fast":12,"slow":12,"signal":9}}),
+            "invalid_chart_setup_macd",
+        ),
+        (
+            "setup-rsi",
+            json!({"rsi":{"n":0}}),
+            "invalid_chart_setup_period",
+        ),
+    ] {
+        assert_eq!(
+            replay::put_chart_setup(&s, o, id, Some(key), serde_json::from_value(body).unwrap())
+                .await
+                .unwrap_err()
+                .code,
+            code
+        );
+    }
     // A shape the backend does not know is refused before it can reach the page.
     assert!(
         serde_json::from_value::<scorebook_core::api::replay::ChartSetup>(
@@ -256,7 +305,7 @@ async fn window_opens_at_the_location_and_otherwise_120_bars_before_the_judgment
     let saved = calls::create(&s, o, "call", c).await.unwrap();
     let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
 
-    let v = replay::get(&s, o, id).await.unwrap();
+    let v = replay::get(&s, o, id, full()).await.unwrap();
     assert_eq!(v["window"]["bars_before"], 120);
     assert_eq!(v["window"]["truncated"], false);
     assert_eq!(v["source"], "rest");
@@ -280,7 +329,7 @@ async fn window_opens_at_the_location_and_otherwise_120_bars_before_the_judgment
     )
     .await
     .unwrap();
-    let v = replay::get(&s, o, id).await.unwrap();
+    let v = replay::get(&s, o, id, full()).await.unwrap();
     let start: DateTime<Utc> = serde_json::from_value(v["window"]["start_at"].clone()).unwrap();
     assert_eq!(
         start.timestamp(),
@@ -312,7 +361,7 @@ async fn a_window_wider_than_2000_bars_is_truncated_at_the_end() {
     )
     .await
     .unwrap();
-    let v = replay::get(&s, o, id).await.unwrap();
+    let v = replay::get(&s, o, id, full()).await.unwrap();
     assert_eq!(v["window"]["truncated"], true);
     let start: DateTime<Utc> = serde_json::from_value(v["window"]["start_at"].clone()).unwrap();
     let end: DateTime<Utc> = serde_json::from_value(v["window"]["end_at"].clone()).unwrap();
@@ -331,10 +380,10 @@ async fn a_second_replay_is_served_from_the_cache_and_delete_empties_it() {
         .unwrap();
     let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
 
-    let first = replay::get(&s, o, id).await.unwrap();
+    let first = replay::get(&s, o, id, full()).await.unwrap();
     assert_eq!(market.klines.load(Ordering::SeqCst), 1);
     assert!(bar_rows(&s).await > 0);
-    let second = replay::get(&s, o, id).await.unwrap();
+    let second = replay::get(&s, o, id, full()).await.unwrap();
     assert_eq!(
         market.klines.load(Ordering::SeqCst),
         1,
@@ -364,7 +413,7 @@ async fn expired_display_cache_is_swept() {
         .await
         .unwrap();
     let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
-    replay::get(&s, o, id).await.unwrap();
+    replay::get(&s, o, id, full()).await.unwrap();
     let live = bar_rows(&s).await;
     assert!(live > 0);
     assert_eq!(replay::sweep(&s).await.unwrap(), 0);
@@ -393,7 +442,7 @@ async fn levels_are_the_numbers_settlement_judges_against() {
         .unwrap();
     let _ = scorebook::application::settlement::settle(&s, &j).await;
 
-    let v = replay::get(&s, o, id).await.unwrap();
+    let v = replay::get(&s, o, id, full()).await.unwrap();
     assert_eq!(v["judgment"]["base_price"], "100");
     assert_eq!(v["levels"]["template"], "T1");
     assert_eq!(v["levels"]["threshold_abs"], "2");
@@ -419,6 +468,7 @@ async fn levels_are_the_numbers_settlement_judges_against() {
                 high: high.into(),
                 low: "100".into(),
                 close: "100".into(),
+                volume: None,
             }],
             trades: vec![],
             coverage_complete: true,
@@ -446,7 +496,7 @@ async fn the_stage_window_is_counted_in_bars_for_every_interval() {
             .await
             .unwrap();
         let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
-        let v = replay::get(&s, o, id).await.unwrap();
+        let v = replay::get(&s, o, id, full()).await.unwrap();
         assert_eq!(v["interval"], iv.as_str());
         let start: DateTime<Utc> = serde_json::from_value(v["window"]["start_at"].clone()).unwrap();
         let end: DateTime<Utc> = serde_json::from_value(v["window"]["end_at"].clone()).unwrap();
@@ -476,7 +526,7 @@ async fn replay_refuses_what_it_cannot_draw() {
     let saved = calls::create(&s, o, "odd", odd).await.unwrap();
     let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
     assert_eq!(
-        replay::get(&s, o, id).await.unwrap_err().code,
+        replay::get(&s, o, id, full()).await.unwrap_err().code,
         "replay_interval_unsupported"
     );
     let mut bare = call_body(json!([]));
@@ -484,7 +534,7 @@ async fn replay_refuses_what_it_cannot_draw() {
     let saved = calls::create(&s, o, "bare", bare).await.unwrap();
     let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
     assert_eq!(
-        replay::get(&s, o, id).await.unwrap_err().code,
+        replay::get(&s, o, id, full()).await.unwrap_err().code,
         "replay_needs_instrument"
     );
     // A refused replay writes nothing at all.
@@ -580,4 +630,274 @@ async fn the_four_routes_are_wired_and_owner_isolated() {
     )
     .await;
     assert_eq!(status, 204);
+}
+
+/// 前端能自己直连币安拉 K 线时，后端只交代舞台的坐标：不取数、不落缓存、
+/// 也不给已有缓存续命。拉不到再回来要 full。
+#[tokio::test]
+async fn bars_none_returns_the_stage_without_touching_the_exchange() {
+    let (s, o, _, _tmp) = setup().await;
+    let market = Recorder::new();
+    let s = s.with_market(market.clone());
+    let saved = calls::create(&s, o, "call", call_body(json!([])))
+        .await
+        .unwrap();
+    let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
+    // K 线缓存是按合约存的公共数据，不分账户：别的用例留下的窗口不该算在这里。
+    sqlx::query("DELETE FROM replay_bars")
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+
+    let meta = replay::get(&s, o, id, mode("none")).await.unwrap();
+    assert_eq!(market.klines.load(Ordering::SeqCst), 0);
+    assert_eq!(bar_rows(&s).await, 0);
+    assert_eq!(meta["bars_included"], false);
+    assert_eq!(meta["bars"], json!([]));
+    // 前端要靠这四样自己去拉：品种、市场、周期、窗口。
+    assert_eq!(meta["symbol"], "BTCUSDT");
+    assert_eq!(meta["market"], "usd_m");
+    assert_eq!(meta["interval"], "1h");
+    assert!(meta["window"]["start_at"].is_string());
+    assert!(meta["window"]["end_at"].is_string());
+    // 一根都没缓存，所以覆盖度只能是不完整。
+    assert_eq!(meta["window"]["coverage_complete"], false);
+    assert!(meta["levels"].is_object());
+    assert!(meta["judgment"]["at"].is_string());
+    assert!(
+        meta["storage_policy"]
+            .as_str()
+            .unwrap()
+            .contains("expires_at")
+    );
+
+    // 无法理解的取值当场拒绝，不去猜前端想要什么。
+    assert_eq!(
+        replay::get(&s, o, id, mode("1h")).await.unwrap_err().code,
+        "invalid_bars_mode"
+    );
+
+    let full_view = replay::get(&s, o, id, full()).await.unwrap();
+    assert_eq!(full_view["bars_included"], true);
+    assert!(!full_view["bars"].as_array().unwrap().is_empty());
+    assert_eq!(full_view["window"]["coverage_complete"], true);
+    assert_eq!(market.klines.load(Ordering::SeqCst), 1);
+    let cached = bar_rows(&s).await;
+    assert!(cached > 0);
+
+    // 缓存已经在了，none 模式照样不续命也不重取。
+    sqlx::query("UPDATE replay_bars SET expires_at=now()+interval '1 hour'")
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    let again = replay::get(&s, o, id, mode("none")).await.unwrap();
+    assert_eq!(again["bars"], json!([]));
+    assert_eq!(again["bars_included"], false);
+    // 缓存齐了，窗口覆盖度就按缓存算出来是完整的。
+    assert_eq!(again["window"]["coverage_complete"], true);
+    assert_eq!(market.klines.load(Ordering::SeqCst), 1);
+    let hours: f64 = sqlx::query_scalar(
+        "SELECT (EXTRACT(EPOCH FROM max(expires_at)-now())/3600)::float8 FROM replay_bars",
+    )
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    assert!(hours < 2.0, "metadata-only read renewed the cache: {hours}");
+    // full 模式才续命。
+    replay::get(&s, o, id, full()).await.unwrap();
+    let hours: f64 = sqlx::query_scalar(
+        "SELECT (EXTRACT(EPOCH FROM max(expires_at)-now())/3600)::float8 FROM replay_bars",
+    )
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    assert!(hours > 23.0);
+    assert_eq!(bar_rows(&s).await, cached);
+    replay::clear(&s, o, id).await.unwrap();
+}
+
+/// VOL 副图要的成交量：来源填上、缓存存下、再取出来还在。判决从不读它。
+#[tokio::test]
+async fn replay_bars_carry_volume_through_the_cache() {
+    let (s, o, _, _tmp) = setup().await;
+    let s = s.with_market(Recorder::new());
+    let saved = calls::create(&s, o, "call", call_body(json!([])))
+        .await
+        .unwrap();
+    let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
+
+    sqlx::query("DELETE FROM replay_bars")
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    let first = replay::get(&s, o, id, full()).await.unwrap();
+    assert_eq!(first["bars"][0]["volume"], "12.5");
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT volume FROM replay_bars ORDER BY bar_start LIMIT 1")
+            .fetch_one(&s.db.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.as_deref(), Some("12.5"));
+    // 第二次完全走缓存，量还在。
+    let second = replay::get(&s, o, id, full()).await.unwrap();
+    assert_eq!(second["bars"], first["bars"]);
+
+    // 旧缓存行没有量：读出来是 null，不是报错。
+    sqlx::query("UPDATE replay_bars SET volume=NULL")
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    let legacy = replay::get(&s, o, id, full()).await.unwrap();
+    assert_eq!(legacy["bars"][0]["volume"], Value::Null);
+    replay::clear(&s, o, id).await.unwrap();
+}
+
+/// 归档 CSV 的第六列就是成交量，解析时一并带出来。
+#[test]
+fn monthly_archive_rows_carry_volume() {
+    use std::io::Write;
+    let csv = "1704067200000,100,101,99,100,7.5,1704070799999,750,10,4,400,0\n";
+    let mut zipped = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zipped
+        .start_file::<_, ()>(
+            "BTCUSDT-1h-2024-01.csv",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+    zipped.write_all(csv.as_bytes()).unwrap();
+    let bytes = zipped.finish().unwrap().into_inner();
+    let start = DateTime::from_timestamp(1704067200, 0).unwrap();
+    let bars = scorebook::adapters::binance_archive::parse_klines(
+        bytes,
+        start,
+        start + Duration::hours(1),
+    )
+    .unwrap();
+    assert_eq!(bars.len(), 1);
+    assert_eq!(bars[0].volume.as_deref(), Some("7.5"));
+    assert_eq!(bars[0].close, "100");
+}
+
+/// 同板块对比图上传时按 scene 传了，事后改成 reference：只动 kind 这一列，
+/// 已经钉住的位置原样留着，也不会因此引出一次自动定位。
+#[tokio::test]
+async fn attachment_kind_can_be_corrected_after_upload() {
+    use scorebook::application::attachments;
+    let (s, o, _, _tmp) = setup().await;
+    let a = calls::upload(&s, o, "img", png(), "scene".into(), None)
+        .await
+        .unwrap();
+    let aid: Uuid = serde_json::from_value(a["id"].clone()).unwrap();
+    let mut c = call_body(json!([]));
+    c.attachments = vec![aid];
+    let saved = calls::create(&s, o, "call", c).await.unwrap();
+    let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
+    let now = Utc::now();
+    replay::put_location(
+        &s,
+        o,
+        aid,
+        Some("loc-1"),
+        serde_json::from_value(location(now - Duration::hours(64), now)).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let jobs_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM jobs WHERE owner_id=$1 AND kind='attachment.locate'",
+    )
+    .bind(o)
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    let row = attachments::set_kind(
+        &s,
+        o,
+        aid,
+        Some("kind-1"),
+        serde_json::from_value(json!({"kind":"reference"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(row["kind"], "reference");
+    assert_eq!(row["id"], json!(aid));
+    assert!(row.get("owner_id").is_none());
+    // 位置是图自己的事实，跟它派什么用场无关。
+    assert_eq!(row["location"]["symbol"], "BTCUSDT");
+    let record = calls::get(&s, o, id).await.unwrap();
+    assert_eq!(record["attachments"][0]["kind"], "reference");
+    assert_eq!(record["attachments"][0]["location"]["symbol"], "BTCUSDT");
+
+    // 改回 scene 也不会引出一次自动定位。
+    attachments::set_kind(
+        &s,
+        o,
+        aid,
+        Some("kind-2"),
+        serde_json::from_value(json!({"kind":"scene"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let jobs_after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM jobs WHERE owner_id=$1 AND kind='attachment.locate'",
+    )
+    .bind(o)
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    assert_eq!(jobs_before, jobs_after);
+
+    // 能改的只有用途：字节、哈希、尺寸这些证据照旧一格都动不得。
+    for statement in [
+        "UPDATE attachments SET sha256='0' WHERE id=$1",
+        "UPDATE attachments SET size=1 WHERE id=$1",
+        "UPDATE attachments SET kind='query' WHERE id=$1",
+    ] {
+        assert!(
+            sqlx::query(statement)
+                .bind(aid)
+                .execute(&s.db.pool)
+                .await
+                .is_err(),
+            "{statement}"
+        );
+    }
+
+    // 认不得的用途拒收；别人的图看不见。
+    assert_eq!(
+        attachments::set_kind(
+            &s,
+            o,
+            aid,
+            Some("kind-3"),
+            serde_json::from_value(json!({"kind":"chart"})).unwrap()
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "invalid_kind"
+    );
+    let (other, _) = s.db.create_user("kind-other").await.unwrap();
+    assert!(
+        attachments::set_kind(
+            &s,
+            other,
+            aid,
+            Some("kind-4"),
+            serde_json::from_value(json!({"kind":"reference"})).unwrap()
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        attachments::set_kind(
+            &s,
+            o,
+            Uuid::new_v4(),
+            Some("kind-5"),
+            serde_json::from_value(json!({"kind":"reference"})).unwrap()
+        )
+        .await
+        .is_err()
+    );
 }

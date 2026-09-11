@@ -12,6 +12,7 @@ pub fn routes() -> Router<Services> {
             get(locate_get).post(locate_request),
         )
         .route("/v1/calls/{id}/chart-setup", put(chart_setup_put))
+        .route("/v1/attachments/{id}", patch(attachment_kind_put))
         .route(
             "/v1/calls/{id}/replay",
             get(replay_get).delete(replay_clear),
@@ -71,11 +72,13 @@ async fn locate_get(
     )
     .await
 }
+/// 按图指定品种：body 可以整个省掉，省掉就沿用记录的 instrument。
 async fn locate_request(
     State(s): State<Services>,
     Extension(o): Extension<Uuid>,
     Path(id): Path<Uuid>,
     h: HeaderMap,
+    body: Option<Json<LocateOverride>>,
 ) -> Result<Json<Value>> {
     invoke(
         &s,
@@ -83,7 +86,24 @@ async fn locate_request(
         Action::AttachmentLocateRequest,
         Some(id),
         optional_key(&h),
-        json!({}),
+        json!(body.map(|Json(v)| v).unwrap_or_default()),
+    )
+    .await
+}
+async fn attachment_kind_put(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+    h: HeaderMap,
+    Json(v): Json<AttachmentKindUpdate>,
+) -> Result<Json<Value>> {
+    invoke(
+        &s,
+        o,
+        Action::AttachmentKindPut,
+        Some(id),
+        optional_key(&h),
+        json!(v),
     )
     .await
 }
@@ -108,8 +128,9 @@ async fn replay_get(
     State(s): State<Services>,
     Extension(o): Extension<Uuid>,
     Path(id): Path<Uuid>,
+    Query(q): Query<ReplayQuery>,
 ) -> Result<Json<Value>> {
-    invoke(&s, o, Action::ReplayGet, Some(id), None, json!({})).await
+    invoke(&s, o, Action::ReplayGet, Some(id), None, json!(q)).await
 }
 async fn replay_clear(
     State(s): State<Services>,

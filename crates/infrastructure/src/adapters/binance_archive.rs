@@ -242,7 +242,7 @@ pub fn parse_klines(bytes: Vec<u8>, start: DateTime<Utc>, end: DateTime<Utc>) ->
         if at < start || to > end {
             continue;
         }
-        for i in 1..=4 {
+        for i in 1..=5 {
             scorebook_core::domain::criteria::dec(&r[i]).map_err(Error::bad)?;
         }
         bars.push(Bar {
@@ -252,6 +252,7 @@ pub fn parse_klines(bytes: Vec<u8>, start: DateTime<Utc>, end: DateTime<Utc>) ->
             high: r[2].into(),
             low: r[3].into(),
             close: r[4].into(),
+            volume: Some(r[5].into()),
         });
         if bars.len() > 50000 {
             return Err(Error::bad("archive_bar_budget_exceeded"));

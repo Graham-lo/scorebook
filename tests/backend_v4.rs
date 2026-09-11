@@ -1694,6 +1694,7 @@ async fn chart_v2_runs_ocr_public_candidate_refetch_and_source_change_exclusion(
                 high: (p + 2.).to_string(),
                 low: (p - 1.).to_string(),
                 close: (p + 0.5).to_string(),
+                volume: None,
             }
         })
         .collect();

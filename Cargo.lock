@@ -1971,6 +1971,7 @@ dependencies = [
  "utoipa",
  "uuid",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

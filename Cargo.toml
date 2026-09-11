@@ -42,6 +42,7 @@ utoipa = { version = "5", features = ["chrono", "uuid"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"

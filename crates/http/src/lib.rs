@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
 };
 use scorebook_core::{
     api,

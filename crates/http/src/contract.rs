@@ -46,6 +46,9 @@ use utoipa::OpenApi;
     scorebook_core::api::history_catalog::ArchiveCatalogInput,
     scorebook_core::api::replay::AttachmentLocation,
     scorebook_core::api::replay::ChartSetup,
+    scorebook_core::api::replay::ReplayQuery,
+    scorebook_core::api::replay::LocateOverride,
+    scorebook_core::api::replay::AttachmentKindUpdate,
     scorebook_core::domain::replay::Levels,
     scorebook_core::domain::replay::TriggerLevel,
     scorebook_core::api::chart_search::ChartAnalysisInput,
@@ -204,7 +207,8 @@ pub fn openapi() -> Value {
         ("/v1/attachments/{id}/location", "put", "AttachmentLocation"),
         ("/v1/attachments/{id}/location", "delete", ""),
         ("/v1/attachments/{id}/locate", "get", ""),
-        ("/v1/attachments/{id}/locate", "post", ""),
+        ("/v1/attachments/{id}/locate", "post", "LocateOverride"),
+        ("/v1/attachments/{id}", "patch", "AttachmentKindUpdate"),
         ("/v1/calls/{id}/chart-setup", "put", "ChartSetup"),
         ("/v1/calls/{id}/replay", "get", ""),
         ("/v1/calls/{id}/replay", "delete", ""),
@@ -319,6 +323,7 @@ pub fn openapi() -> Value {
             }
             "/v1/trades" | "/v1/trade-cycles" | "/v1/account-ledger" => Some("TradeFilter"),
             "/v1/trade-cycles/{id}" => Some("CycleDetailFilter"),
+            "/v1/calls/{id}/replay" => Some("ReplayQuery"),
             _ => None,
         };
         if method == "get"
@@ -348,7 +353,9 @@ pub fn openapi() -> Value {
             op["parameters"].as_array_mut().unwrap().push(json!({"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","maxLength":128}}));
         }
         if !schema.is_empty() && schema != "binary" && schema != "multipart" {
-            op["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{schema}")}}}});
+            // 按图指定品种是可选的：不给 body 就沿用记录本身的 instrument。
+            let required = path != "/v1/attachments/{id}/locate";
+            op["requestBody"] = json!({"required":required,"content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{schema}")}}}});
         }
         if schema == "multipart" {
             op["requestBody"] = json!({"required":true,"content":{"multipart/form-data":{"schema":{"type":"object","required":["file"],"properties":{"file":{"type":"string","format":"binary"},"kind":{"type":"string","enum":["scene","supplement","reference","query"]},"captured_at":{"type":"string","format":"date-time"}}}}}});

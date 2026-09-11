@@ -382,7 +382,19 @@ impl Facade {
                 app::replay::delete_location(s, owner, id()?, optional_key.as_deref()).await
             }
             Action::AttachmentLocateGet => app::locate::get(s, owner, id()?).await,
-            Action::AttachmentLocateRequest => app::locate::request(s, owner, id()?, key()?).await,
+            Action::AttachmentLocateRequest => {
+                app::locate::request(s, owner, id()?, key()?, parse(payload)?).await
+            }
+            Action::AttachmentKindPut => {
+                app::attachments::set_kind(
+                    s,
+                    owner,
+                    id()?,
+                    optional_key.as_deref(),
+                    parse(payload)?,
+                )
+                .await
+            }
             Action::ChartSetupPut => {
                 app::replay::put_chart_setup(
                     s,
@@ -393,7 +405,7 @@ impl Facade {
                 )
                 .await
             }
-            Action::ReplayGet => app::replay::get(s, owner, id()?).await,
+            Action::ReplayGet => app::replay::get(s, owner, id()?, parse(payload)?).await,
             Action::ReplayClear => app::replay::clear(s, owner, id()?).await,
             Action::OutcomeRevision => {
                 app::settlement::request_revision(s, owner, id()?, key()?, parse(payload)?).await

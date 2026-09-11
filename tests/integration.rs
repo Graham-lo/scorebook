@@ -518,6 +518,7 @@ async fn historical_index_keeps_only_vectors_and_positions() {
                 high: format!("{}", p + 1.0),
                 low: format!("{}", p - 1.0),
                 close: format!("{}", p + 0.4),
+                volume: None,
             }
         })
         .collect();
@@ -2032,4 +2033,117 @@ async fn review_trade_details_validate_and_freeze_selected_positions() {
         *snapshot
     );
     assert_eq!(detail["body"]["original_text"], "交易复盘");
+}
+
+/// 这三条路由是前端直接打的：改用途、只要舞台坐标、按图指定品种。HTTP 这一层
+/// 自己也要成立 —— 同一个路径上 GET 和 PATCH 各归各的。
+#[tokio::test]
+async fn attachment_patch_and_metadata_only_replay_over_http() {
+    let (s, o, token, _tmp) = setup().await;
+    let a = calls::upload(&s, o, "img", chart(false, false), "scene".into(), None)
+        .await
+        .unwrap();
+    let aid: Uuid = serde_json::from_value(a["id"].clone()).unwrap();
+    let mut body = call("按图指定品种");
+    body.attachments = vec![aid];
+    let saved = calls::create(&s, o, "http-call", body).await.unwrap();
+    let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
+    let app = scorebook::http::router(s.clone());
+    let send = |req: Request<Body>| {
+        let app = app.clone();
+        async move {
+            let res = app.oneshot(req).await.unwrap();
+            let status = res.status().as_u16();
+            let bytes = res.into_body().collect().await.unwrap().to_bytes();
+            (status, serde_json::from_slice::<Value>(&bytes).ok())
+        }
+    };
+    let auth = |method: &str, uri: String| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("Authorization", format!("Bearer {token}"))
+    };
+
+    let (status, v) = send(
+        auth("PATCH", format!("/v1/attachments/{aid}"))
+            .header("Content-Type", "application/json")
+            .header("Idempotency-Key", "kind-http-1")
+            .body(Body::from(json!({"kind":"reference"}).to_string()))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "{v:?}");
+    assert_eq!(v.unwrap()["data"]["kind"], "reference");
+    // 同一个路径上的 GET 还是取图本身。
+    let (status, _) = send(
+        auth("GET", format!("/v1/attachments/{aid}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, v) = send(
+        auth("PATCH", format!("/v1/attachments/{aid}"))
+            .header("Content-Type", "application/json")
+            .header("Idempotency-Key", "kind-http-2")
+            .body(Body::from(json!({"kind":"chart"}).to_string()))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 422);
+    assert_eq!(v.unwrap()["error"]["code"], "invalid_kind");
+
+    // 只要舞台的坐标，不要 K 线。
+    let (status, v) = send(
+        auth("GET", format!("/v1/calls/{id}/replay?bars=none"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let v = v.unwrap()["data"].clone();
+    assert_eq!(v["bars_included"], false);
+    assert_eq!(v["bars"], json!([]));
+    let (status, v) = send(
+        auth("GET", format!("/v1/calls/{id}/replay?bars=half"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 422);
+    assert_eq!(v.unwrap()["error"]["code"], "invalid_bars_mode");
+
+    // 定位可以不带 body（照记录），也可以带上这张图自己的品种。
+    let (status, v) = send(
+        auth("POST", format!("/v1/attachments/{aid}/locate"))
+            .header("Idempotency-Key", "locate-http-1")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(v.unwrap()["data"]["symbol"], "BTCUSDT");
+    sqlx::query(
+        "UPDATE jobs SET status='succeeded' WHERE owner_id=$1 AND kind='attachment.locate'",
+    )
+    .bind(o)
+    .execute(&s.db.pool)
+    .await
+    .unwrap();
+    let (status, v) = send(
+        auth("POST", format!("/v1/attachments/{aid}/locate"))
+            .header("Content-Type", "application/json")
+            .header("Idempotency-Key", "locate-http-2")
+            .body(Body::from(
+                json!({"symbol":"SNDKUSDT","interval":"1h"}).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let v = v.unwrap()["data"].clone();
+    assert_eq!(v["symbol"], "SNDKUSDT");
+    assert_eq!(v["market"], "usd_m");
+    assert_eq!(v["interval"], "1h");
 }
