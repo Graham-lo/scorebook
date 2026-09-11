@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 
@@ -15,9 +15,18 @@ const HOST = '127.0.0.1'
 const PORT = 5178
 const ORIGIN = `http://${HOST}:${PORT}`
 const API = process.env.SCOREBOOK_API ?? 'http://127.0.0.1:8787'
+// 这个仓库有两种摆法：开发机上前后端是并排的两棵树（../../scorebook-backend），
+// 公开仓里它们是同一棵树下的 backend/ 和 frontend/（../../backend）。默认值挨个
+// 试一遍，谁在就用谁，这样两种摆法都不必额外配环境变量。
+const TOKEN_DEFAULT = resolve(import.meta.dirname, '../../scorebook-backend/data/local-token')
+const TOKEN_CANDIDATES = [
+  TOKEN_DEFAULT,
+  resolve(import.meta.dirname, '../../backend/data/local-token'),
+]
 const TOKEN_FILE =
   process.env.SCOREBOOK_TOKEN_FILE ??
-  resolve(import.meta.dirname, '../../scorebook-backend/data/local-token')
+  TOKEN_CANDIDATES.find((path) => existsSync(path)) ??
+  TOKEN_DEFAULT
 
 function credential(): string {
   try {
@@ -25,8 +34,11 @@ function credential(): string {
     if (!token) throw new Error('empty')
     return token
   } catch {
+    const looked = process.env.SCOREBOOK_TOKEN_FILE
+      ? TOKEN_FILE
+      : TOKEN_CANDIDATES.join('\n  ')
     throw new Error(
-      `无法读取本机开发凭证：${TOKEN_FILE}\n` +
+      `无法读取本机开发凭证，找过这些位置：\n  ${looked}\n` +
         '请先按后端 README 执行 ops/run.sh create-user local --token-file data/local-token，' +
         '或设置 SCOREBOOK_TOKEN_FILE 指向凭证文件。',
     )
