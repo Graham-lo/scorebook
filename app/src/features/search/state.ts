@@ -90,8 +90,15 @@ export function finishSubmission(): void {
   for (const listener of submissionListeners) listener()
 }
 
+/**
+ * 问的是哪件事。条数不算在内——「最多 3 条」改成 5 条，问题没变，只是想多看几个。
+ */
+function questionFingerprint(): string {
+  return JSON.stringify([state.queryId, state.scope, state.region, period.value, state.symbol, state.market, state.redUp, state.reverse])
+}
+
 export function queryFingerprint(): string {
-  return JSON.stringify([state.queryId, state.scope, state.region, period.value, state.symbol, state.market, state.redUp, state.reverse, state.limit])
+  return JSON.stringify([questionFingerprint(), state.limit])
 }
 
 /* ------------------------------------------------------ 人说过「都不是」的 */
@@ -112,12 +119,15 @@ let rejectedFor = ''
 /**
  * 否掉的是「这几条 BTC 的窗口」，不是「所有检索结果」。
  *
- * 换图、换范围、换品种市场周期，问的就是另一件事，旧的否决不该跟过来。查询指纹
- * 本来就是这个「另一件事」的定义，所以直接跟着它走：读之前先对一次，免得某条
- * 路径忘了调 `syncQuery` 就把上一个问题的否决发了出去。
+ * 换图、换范围、换品种市场周期，问的就是另一件事，旧的否决不该跟过来。读之前先
+ * 对一次，免得某条路径忘了调 `syncQuery` 就把上一个问题的否决发了出去。
+ *
+ * 对的是问题的指纹，不是查询的指纹：两者只差一个「一次要几条」。人说了不是的那
+ * 几个窗口，不会因为他把 3 条改成 5 条就重新变成没看过——跟着查询指纹走的话，改
+ * 一下条数否决就清空了，刚否掉的那几条转眼又回到眼前，正是这颗按钮要治的毛病。
  */
 function freshen(): void {
-  if (rejectedFor && rejectedFor !== queryFingerprint()) forgetRejected()
+  if (rejectedFor && rejectedFor !== questionFingerprint()) forgetRejected()
 }
 
 /** 这一次要报给后端的那一份。空的时候调用方整个字段都不该写。 */
@@ -135,7 +145,7 @@ export function rejectedCount(): number {
 export function rejectAll(ids: Uuid[]): void {
   freshen()
   for (const id of ids) rejected.add(id)
-  rejectedFor = queryFingerprint()
+  rejectedFor = questionFingerprint()
 }
 
 export function forgetRejected(): void {

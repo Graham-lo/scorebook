@@ -83,3 +83,13 @@ test('要报上去的 id 两条路上不是同一样东西', () => {
   assert.equal(excludeId(history), id(7))
   assert.equal(excludeId(mine), id(8))
 })
+
+test('多要几条答案不算换了问题：否掉的那几条不会因此回来', () => {
+  ask()
+  rejectAll([id(1), id(2), id(3)])
+  // 「最多 3 条」改成 5 条，问的还是同一件事，只是想多看几个。否决要是跟着一起
+  // 清空，人再按一次「都不是」，刚否掉的那三条就又回到眼前了。
+  state.limit = 5
+  assert.equal(rejectedCount(), 3)
+  assert.deepEqual(searchBody(QUERY).exclude, [id(1), id(2), id(3)])
+})
