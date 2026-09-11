@@ -713,9 +713,7 @@ pub async fn ensure_index(
     let base = iv.floor(judgment);
     // `range` 保持从前的形状不动，第几段单独一格说：第 0 段的那条自动定位路径，
     // 记下来的范围得和从前一个字节不差。
-    let described = |start: DateTime<Utc>, end: DateTime<Utc>, bars: i64| {
-        json!({"market":market,"symbol":symbol,"interval":interval,"start_at":start,"end_at":end,"bars":bars})
-    };
+    let described = |start: DateTime<Utc>, end: DateTime<Utc>, bars: i64| json!({"market":market,"symbol":symbol,"interval":interval,"start_at":start,"end_at":end,"bars":bars});
     let limit = if widen { MAX_SPANS } else { 1 };
     let mut chosen = None;
     for n in 0..limit {

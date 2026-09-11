@@ -555,7 +555,10 @@ async fn saying_none_of_these_pushes_the_index_one_span_further_back_each_time()
         .unwrap();
     assert_eq!(first["built"], true);
     assert_eq!(first["span"], 0);
-    assert_eq!(first["range"]["start_at"], json!(base - Duration::hours(768)));
+    assert_eq!(
+        first["range"]["start_at"],
+        json!(base - Duration::hours(768))
+    );
     assert_eq!(first["range"]["end_at"], json!(base));
     assert_eq!(first["range"]["bars"], 768);
 
@@ -587,7 +590,8 @@ async fn saying_none_of_these_pushes_the_index_one_span_further_back_each_time()
         json!(base - Duration::hours(2304))
     );
     assert!(
-        third["range"]["start_at"].as_str().unwrap() < second["range"]["start_at"].as_str().unwrap()
+        third["range"]["start_at"].as_str().unwrap()
+            < second["range"]["start_at"].as_str().unwrap()
     );
 
     // 交界处不留洞：第 0 段的起点前后各 256 根里，三种窗口尺寸都建得出来。
@@ -634,22 +638,24 @@ async fn pushing_back_stops_at_the_limit_and_at_the_listing_date() {
             .bind(id).bind(base - Duration::hours(100_000)).bind(base + Duration::hours(1))
             .execute(&s.db.pool).await.unwrap();
     }
-    let before: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM public_market.features WHERE symbol='EXHAUSTUSDT'")
-            .fetch_one(&s.db.pool)
-            .await
-            .unwrap();
+    let before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public_market.features WHERE symbol='EXHAUSTUSDT'",
+    )
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
     let out = locate::ensure_index(&s, &j, "usd_m", "EXHAUSTUSDT", "1h", judgment, true)
         .await
         .unwrap();
     assert_eq!(out["built"], false);
     assert_eq!(out["reason"], "range_exhausted");
     assert_eq!(out["exhausted"], true);
-    let after: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM public_market.features WHERE symbol='EXHAUSTUSDT'")
-            .fetch_one(&s.db.pool)
-            .await
-            .unwrap();
+    let after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public_market.features WHERE symbol='EXHAUSTUSDT'",
+    )
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
     assert_eq!(before, after);
 
     // 另一种尽头：这个合约上市就在第 0 段中间。行情源只给上市之后的 K 线，
