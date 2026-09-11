@@ -1,0 +1,202 @@
+/* ============================================================
+   控件：按钮、输入、分段、开关、标签片、弹出菜单
+   ------------------------------------------------------------
+   每个可点的东西都要有 hover / 按下 / 焦点 / 禁用 / 进行中 五种样子。
+   反馈时长压在 120–200ms：手指刚离开就该看到回应。
+   ============================================================ */
+.kbd{
+  font-family:var(--mono);font-size:10.5px;padding:1px 5px;border-radius:5px;
+  background:var(--sheet2);color:var(--ink3);border:1px solid var(--rule);line-height:1.5;
+}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 15px;
+  border-radius:99px;background:var(--sheet);color:var(--ink);font-size:13.5px;font-weight:500;
+  box-shadow:inset 0 0 0 1px var(--rule2),var(--shadow);
+  transition:transform var(--t1) var(--e),box-shadow var(--t2) var(--e),background var(--t1),color var(--t1);
+}
+.btn svg{width:15px;height:15px;flex:none}
+.btn:hover{transform:translateY(-1px);box-shadow:inset 0 0 0 1px var(--blue-line),var(--shadow-lift)}
+.btn:active{transform:translateY(0) scale(.98)}
+.btn:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.btn.sm{height:30px;padding:0 12px;font-size:13px}
+.btn.lg{height:44px;padding:0 22px;font-size:15px}
+/* 主按钮：青蓝实心。整页只有一个主动作，它就是那个。 */
+.btn.primary{
+  background:linear-gradient(140deg,var(--blue-bright),var(--blue));color:#fff;font-weight:600;
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--blue-ink) 55%,transparent),0 10px 24px -12px var(--glow);
+}
+.btn.primary:hover{background:linear-gradient(140deg,var(--blue),var(--blue-ink));color:#fff}
+.btn.gold{background:var(--hl);color:var(--hl-text);box-shadow:inset 0 0 0 1px var(--hl-line)}
+.btn.blue{background:var(--blue-soft);color:var(--blue-text);box-shadow:inset 0 0 0 1px var(--blue-line)}
+.btn.ghost{background:transparent;box-shadow:none;color:var(--ink2)}
+.btn.ghost:hover{background:var(--sheet2);box-shadow:none;color:var(--ink)}
+.btn.danger{color:var(--unrealized);box-shadow:inset 0 0 0 1px var(--unrealized-line)}
+.btn[disabled],.btn[aria-disabled="true"]{opacity:.42;pointer-events:none}
+.btn.busy{pointer-events:none}
+.btn.busy::after{
+  content:'';width:12px;height:12px;border-radius:50%;flex:none;
+  border:2px solid color-mix(in srgb,currentColor 30%,transparent);border-top-color:currentColor;
+  animation:spin .7s linear infinite;
+}
+.btn .kbd{background:color-mix(in srgb,currentColor 13%,transparent);border:0;color:inherit;opacity:.72}
+/* 文字按钮：写在句子中间的那种，不抢主按钮的位置 */
+.linkbtn{
+  display:inline;font-size:13px;color:var(--blue-text);font-weight:500;
+  border-bottom:1px solid color-mix(in srgb,var(--blue) 38%,transparent);
+  transition:border-color var(--t1),color var(--t1);
+}
+.linkbtn:hover{border-bottom-color:var(--blue);color:var(--blue)}
+.linkbtn[disabled]{opacity:.45;pointer-events:none}
+
+.input,.textarea{
+  width:100%;background:var(--sheet);border:0;box-shadow:inset 0 0 0 1px var(--rule2);
+  border-radius:var(--r);padding:9px 13px;font-size:14px;
+  transition:box-shadow var(--t2) var(--e),background var(--t2);
+}
+.input{height:38px}
+.textarea{min-height:84px;resize:vertical;line-height:1.7}
+.input::placeholder,.textarea::placeholder{color:var(--ink4)}
+.input:focus,.textarea:focus{outline:0;box-shadow:inset 0 0 0 1px var(--blue),0 0 0 4px color-mix(in srgb,var(--blue) 15%,transparent)}
+.input[disabled],.textarea[disabled]{opacity:.5;background:var(--sheet2)}
+.field{display:flex;flex-direction:column;gap:6px}
+.field>span{font-size:13px;color:var(--ink2);font-weight:500}
+
+.seg{display:inline-flex;background:var(--sheet2);border-radius:99px;padding:3px;box-shadow:inset 0 0 0 1px var(--rule);gap:2px}
+.seg button{
+  height:28px;padding:0 13px;border-radius:99px;font-size:13px;color:var(--ink2);font-weight:500;
+  transition:color var(--t1),background var(--t2) var(--e),box-shadow var(--t2);
+}
+.seg button:hover:not(.on){color:var(--ink);background:color-mix(in srgb,var(--sheet) 70%,transparent)}
+.seg button.on{background:var(--blue-soft);color:var(--blue-text);font-weight:600;box-shadow:inset 0 0 0 1px var(--blue-line)}
+.seg .n{font-family:var(--mono);font-size:11px;color:var(--ink3);margin-left:5px}
+.seg.lg button{height:34px;padding:0 16px;font-size:14px}
+
+.switch{
+  width:42px;height:24px;border-radius:99px;background:var(--rule2);position:relative;cursor:pointer;flex:none;
+  transition:background var(--t2) var(--e);
+}
+.switch::after{
+  content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform var(--t2) var(--e-spring);
+}
+.switch.on{background:var(--blue)}
+.switch.on::after{transform:translateX(18px)}
+.switch:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
+
+.chip{
+  display:inline-flex;align-items:center;gap:6px;height:31px;padding:0 7px 0 12px;border-radius:99px;
+  background:var(--sheet);box-shadow:inset 0 0 0 1px var(--rule2);font-size:13px;color:var(--ink2);
+  cursor:pointer;user-select:none;white-space:nowrap;
+  transition:transform var(--t1) var(--e),box-shadow var(--t2),background var(--t2),color var(--t2);
+}
+.chip:hover{transform:translateY(-1px);box-shadow:inset 0 0 0 1px var(--rule3),var(--shadow);color:var(--ink)}
+.chip.on{background:var(--blue-soft);color:var(--blue-text);box-shadow:inset 0 0 0 1px var(--blue-line);font-weight:600}
+.chip.on.result{background:var(--pending-soft);color:var(--pending);box-shadow:inset 0 0 0 1px var(--pending-line)}
+.chip .chev,.chip .x{opacity:.55;display:grid;place-items:center;width:16px;height:16px;border-radius:50%;transition:opacity var(--t1),background var(--t1)}
+.chip .x:hover{opacity:1;background:color-mix(in srgb,currentColor 16%,transparent)}
+.chip svg{width:12px;height:12px}
+.chip .faint{margin-left:6px}
+
+/* ---------- 弹出菜单 ---------- */
+.popwrap{position:relative}
+.pop{
+  position:absolute;top:calc(100% + 8px);left:0;z-index:70;min-width:218px;padding:6px;
+  background:color-mix(in srgb,var(--sheet) 92%,transparent);backdrop-filter:blur(16px) saturate(1.4);
+  -webkit-backdrop-filter:blur(16px) saturate(1.4);
+  border-radius:var(--r2);box-shadow:inset 0 0 0 1px var(--rule2),var(--shadow-pop);
+  animation:popIn .2s var(--e-out) both;transform-origin:top left;
+}
+.pop.right{left:auto;right:0;transform-origin:top right}
+.pop .ph{font-size:11px;text-transform:uppercase;letter-spacing:.13em;color:var(--ink3);padding:8px 10px 5px;font-weight:600}
+.pop .sep{height:1px;background:var(--rule);margin:5px 0}
+.pop button,.pop a{
+  display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border-radius:9px;
+  font-size:13.5px;color:var(--ink);text-align:left;transition:background var(--t1),color var(--t1);
+}
+.pop button:hover,.pop a:hover{background:var(--blue-soft);color:var(--blue-text)}
+.pop button.on{color:var(--blue-text);font-weight:600}
+.pop .chk{width:15px;height:15px;flex:none;opacity:0;transition:opacity var(--t1),transform var(--t2) var(--e-spring);transform:scale(.6)}
+.pop button.on .chk{opacity:1;transform:none}
+.pop .chk svg{width:15px;height:15px}
+.pop-search{margin-bottom:6px}
+.pop-list{max-height:300px;overflow:auto;display:flex;flex-direction:column;gap:1px}
+.popitem{
+  display:block;width:100%;text-align:left;padding:8px 10px;border-radius:var(--r);
+  font-size:13.5px;color:var(--ink2);background:transparent;border:0;cursor:pointer;
+  transition:background var(--t1),color var(--t1);
+}
+.popitem:hover{background:var(--sheet2);color:var(--ink)}
+/* 菜单里的一行：主身份在前，市场/合约类别退到后面一行小字 */
+.pop .two{flex-direction:column;align-items:stretch;gap:2px}
+.pop .two .l1{display:flex;align-items:center;gap:8px;font-size:13.5px}
+.pop .two .l1 b{font-weight:600;letter-spacing:.01em}
+.pop .two .l2{font-size:11.5px;color:var(--ink3);display:flex;align-items:center;gap:7px}
+.pop .two:hover .l2,.pop .two.on .l2{color:color-mix(in srgb,var(--blue-text) 78%,var(--ink3))}
+
+/* ---------- 检索条 ---------- */
+.searchbar{
+  display:flex;align-items:center;gap:11px;height:50px;padding:0 16px;border-radius:99px;
+  background:var(--sheet);box-shadow:inset 0 0 0 1px var(--rule2),var(--shadow);
+  transition:box-shadow var(--t2) var(--e);margin-bottom:14px;
+}
+.searchbar:focus-within{box-shadow:inset 0 0 0 1px var(--blue),0 0 0 4px color-mix(in srgb,var(--blue) 14%,transparent),var(--shadow-lift)}
+.searchbar svg{width:18px;height:18px;color:var(--ink3);flex:none}
+.searchbar:focus-within>svg:first-child{color:var(--blue)}
+.searchbar input{flex:1;border:0;background:none;outline:0;font-size:16px;font-family:var(--serif)}
+.searchbar input::placeholder{color:var(--ink4);font-family:var(--font);font-size:14px}
+.searchbar .clr{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:var(--ink3);transition:background var(--t1),color var(--t1)}
+.searchbar .clr:hover{background:var(--sheet2);color:var(--ink)}
+.filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.filters .meta{margin-left:auto;font-size:12.5px;color:var(--ink3);display:flex;align-items:center;gap:8px}
+
+/* 顶栏「更多」菜单：外壳里的次级入口，样式跟着弹出菜单这一层走，
+   因为 .pop 的基础规则在这个文件里，写在外壳里会被它盖掉。 */
+.pop-more{min-width:266px;padding:7px;background:color-mix(in srgb,var(--sheet) 97%,transparent)}
+.pop-more a{gap:11px;padding:9px 11px;align-items:center}
+.pop-more a.on{background:var(--blue-soft);color:var(--blue-text)}
+.pop-more .mi{
+  flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:9px;
+  color:var(--ink3);background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule);
+  transition:color var(--t1),background var(--t1),box-shadow var(--t1);
+}
+.pop-more .mi svg{width:15px;height:15px}
+.pop-more a:hover .mi,.pop-more a.on .mi{
+  color:var(--blue);background:color-mix(in srgb,var(--blue) 13%,transparent);
+  box-shadow:inset 0 0 0 1px var(--blue-line);
+}
+.pop-more .two{flex:1;min-width:0}
+.pop-more .two .l1{font-weight:600;font-size:13.5px}
+.pop-more .two .l2{font-size:11.5px;line-height:1.45}
+
+/* ============================================================
+   收起来的一段：技术口径、内部预算、比法版本
+   ------------------------------------------------------------
+   平时只有一行标题，点开才展开。它是「解释」的容器，不是用来
+   藏数据缺口和检索范围的——那两样一直在外面。
+   ============================================================ */
+.fold{border-radius:var(--r);background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule)}
+.fold-h{
+  display:flex;align-items:center;gap:9px;width:100%;padding:11px 14px;text-align:left;cursor:pointer;
+  font-size:12.5px;font-weight:600;color:var(--ink3);letter-spacing:.01em;
+  transition:color var(--t2) var(--e);
+}
+.fold-h:hover{color:var(--ink2)}
+.fold-h .fold-c{margin-left:auto;display:grid;place-items:center;color:var(--ink4);transition:transform var(--t2) var(--e-out),color var(--t2)}
+.fold-h .fold-c svg{width:13px;height:13px}
+.fold-h.on{color:var(--blue-text)}
+.fold-h.on .fold-c{transform:rotate(180deg);color:var(--blue)}
+.fold-h:focus-visible{outline:2px solid var(--blue);outline-offset:-2px;border-radius:var(--r)}
+.fold-w{height:0;overflow:hidden;transition:height .22s var(--e-out)}
+/* 展开到位以后才放开溢出：里面的弹出菜单要盖到卡片外面去，收的时候再裁回来 */
+.fold-w.done{overflow:visible}
+.fold-b{padding:2px 14px 13px;display:flex;flex-direction:column;gap:10px}
+.fold-b .kv{margin:0}
+.fold-b>.tip:first-child{margin-top:0}
+@media(prefers-reduced-motion:reduce){.fold-w{transition:none}.fold-h .fold-c{transition:none}}
+
+.pop { box-sizing: border-box; }
+.pop-list > button { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .pop-search.input { font-size: 16px; min-height: 44px; }
+  .pop-list > button { min-height: 44px; }
+}

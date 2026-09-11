@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Scorebook 记分簿 · 让你的交易直觉越用越准</title>
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- 字体在 main.ts 里按屏幕挑着取：拉丁三款一直要，中文那两款只在宽屏上取。
+     手机上中文用系统的苹方，一个字节都不用下——一页中文会把 Noto SC 拆成
+     三四十个分片挨个下载，那是手机上最费流量也最费电的一件事。 -->
+<link rel="stylesheet" href="/src/styles/app.css">
+</head>
+<body>
+<header class="masthead"><div class="mast">
+  <a class="brand" href="#/home">Scorebook<small>记分簿</small></a>
+  <nav class="tabs" id="nav"></nav>
+  <div class="mast-right">
+    <button class="searchbtn" id="btnFocusSearch" title="搜索（⌘K）"><span></span><span>搜你说过的话</span><span class="kbd">⌘K</span></button>
+    <button class="btn primary" id="btnCapture" title="记录判断（⌃⇧S）"><span></span>记录判断<span class="kbd">⌃⇧S</span></button>
+    <a class="iconbtn" id="navSettings" href="#/settings" title="设置"><span></span></a>
+  </div>
+</div>
+<div class="subbar" id="subnav" hidden></div></header>
+<main id="main" tabindex="-1"></main>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

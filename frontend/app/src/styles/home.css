@@ -1,0 +1,260 @@
+/* ============================================================
+   今天：接着上次做
+   ------------------------------------------------------------
+   顶上是身份板（深青，带一点光），下面是真正要做的几件事。
+   不摆一排「功能入口」——只有真实存在的任务才占位置。
+   ============================================================ */
+.hero{
+  position:relative;overflow:hidden;border-radius:var(--r3);margin-bottom:30px;
+  padding:40px 44px 34px;color:var(--board-ink);isolation:isolate;background:var(--board);
+  background-image:linear-gradient(152deg,color-mix(in srgb,var(--board3) 84%,var(--board)),var(--board) 60%);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--board-ink) 9%,transparent),
+    inset 0 1px 0 color-mix(in srgb,var(--blue-bright) 40%,transparent),var(--shadow-lift);
+}
+/* 光斑跟着指针走一点点，幅度很小，只是让这块板子不像一张贴纸 */
+.hero::before{
+  content:'';position:absolute;inset:-40%;z-index:0;pointer-events:none;
+  background:radial-gradient(30% 42% at var(--mx,24%) var(--my,14%),color-mix(in srgb,var(--blue-bright) 30%,transparent),transparent 70%);
+}
+/* 进场时一道掠光扫过去，只扫一次 */
+.hero::after{
+  content:'';position:absolute;top:-60%;bottom:-60%;width:34%;z-index:1;pointer-events:none;
+  background:linear-gradient(100deg,transparent,color-mix(in srgb,#fff 12%,transparent),transparent);
+  transform:skewX(-14deg);animation:heroSheen 2.1s var(--e-out) .4s both;
+}
+.hero-grid{
+  position:absolute;inset:0;z-index:0;pointer-events:none;opacity:.5;
+  background-image:
+    repeating-linear-gradient(90deg,color-mix(in srgb,var(--board-ink) 7%,transparent) 0 1px,transparent 1px 48px),
+    repeating-linear-gradient(0deg,color-mix(in srgb,var(--board-ink) 5%,transparent) 0 1px,transparent 1px 48px);
+  -webkit-mask-image:radial-gradient(130% 110% at 84% -10%,#000,transparent 70%);
+  mask-image:radial-gradient(130% 110% at 84% -10%,#000,transparent 70%);
+
+}
+.hero-scan{
+  position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:linear-gradient(180deg,transparent 0,color-mix(in srgb,var(--blue-bright) 9%,transparent) 5%,transparent 11%);
+  display:none;
+}
+.hero-in{position:relative;z-index:2}
+.hero-eb{color:color-mix(in srgb,var(--blue-bright) 88%,var(--board-ink));animation:enterUp .6s var(--e-out) .1s both}
+.hero-eb::after{background:linear-gradient(90deg,color-mix(in srgb,var(--blue-bright) 60%,transparent),transparent)}
+.hero-t{
+  font-family:var(--serif);font-size:clamp(28px,3.4vw,44px);line-height:1.17;font-weight:500;
+  letter-spacing:-.02em;color:var(--board-ink);margin-top:15px;text-wrap:balance;
+}
+.hero-t .ln{display:block;overflow:hidden;padding-bottom:.05em}
+.hero-t .ln i{display:block;font-style:normal;transform:translateY(110%);animation:lineUp 1s var(--e-out) .16s both}
+.hero-t .ln:nth-child(2) i{animation-delay:.3s}
+.hero-s{color:var(--board-ink2);font-size:14.5px;line-height:1.8;max-width:54ch;margin-top:13px;animation:enterUp .7s var(--e-out) .28s both}
+.hero-flow{position:relative;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin-top:28px;padding-top:19px;animation:enterUp .7s var(--e-out) .38s both}
+.hstep{position:relative;display:flex;flex-direction:column;gap:2px;padding-right:20px}
+.hstep::before{
+  content:'';position:absolute;left:0;top:-19px;width:100%;height:1px;transform-origin:left;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--blue-bright) 78%,transparent),color-mix(in srgb,var(--board-ink) 12%,transparent));
+  transform:scaleX(0);animation:growX .8s var(--e-out) both;animation-delay:calc(.5s + var(--s,0)*.15s);
+}
+.hstep:nth-child(2){--s:1}
+.hstep:nth-child(3){--s:2}
+.hstep:nth-child(4){--s:3}
+.hstep:nth-child(5){--s:4}
+.hero-flow::after{
+  content:'';position:absolute;left:0;top:0;width:6px;height:6px;margin-top:-3px;border-radius:50%;
+  background:var(--blue-bright);box-shadow:0 0 12px 2px var(--glow);opacity:0;
+  display:none;
+}
+.hstep .n{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--blue-bright)}
+.hstep .t{font-family:var(--serif);font-size:17.5px;letter-spacing:-.012em;color:var(--board-ink);margin-top:3px}
+.hstep .l{font-size:12.5px;line-height:1.62;color:var(--board-ink2)}
+.hero-acts{display:flex;align-items:center;gap:10px;margin-top:26px;flex-wrap:wrap;animation:enterUp .7s var(--e-out) .48s both}
+.hero-acts .btn.primary{box-shadow:0 8px 22px -13px var(--glow)}
+.btn.onboard{
+  background:color-mix(in srgb,var(--board-ink) 10%,transparent);color:var(--board-ink);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--board-ink) 22%,transparent);
+}
+.btn.onboard:hover{background:color-mix(in srgb,var(--board-ink) 18%,transparent);color:#fff;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--board-ink) 34%,transparent),var(--shadow-lift)}
+
+/* 三个真数字 */
+.hero-nums{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;margin-top:28px;border-radius:var(--r2);overflow:hidden;
+  background:color-mix(in srgb,var(--board-ink) 11%,transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--board-ink) 11%,transparent);
+  animation:enterUp .7s var(--e-out) .56s both;
+}
+.hnum{position:relative;overflow:hidden;background:color-mix(in srgb,var(--board2) 86%,transparent);padding:14px 17px;display:flex;flex-direction:column;gap:1px;transition:background var(--t2) var(--e)}
+.hnum:hover{background:color-mix(in srgb,var(--board3) 86%,transparent)}
+.hnum::after{content:'';position:absolute;left:0;right:0;top:0;height:2px;background:linear-gradient(90deg,transparent,var(--blue-bright),transparent);transform:scaleX(0);transition:transform .45s var(--e-out)}
+.hnum:hover::after{transform:scaleX(1)}
+.hnum .v{font-family:var(--serif);font-size:31px;line-height:1.15;letter-spacing:-.022em;color:var(--board-ink);font-variant-numeric:tabular-nums}
+.hnum .v small{font-family:var(--font);font-size:12.5px;color:var(--board-ink2);margin-left:6px;letter-spacing:0}
+.hnum .k{font-size:11px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--board-ink2)}
+.hnum.hot .v{color:var(--blue-bright)}
+
+/* ---------- 今天要做的几件事 ---------- */
+.tsec{margin-bottom:30px}
+.tsh{display:flex;align-items:baseline;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+.tsh .why{font-size:13px;line-height:1.6;color:var(--ink3);max-width:60ch}
+.tsh .more{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--ink2);transition:color var(--t1)}
+.tsh .more svg{width:12px;height:12px;transform:rotate(-90deg);transition:transform var(--t2) var(--e-out)}
+.tsh .more:hover{color:var(--blue-text)}
+.tsh .more:hover svg{transform:rotate(-90deg) translateY(3px)}
+.tlist{display:flex;flex-direction:column;gap:11px}
+.ttask{
+  position:relative;display:flex;align-items:center;gap:15px;padding:15px 17px;border-radius:var(--r2);
+  overflow:hidden;text-align:left;width:100%;cursor:pointer;background:var(--sheet);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow);
+  transition:transform .3s var(--e-out),box-shadow .3s var(--e-out);
+}
+.ttask.in{animation:enterUp .5s var(--e-out) both;animation-delay:calc(var(--i,0)*46ms)}
+.ttask::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--blue);
+  transform:scaleY(0);transform-origin:center;transition:transform .38s var(--e-out);
+}
+.ttask::after{content:'';position:absolute;inset:0;pointer-events:none;opacity:0;background:radial-gradient(70% 100% at 0% 50%,var(--glow),transparent 62%);transition:opacity .38s var(--e)}
+.ttask:hover,.ttask:focus-visible{transform:translateY(-2px);box-shadow:0 0 0 1px var(--blue-line),var(--shadow-lift);outline:0}
+.ttask:hover::before,.ttask:focus-visible::before{transform:scaleY(1)}
+.ttask:hover::after{opacity:.4}
+.ttask>*{position:relative;z-index:1}
+.ttask .thumb{width:70px;height:52px;flex:none}
+.ttask:hover .thumb{transform:scale(1.04)}
+.ttask .c{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.ttask .r1{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;color:var(--ink3)}
+.ttask .r1 .sym{font-size:12.5px;font-weight:700;letter-spacing:.02em;color:var(--ink2)}
+.ttask .q{
+  font-family:var(--serif);font-size:16px;line-height:1.5;color:var(--ink);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;
+}
+.ttask .go{
+  flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:99px;
+  font-size:12.5px;font-weight:600;color:var(--blue-text);background:var(--blue-soft);
+  box-shadow:inset 0 0 0 1px var(--blue-line);transition:background var(--t2),color var(--t2),transform var(--t2) var(--e-spring);
+}
+.ttask .go svg{width:12px;height:12px;transform:rotate(-90deg)}
+.ttask:hover .go{background:var(--blue);color:#fff;box-shadow:0 6px 16px -8px var(--glow);transform:translateX(2px)}
+.ttask.wait{min-height:82px;align-items:stretch;cursor:default}
+.ttask .ic{
+  flex:none;display:grid;place-items:center;width:38px;height:38px;border-radius:12px;
+  color:var(--blue);background:var(--blue-soft);box-shadow:inset 0 0 0 1px var(--blue-line);
+  transition:transform .42s var(--e-spring),background var(--t2),color var(--t2);
+}
+.ttask .ic svg{width:17px;height:17px}
+.ttask:hover .ic{transform:rotate(-7deg) scale(1.07);background:var(--blue);color:#fff}
+.ttask .r2{font-size:12px;color:var(--ink3);line-height:1.5}
+.ttask .r1 .flow.mini{margin-left:auto}
+
+/* 今天的分组标题：一行小字，不用再套一层容器 */
+.tgh{display:flex;align-items:baseline;gap:9px;margin:16px 2px 2px;flex-wrap:wrap}
+.tgh:first-child{margin-top:0}
+.tgh .t{font-family:var(--serif);font-size:15.5px;letter-spacing:-.01em;color:var(--ink)}
+.tgh .n{
+  font-family:var(--mono);font-size:11px;font-weight:500;color:var(--blue-text);
+  background:var(--blue-soft);border-radius:99px;padding:1px 8px;box-shadow:inset 0 0 0 1px var(--blue-line);
+}
+.tgh .w{font-size:12.5px;color:var(--ink3);line-height:1.6}
+
+/* 有能力没接上时：一句实话加一个入口，不摆一排点不开的卡片 */
+.gapnote{
+  display:flex;align-items:flex-start;gap:14px;padding:16px 18px;border-radius:var(--r2);
+  background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule);
+}
+.gapnote .ic{flex:none;display:grid;place-items:center;width:34px;height:34px;border-radius:11px;
+  color:var(--ink3);background:var(--sheet);box-shadow:inset 0 0 0 1px var(--rule2)}
+.gapnote .ic svg{width:16px;height:16px}
+.gapnote .b{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.gapnote .b b{font-size:13.5px;font-weight:600;color:var(--ink)}
+.gapnote .b span{font-size:12.5px;line-height:1.65;color:var(--ink2)}
+.gapnote .btn{flex:none;align-self:center}
+
+/* 今天没有待办时：不摆空卡片，给一句话和一个动作 */
+.tclear{
+  display:flex;align-items:center;gap:16px;padding:22px 24px;border-radius:var(--r2);
+  background:linear-gradient(120deg,var(--blue-soft),color-mix(in srgb,var(--hl) 55%,transparent));
+  box-shadow:inset 0 0 0 1px var(--blue-line);
+}
+.tclear .ic{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;flex:none;background:var(--sheet);color:var(--blue);box-shadow:var(--shadow)}
+.tclear .ic svg{width:20px;height:20px}
+.tclear .b{flex:1;min-width:0}
+.tclear .b b{display:block;font-family:var(--serif);font-size:18px;color:var(--ink)}
+.tclear .b span{display:block;font-size:13px;color:var(--ink2);margin-top:3px;line-height:1.6}
+
+/* ---------- 分组入口（次级导航落地页仍在用） ---------- */
+.hsec{margin-bottom:28px}
+.hsh{display:flex;align-items:baseline;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+.hsh .why{font-size:13px;line-height:1.6;color:var(--ink3);max-width:60ch}
+.hsh .more{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--ink2);transition:color var(--t1)}
+.hsh .more svg{width:12px;height:12px;transform:rotate(-90deg);transition:transform var(--t2) var(--e-out)}
+.hsh .more:hover{color:var(--blue-text)}
+.hsh .more:hover svg{transform:rotate(-90deg) translateY(3px)}
+.hsh .eyebrow::after{transform-origin:left;animation:growX .8s var(--e-out) .2s both}
+
+.hcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(272px,1fr));gap:14px}
+.hcard{
+  position:relative;display:flex;flex-direction:column;gap:8px;overflow:hidden;text-align:left;
+  padding:17px 18px 16px;border-radius:var(--r2);background:var(--sheet);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow);
+  transition:transform .34s var(--e-out),box-shadow .34s var(--e-out);
+}
+.hcard>*{position:relative;z-index:1}
+.hcard.in{animation:enterUp .5s var(--e-out) both;animation-delay:calc(var(--i,0)*38ms)}
+.hcard .hc-top{display:flex;align-items:center;gap:11px}
+.hcard .ic{
+  position:relative;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;flex:none;
+  background:var(--sheet2);color:var(--ink2);box-shadow:inset 0 0 0 1px var(--rule2);
+  transition:background var(--t2),color var(--t2),box-shadow var(--t2),transform .42s var(--e-spring);
+}
+.hcard .ic::after{content:'';position:absolute;inset:0;border-radius:inherit;opacity:0;pointer-events:none}
+.hcard .ic svg{width:17px;height:17px}
+.hcard .t{font-family:var(--serif);font-size:17.5px;letter-spacing:-.012em;color:var(--ink)}
+.hcard .l{font-size:13px;line-height:1.7;color:var(--ink2);margin:0}
+.hcard .go{margin-top:auto;padding-top:4px;display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink3);transition:color var(--t2)}
+.hcard .go svg{width:12px;height:12px;transform:rotate(-90deg);transition:transform .34s var(--e-out)}
+a.hcard,button.hcard{cursor:pointer}
+a.hcard::before,button.hcard::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:2px;z-index:2;
+  background:linear-gradient(180deg,var(--blue),color-mix(in srgb,var(--blue) 8%,transparent));
+  transform:scaleY(0);transform-origin:bottom;transition:transform .42s var(--e-out);
+}
+a.hcard::after,button.hcard::after{
+  content:'';position:absolute;inset:0;z-index:0;pointer-events:none;opacity:0;
+  background:radial-gradient(72% 92% at 6% 0%,var(--glow),transparent 62%);transition:opacity .4s var(--e);
+}
+a.hcard:hover,button.hcard:hover,a.hcard:focus-visible,button.hcard:focus-visible{transform:translateY(-3px);box-shadow:0 0 0 1px var(--blue-line),var(--shadow-lift)}
+a.hcard:hover::before,button.hcard:hover::before,a.hcard:focus-visible::before,button.hcard:focus-visible::before{transform:scaleY(1);transform-origin:top}
+a.hcard:hover::after,button.hcard:hover::after{opacity:.5}
+a.hcard:hover .ic,button.hcard:hover .ic{background:var(--blue-soft);color:var(--blue-text);box-shadow:inset 0 0 0 1px var(--blue-line);transform:rotate(-7deg) scale(1.07)}
+a.hcard:hover .ic::after,button.hcard:hover .ic::after{animation:icRing .72s var(--e-out)}
+a.hcard:hover .go,button.hcard:hover .go{color:var(--blue-text)}
+a.hcard:hover .go svg,button.hcard:hover .go svg{transform:rotate(-90deg) translateY(4px)}
+.hcard.off{background:transparent;box-shadow:inset 0 0 0 1px var(--rule)}
+.hcard.off .ic{background:transparent;box-shadow:inset 0 0 0 1px var(--rule2);color:var(--ink4)}
+.hcard.off .t{color:var(--ink2)}
+.hcard.off .l{color:var(--ink3)}
+.hcard.off .go{flex-wrap:wrap;gap:9px}
+
+/* 最近记下的 */
+.hrecent{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+.hrec{
+  display:flex;align-items:center;gap:13px;padding:12px 14px;border-radius:var(--r2);background:var(--sheet);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent);overflow:hidden;
+  transition:transform .3s var(--e-out),box-shadow .3s var(--e-out);
+}
+.hrec.in{animation:enterUp .48s var(--e-out) both;animation-delay:calc(var(--i,0)*52ms)}
+.hrec:hover{transform:translateY(-2px);box-shadow:0 0 0 1px var(--blue-line),var(--shadow-lift)}
+.hrec .thumb{width:62px;height:46px;border-radius:8px}
+.hrec:hover .thumb{transform:scale(1.03)}
+.hrec .c{flex:1;min-width:0}
+.hrec .r1{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink3)}
+.hrec .r1 .sym{font-size:12.5px;font-weight:700;letter-spacing:.02em;color:var(--ink2)}
+.hrec .q{
+  font-family:var(--serif);font-size:15px;line-height:1.5;color:var(--ink);margin-top:3px;overflow:hidden;
+  text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere;
+}
+.hrec>svg{width:13px;height:13px;flex:none;color:var(--ink4);transform:rotate(-90deg);transition:transform .3s var(--e-out),color var(--t2)}
+.hrec:hover>svg{color:var(--blue);transform:rotate(-90deg) translateY(3px)}
+.hrec.wait{min-height:70px;align-items:stretch}
+
+/* 各组卡片列数一致；只有两张卡的那一组，主动作占两列 */
+@media (min-width:940px){
+  .hcards{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .hcards.lead>.hcard:first-child{grid-column:span 2}
+}

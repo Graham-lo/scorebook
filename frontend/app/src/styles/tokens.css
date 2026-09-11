@@ -1,0 +1,103 @@
+/* ============================================================
+   Scorebook 设计变量
+   ------------------------------------------------------------
+   一套变量，所有页面共用。改这里等于改整站，不要在页面里写死颜色。
+
+   身份色是「青蓝」：它不是页面上唯一一处彩色的按钮，而是导航在哪、
+   选中了谁、流程走到第几步、正在读的那一段——这些都由它来说。
+   香槟金只在需要点一下的地方出现：划重点、口径、当前这一条。
+   底色是暖中性的，不是灰的；长段中文压在纯灰上会显得脏。
+
+   涨跌是另一套语义，和身份色互不借用，也不覆盖用户的红涨绿涨设置。
+   ============================================================ */
+:root{
+  /* ---- 版面：暖中性纸面 ---- */
+  --paper:#f2efe8; --paper2:#e9e4da;
+  --sheet:#fffefa; --sheet2:#f6f2e9; --sheet3:#ece5d8;
+  /* ---- 深色板面：青墨。首页主视觉、顶栏浮层、看图台用它 ---- */
+  --board:#0a2422; --board2:#0f3532; --board3:#1a4d48;
+  --board-ink:#eaf3f0; --board-ink2:#93b3ad;
+  /* ---- 文字：偏暖的深青墨，正文对比度足够读长段中文 ---- */
+  --ink:#18211f; --ink2:#485654; --ink3:#6e7b78; --ink4:#9aa5a2;
+  /* ---- 线：比纸面重一点点就够，不需要框住每一块 ---- */
+  --rule:#e3dccf; --rule2:#d2c9b8; --rule3:#b2a894;
+  /* ---- 身份色 青蓝（代码里叫 --blue，沿用旧名字，值已经是青蓝） ---- */
+  --blue:#0e7c7b; --blue-ink:#0a5f5e; --blue-text:#0a5f5e; --blue-soft:#dcefec;
+  --blue-line:#a4d6d1; --blue-bright:#16a8a2;
+  /* ---- 香槟金：划重点、口径、当前项 ---- */
+  --hl:#f8eed6; --hl-text:#7d5a12; --hl-line:#e3cb99; --gold:#bb8f34;
+  /* ---- 语义信号灯 ---- */
+  --realized:#0c7350; --realized-soft:#d9ecdf; --realized-line:#9ecdb2;
+  --unrealized:#bb4130; --unrealized-soft:#fae2dc; --unrealized-bg:#fae2dc; --unrealized-line:#edb1a4;
+  --pending:#4d4fbb; --pending-soft:#e5e5fa; --pending-line:#bcbdee;
+  --grey:#6a7573; --grey-soft:#eeeae1; --grey-line:#d5cec1;
+  --up:#0c7350; --down:#bb4130;
+  /* ---- 阴影：偏青墨，不是中性灰；投得远、压得轻 ---- */
+  --shadow:0 1px 2px rgba(16,40,38,.045),0 8px 22px -16px rgba(16,40,38,.28);
+  --shadow-lift:0 2px 7px rgba(16,40,38,.07),0 26px 52px -26px rgba(16,40,38,.34);
+  --shadow-pop:0 32px 84px -30px rgba(8,28,26,.44),0 2px 10px rgba(8,28,26,.1);
+  --glow:rgba(14,124,123,.32);
+  --gold-glow:rgba(187,143,52,.36);
+  --grain:.03;
+  /* ---- 大面积柔光：页面底色、板面、读图区都从这里取 ---- */
+  --wash-1:radial-gradient(46vmax 34vmax at 12% -6%,color-mix(in srgb,var(--blue) 20%,transparent),transparent 64%);
+  --wash-2:radial-gradient(40vmax 30vmax at 96% 12%,color-mix(in srgb,var(--gold) 17%,transparent),transparent 62%);
+  --wash-3:radial-gradient(52vmax 38vmax at 52% 108%,color-mix(in srgb,var(--pending) 12%,transparent),transparent 66%);
+  /* ---- 字体：长段中文优先，拉丁字面收窄一点点和中文并排才不散 ---- */
+  --font:"Archivo","Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --serif:"Newsreader","Noto Serif SC","Songti SC",Georgia,serif;
+  --mono:"DM Mono","SFMono-Regular",Menlo,Consolas,monospace;
+  /* ---- 形 ---- */
+  --r:9px; --r2:15px; --r3:24px; --w:1200px;
+  /* ---- 动效：交互反馈 120–200ms，区域转换 180–280ms ---- */
+  --e:cubic-bezier(.2,.7,.2,1); --e-out:cubic-bezier(.16,1,.3,1);
+  --e-spring:cubic-bezier(.34,1.5,.5,1); --e-io:cubic-bezier(.66,0,.34,1);
+  --t1:.15s; --t2:.26s; --t3:.46s; --t4:.78s;
+  /* ---- 兼容旧变量名 ---- */
+  --hair:var(--rule); --text2:var(--ink2); --text3:var(--ink3);
+  --surface:var(--sheet); --accent:var(--blue);
+  --realized-text:var(--realized); --unrealized-text:var(--unrealized);
+}
+
+/* 深色：同一套语义，换一层材质。青蓝提亮，纸面换成青墨。 */
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){ color-scheme:dark;
+  --paper:#0a1413; --paper2:#0f1c1a;
+  --sheet:#141f1e; --sheet2:#1a2726; --sheet3:#22322f;
+  --board:#060f0e; --board2:#0d1f1d; --board3:#183b37;
+  --board-ink:#e8f2ef; --board-ink2:#8aa8a3;
+  --ink:#e9f0ee; --ink2:#a7b7b3; --ink3:#7e8f8b; --ink4:#5c6c69;
+  --rule:#233230; --rule2:#31443f; --rule3:#445b56;
+  --blue:#3fc7bd; --blue-ink:#6fded4; --blue-text:#57d3c8; --blue-soft:#0c322f;
+  --blue-line:#1d5450; --blue-bright:#6fded4;
+  --hl:#3a2f14; --hl-text:#efd18e; --hl-line:#5e4a1c; --gold:#e0b661;
+  --realized:#48cf95; --realized-soft:#0c3126; --realized-line:#1c5b43;
+  --unrealized:#ff8171; --unrealized-soft:#3a1b19; --unrealized-bg:#3a1b19; --unrealized-line:#68312b;
+  --pending:#9d9dff; --pending-soft:#1d1e4c; --pending-line:#343676;
+  --grey:#8c9c98; --grey-soft:#1a2624; --grey-line:#31443f;
+  --up:#48cf95; --down:#ff8171;
+  --shadow:0 1px 2px rgba(0,0,0,.44),0 10px 26px -16px rgba(0,0,0,.82);
+  --shadow-lift:0 2px 8px rgba(0,0,0,.5),0 28px 56px -26px rgba(0,0,0,.92);
+  --shadow-pop:0 36px 96px -32px rgba(0,0,0,.96),0 2px 12px rgba(0,0,0,.62);
+  --glow:rgba(63,199,189,.36); --gold-glow:rgba(224,182,97,.34); --grain:.045;
+}}
+:root[data-theme="dark"]{ color-scheme:dark;
+  --paper:#0a1413; --paper2:#0f1c1a;
+  --sheet:#141f1e; --sheet2:#1a2726; --sheet3:#22322f;
+  --board:#060f0e; --board2:#0d1f1d; --board3:#183b37;
+  --board-ink:#e8f2ef; --board-ink2:#8aa8a3;
+  --ink:#e9f0ee; --ink2:#a7b7b3; --ink3:#7e8f8b; --ink4:#5c6c69;
+  --rule:#233230; --rule2:#31443f; --rule3:#445b56;
+  --blue:#3fc7bd; --blue-ink:#6fded4; --blue-text:#57d3c8; --blue-soft:#0c322f;
+  --blue-line:#1d5450; --blue-bright:#6fded4;
+  --hl:#3a2f14; --hl-text:#efd18e; --hl-line:#5e4a1c; --gold:#e0b661;
+  --realized:#48cf95; --realized-soft:#0c3126; --realized-line:#1c5b43;
+  --unrealized:#ff8171; --unrealized-soft:#3a1b19; --unrealized-bg:#3a1b19; --unrealized-line:#68312b;
+  --pending:#9d9dff; --pending-soft:#1d1e4c; --pending-line:#343676;
+  --grey:#8c9c98; --grey-soft:#1a2624; --grey-line:#31443f;
+  --up:#48cf95; --down:#ff8171;
+  --shadow:0 1px 2px rgba(0,0,0,.44),0 10px 26px -16px rgba(0,0,0,.82);
+  --shadow-lift:0 2px 8px rgba(0,0,0,.5),0 28px 56px -26px rgba(0,0,0,.92);
+  --shadow-pop:0 36px 96px -32px rgba(0,0,0,.96),0 2px 12px rgba(0,0,0,.62);
+  --glow:rgba(63,199,189,.36); --gold-glow:rgba(224,182,97,.34); --grain:.045;
+}
+:root[data-theme="light"]{ color-scheme:light }

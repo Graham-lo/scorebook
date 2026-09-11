@@ -1,0 +1,113 @@
+// Small pieces of the ledger vocabulary, shared by every page that shows a
+// record: the stance badge, the result stamp, the criteria highlight and the
+// scene thumbnail. They exist once so a record looks the same everywhere.
+
+import type { Attachment, Criteria, OutcomeState, Stance, Uuid } from '../api/types'
+import { STANCES, summary } from '../data/criteria'
+import { stateLook } from '../data/outcome'
+import { columnParts } from '../data/time'
+import { h, highlight } from './dom'
+import { icon } from './icons'
+import { attachmentImage } from './media'
+
+export function stanceBadge(stance: Stance | null | undefined, soft = false): HTMLElement {
+  if (!stance || stance === 'unknown') {
+    return h('span.stance.soft', { title: '没写方向', text: '·' })
+  }
+  return h('span', {
+    class: ['stance', stance === 'L' ? 'L' : '', soft ? 'soft' : ''],
+    title: STANCES[stance] ?? stance,
+    text: stance,
+  })
+}
+
+export function stamp(state: OutcomeState, large = false): HTMLElement {
+  const look = stateLook(state)
+  return h('span', { class: ['stamp', look.stamp, large ? 'lg' : ''], text: look.label })
+}
+
+/** Shown while the record's outcome is still being read from the server. */
+export function stampPlaceholder(): HTMLElement {
+  return h('span.stamp.flat', { text: '读取中' })
+}
+
+export function critHL(criteria: Criteria | null): HTMLElement {
+  const s = summary(criteria)
+  if (s.soft) return h('span.hl.soft', { text: s.main })
+  return h('span.hl', {}, document.createTextNode(s.main), s.sub ? h('span.sub', { text: s.sub }) : null)
+}
+
+export function dateColumn(iso: string): HTMLElement {
+  const parts = columnParts(iso)
+  return h(
+    'div.date',
+    {},
+    h('span.d', { text: parts.day }),
+    h('span.m', { text: parts.month }),
+    h('span.t', { text: parts.time }),
+  )
+}
+
+/**
+ * The first scene shot of a record. Attachment bytes sit behind Bearer auth,
+ * so they are fetched and shown as an object URL, never as a bare src.
+ */
+export function thumb(id: Uuid | null, alt: string, extra = ''): HTMLElement {
+  if (!id) {
+    return h('div', { class: ['thumb', 'none', extra] }, '没有现场图')
+  }
+  // 92×64 的一格，按显示尺寸解一张小的就够；完整的那张在记录详情里看。
+  return attachmentImage(id, { alt, className: `thumb ${extra}`.trim(), maxWidth: 200 })
+}
+
+export function tagChip(name: string, query = ''): HTMLElement {
+  const node = h('span.tag')
+  node.appendChild(document.createTextNode('#'))
+  node.appendChild(highlight(name, query))
+  return node
+}
+
+export function sectionHead(title: string, right?: Node | string | null): HTMLElement {
+  return h(
+    'div.sh',
+    {},
+    h('span.eyebrow.noline', { text: title }),
+    typeof right === 'string' ? h('span.faint', { text: right }) : right ?? null,
+  )
+}
+
+export function section(...children: (Node | string | null)[]): HTMLElement {
+  return h('div.sec', {}, ...children)
+}
+
+export function button(
+  label: string,
+  onClick: () => void,
+  options: { kind?: 'primary' | 'ghost' | 'danger' | ''; small?: boolean; iconName?: string; disabled?: boolean } = {},
+): HTMLButtonElement {
+  const node = h(
+    'button',
+    {
+      class: ['btn', options.kind ?? '', options.small ? 'sm' : ''],
+      disabled: options.disabled,
+      on: { click: onClick },
+    },
+    options.iconName ? icon(options.iconName) : null,
+    label,
+  ) as HTMLButtonElement
+  return node
+}
+
+/** Identity of a picture: the field traders must never have to guess. */
+export const ATTACHMENT_IDENTITY: Record<string, { label: string; tip: string }> = {
+  // 「原图 / 补图」被误解过：原图听起来像「没压缩的那张」，补图听起来像「补拍的同一张」。
+  // 这两张的区别其实只有一个——拍下来的是哪个时间点，所以就照时间叫。
+  scene: { label: '当时', tip: '你记录判断那一刻传的截图，原样保留，没有被改过。' },
+  supplement: { label: '后来', tip: '复盘时补上的后续走势，不是你当时看到的画面。' },
+  reference: { label: '参考图', tip: '附带的参考材料，不是当时的现场。' },
+  query: { label: '查询图', tip: '用来找相似走势的那张图。' },
+}
+
+export function identityLabel(attachment: Attachment): string {
+  return ATTACHMENT_IDENTITY[attachment.kind]?.label ?? '图片'
+}
