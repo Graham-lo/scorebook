@@ -17,6 +17,7 @@ import { stagger } from '../../ui/motion'
 import { foldout } from '../../ui/states'
 import { go } from '../../router'
 import { kvRow } from './bits'
+import { SCORE_CAVEAT, SCORE_MEANING, scoreBand, scorePercent } from './score'
 import type { SearchCtx } from './state'
 
 /** 之后的走势默认画多少根。 */
@@ -179,19 +180,24 @@ function privateHit(_ctx: SearchCtx, item: PrivateCandidate, index: number, rank
 /**
  * 接近程度。后端自己把口径写在 `match.meaning` 里：结构相似，不是概率。方向对不
  * 上的时候也照实说——那是一段反着走的行情。
+ *
+ * 数写成百分比，旁边缀一句人话的分档：0.347 这种三位小数没人读得出轻重，35% 有
+ * 人读得出，但百分号也更容易被当成概率，所以那句「不是涨跌概率」必须留在看得见
+ * 的地方，不能只藏在悬停提示里。分档的界和理由都在 ./score 里。
  */
 function matchLine(item: SearchCandidate): HTMLElement {
   const match = item.match
   if (!match) {
     return h('div.line', {}, h('span.faint', { text: '这一条还没有精排，暂时没有接近程度。' }))
   }
-  const width = Math.max(0, Math.min(1, match.score))
+  const percent = scorePercent(match.score)
   const line = h(
     'div.near',
-    { title: '1 表示结构上完全对得上，越小越不像。它不是胜率，也不是上涨概率。' },
-    h('span.faint', { text: '结构接近程度' }),
-    h('span.track', {}, h('i', { style: `width:${(width * 100).toFixed(1)}%` })),
-    h('span.num', { text: match.score.toFixed(3) }),
+    { title: SCORE_MEANING },
+    h('span.faint', { text: '形状接近程度' }),
+    h('span.track', {}, h('i', { style: `width:${percent}%` })),
+    h('span.num', { text: `${percent}%` }),
+    h('span.band', { text: scoreBand(percent) }),
   )
   // 方向对不对得上是读图的人要知道的，留在外面；对齐代价是内部量纲，只在要
   // 追查这条为什么排在这儿的时候才有用，收起来。
@@ -200,6 +206,7 @@ function matchLine(item: SearchCandidate): HTMLElement {
     { style: 'margin-top:4px' },
     h('span.faint', { text: match.direction_consistent ? '方向一致' : '方向相反' }),
     match.reverse ? h('span.faint', { text: '这是翻转之后比出来的' }) : null,
+    h('span.faint', { text: SCORE_CAVEAT }),
   )
   const detail = foldout(
     '这条为什么排在这儿',
