@@ -56,10 +56,12 @@
 }
 .hit .words{font-family:var(--serif);font-size:15.5px;line-height:1.62;color:var(--ink);margin:7px 0;overflow-wrap:anywhere}
 .hit .line{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12px;color:var(--ink3)}
-.hit .near{display:flex;align-items:center;gap:8px;min-width:158px}
-.hit .near .track{flex:1;height:5px;border-radius:3px;background:var(--sheet3);overflow:hidden}
+.hit .near{display:flex;align-items:center;gap:8px;min-width:158px;flex-wrap:wrap}
+.hit .near .track{flex:1;min-width:64px;height:5px;border-radius:3px;background:var(--sheet3);overflow:hidden}
 .hit .near .track i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--blue),var(--blue-bright));transform-origin:left;animation:growX .7s var(--e-out) both}
 .hit .near .num{font-family:var(--mono);font-size:11.5px;color:var(--ink3)}
+/* 分档那句话跟着数走，比数重一档：先读到「像」，再回头看是多少。 */
+.hit .near .band{font-size:12px;color:var(--ink2);white-space:nowrap}
 /* 一条历史结果的抬头：名次和品种是主角，市场/周期/根数往右靠成一行小字。 */
 .hit .hithead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .hit .hitsym{font-family:var(--mono);font-size:16px;font-weight:500;letter-spacing:.01em;color:var(--ink)}
