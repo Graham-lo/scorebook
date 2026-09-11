@@ -187,6 +187,8 @@
 .fold-h.on .fold-c{transform:rotate(180deg);color:var(--blue)}
 .fold-h:focus-visible{outline:2px solid var(--blue);outline-offset:-2px;border-radius:var(--r)}
 .fold-w{height:0;overflow:hidden;transition:height .22s var(--e-out)}
+/* 展开到位以后才放开溢出：里面的弹出菜单要盖到卡片外面去，收的时候再裁回来 */
+.fold-w.done{overflow:visible}
 .fold-b{padding:2px 14px 13px;display:flex;flex-direction:column;gap:10px}
 .fold-b .kv{margin:0}
 .fold-b>.tip:first-child{margin-top:0}

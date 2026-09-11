@@ -103,8 +103,18 @@ export function foldout(title: string, ...children: Child[]): HTMLElement {
     if (open) {
       wrap.hidden = false
       wrap.style.height = `${body.scrollHeight}px`
-      window.setTimeout(() => { if (open) wrap.style.height = 'auto' }, 240)
+      // overflow:hidden 只在动画那 240ms 里有用——它裁的是正在长高的那一截。
+      // 展开完了还留着，里面弹出来的菜单（品种选择那颗 chip）就会被齐腰切掉，
+      // 所以一到位就换成 done，让它溢得出去。
+      window.setTimeout(() => {
+        if (!open) return
+        wrap.style.height = 'auto'
+        wrap.classList.add('done')
+      }, 240)
     } else {
+      // done 要在量高度之前先摘掉：收的那一程还得靠 overflow:hidden 裁边，
+      // 手快连点两下也不会留着上一轮的 done 卡在那儿。
+      wrap.classList.remove('done')
       wrap.style.height = `${body.scrollHeight}px`
       void wrap.offsetHeight
       wrap.style.height = '0px'
