@@ -467,6 +467,71 @@ async fn a_generation_left_half_built_is_picked_up_again_and_a_complete_one_is_n
     );
 }
 
+/// 月档一个没掉，这一段就该拿到永久标记——哪怕拼出来的 K 线上市晚、中间还有洞。
+///
+/// `universe::build_unit` 从前和 `archives::build` 共用一条判据：首尾顶到范围、中间没
+/// 断口才算完整。可扇出这条路上 `unit.keys` 本来就是币安目录里有的那些月，合约中途才
+/// 上市、或者币安自己传的 `2022-02` 只到 25 号，都会让这一段永远评不上完整，于是每一
+/// 轮扇出都把它重下重建一遍，线上量到 180 段卡在这里。判据改成「月档一个没掉」之后，
+/// 洞照旧跳掉、照旧记在 `windows_skipped_for_gaps` 和 `actual_start` 上，只是不再重来。
+#[tokio::test]
+async fn archives_that_all_arrived_earn_the_permanent_mark_even_when_the_bars_have_holes() {
+    let (s, o, _tmp) = setup().await;
+    let (call, _attachment) = record(&s, o, "holey").await;
+    knowledge::review(&s, o, "review", review_of(call))
+        .await
+        .unwrap();
+    let j = claim_locate(&s, o).await;
+
+    let start: DateTime<Utc> = "2024-03-01T00:00:00Z".parse().unwrap();
+    let input = history::HistoryIndexRequest {
+        source: history::HistorySource::MonthlyArchive,
+        symbol: "HOLEYUSDT".into(),
+        market: "usd_m".into(),
+        interval: "1h".into(),
+        start_at: start,
+        end_at: start + Duration::hours(200),
+        window_bars: 64,
+        stride_bars: 1,
+        models: vec![scorebook_core::domain::chart_match::MODEL.into()],
+    };
+    // 晚 8 小时才开始、中间再断 12 小时：月档一个没掉，但数据两头都不齐。
+    let mut bars = hourly(start + Duration::hours(8), 80);
+    bars.extend(hourly(start + Duration::hours(92), 100));
+    let generation = history::generation_of(&s, &input).await.unwrap();
+    let built = history::index_generation(&s, &j, generation, &input, &bars, true)
+        .await
+        .unwrap();
+    assert_eq!(built["source_range_complete"], true);
+    assert_eq!(
+        segment_of(&s, "HOLEYUSDT").await,
+        ("complete".to_string(), 54)
+    );
+    // 洞没被藏起来：117 个窗口里跨断口的 63 个照旧跳掉，范围也照实写成上市那一刻。
+    assert_eq!(built["windows_skipped_for_gaps"], 63);
+    assert_eq!(built["source_bars_fetched"], 180);
+    assert_eq!(built["actual_start"], json!(start + Duration::hours(8)));
+    assert_eq!(
+        built["actual_end"],
+        json!(start + Duration::hours(92 + 100))
+    );
+
+    // 真掉了一个月档才是 partial：下一轮扇出会回来把这一段补上。
+    let lost = history::HistoryIndexRequest {
+        symbol: "LOSTUSDT".into(),
+        ..input.clone()
+    };
+    let generation = history::generation_of(&s, &lost).await.unwrap();
+    let half = history::index_generation(&s, &j, generation, &lost, &bars, false)
+        .await
+        .unwrap();
+    assert_eq!(half["source_range_complete"], false);
+    assert_eq!(
+        segment_of(&s, "LOSTUSDT").await,
+        ("partial".to_string(), 54)
+    );
+}
+
 /// 「都不是」不该是原地重试。
 ///
 /// 线上那五条 job 的候选逐字节相同，因为第二次起 `covered()` 就命中了第 0 段，

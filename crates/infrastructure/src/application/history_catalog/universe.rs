@@ -301,6 +301,22 @@ async fn fetch(
     (bars, sources, failed)
 }
 
+/// 这一段算不算建齐了。月档这条路上「齐」只有一个意思：源头列出来的月档，我们一个
+/// 没掉。不是「数据没有洞」——`unit.keys` 本来就是 `months()` 从币安自己的目录里列出来
+/// 的那些月，合约中途才上市，首根自然顶不到范围起点；币安自己传的 `2022-02` 档只到 2 月
+/// 25 号、`2022-04` 档从 4 月 3 号才开始，那五天上游根本不存在。拿「没有洞」当判据，线上
+/// 那 180 段（166 段上市晚、14 段撞上这个截断）永远评不上完整，每一轮扇出都要把它们
+/// 重下重建一遍，而重下一万次也变不出那五天。跨断口的窗口早就被跳掉、还记在
+/// `windows_skipped_for_gaps` 里，里面到底有什么也照实写在 `actual_start` / `actual_end` /
+/// `source_bars_fetched` 上，所以改的只是「还要不要再来一次」，没有一个字是瞒着的。
+///
+/// 建了一半的当月冻不进来：`months()` 只列币安已经传上去的月档，`units()` 又把
+/// `end > now` 的整块跳掉——含当月的那一块 `to` 必然大过当月序号，`end` 至少是下个月
+/// 一号，所以当月既落不进 `[unit.start, unit.end)`，也进不了 `unit.keys`。
+fn unit_complete(failed: &[(String, String)]) -> bool {
+    failed.is_empty()
+}
+
 async fn build_unit(
     s: &Services,
     j: &Job,
@@ -349,13 +365,7 @@ async fn build_unit(
         return Ok(());
     }
     sqlx::query("INSERT INTO public_market.source_revisions(source_key,sha256,size_bytes) SELECT r.* FROM jsonb_to_recordset($1) r(source_key text,sha256 text,size_bytes bigint) ON CONFLICT DO NOTHING").bind(json!(sources)).execute(&s.db.pool).await?;
-    // 与 `archives::build` 同一条判据：首尾都顶到请求范围、中间没有断口，才算完整。
-    // 合约在这一段中途才上市的，首根对不上范围起点，这一段就只是 partial——它照样
-    // 会写进 features 供检索，只是不会拿到永久标记，重跑时会再来一次。
-    let complete = failed.is_empty()
-        && bars.first().is_some_and(|v| v.start == unit.start)
-        && bars.last().is_some_and(|v| v.end == unit.end)
-        && bars.windows(2).all(|w| w[0].end == w[1].start);
+    let complete = unit_complete(&failed);
     for window in missing {
         let input = super::super::history::HistoryIndexRequest {
             source: HistorySource::MonthlyArchive,
@@ -571,6 +581,67 @@ mod tests {
             "data/futures/um/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2024-07.zip",
         ] {
             assert_eq!(month_of_key(key, "BTCUSDT", "1d"), None);
+        }
+    }
+
+    fn daily(start: DateTime<Utc>, days: i64) -> Vec<Bar> {
+        (0..days)
+            .map(|i| Bar {
+                start: start + Duration::days(i),
+                end: start + Duration::days(i + 1),
+                open: "100".into(),
+                high: "101".into(),
+                low: "99".into(),
+                close: "100".into(),
+                volume: None,
+            })
+            .collect()
+    }
+
+    /// 月档一个没掉就算建齐，哪怕拼出来的 K 线上市晚、中间还有洞。
+    ///
+    /// 线上 180 段就是卡在旧判据上的：166 段是合约在这一段中途才上市，14 段是币安自己
+    /// 传的 `2022-02` 只到 25 号、`2022-04` 从 3 号才起。旧判据要求首尾顶到范围、中间没
+    /// 断口，这两类永远过不了，于是每一轮扇出都把它们重下重建一遍——而那五天上游就是
+    /// 没有，下多少次也变不出来。
+    #[test]
+    fn a_unit_is_complete_when_no_month_archive_was_lost_even_if_the_bars_have_holes() {
+        let (start, end) = (at(2022, 1).unwrap(), at(2024, 1).unwrap());
+        let mut bars = daily(at(2022, 2).unwrap(), 24);
+        bars.extend(daily(at(2022, 4).unwrap() + Duration::days(2), 60));
+        assert_ne!(bars.first().unwrap().start, start, "首根本来就顶不到起点");
+        assert_ne!(bars.last().unwrap().end, end, "末根本来就顶不到终点");
+        assert!(
+            bars.windows(2).any(|w| w[0].end != w[1].start),
+            "中间本来就有断口"
+        );
+        assert!(unit_complete(&[]), "月档一个没掉，这一段就配拿永久标记");
+        // 真掉了一个月档才是 partial：下一轮扇出还得回来把它补上。
+        assert!(!unit_complete(&[(
+            "data/futures/um/monthly/klines/SOLUSDT/1d/SOLUSDT-1d-2022-03.zip".into(),
+            "archive_source_unavailable".into(),
+        )]));
+    }
+
+    /// 还没走完的当月进不了任何一个单元，所以永久标记不会盖到半个月上。
+    #[test]
+    fn the_month_still_running_never_lands_in_a_unit() {
+        use chrono::Datelike;
+        let now = Utc::now();
+        let current = (now.year() as i64 - 1970) * 12 + now.month() as i64 - 1;
+        // 连当月的 zip 都假设币安已经传了，看 `units()` 会不会把它圈进来。
+        let listing: Vec<(i64, String)> = (current - 36..=current)
+            .map(|i| (i, format!("k-{i}")))
+            .collect();
+        for iv in [Interval::D1, Interval::H4, Interval::H1, Interval::M15] {
+            for unit in units(iv, &listing).unwrap() {
+                assert!(unit.end <= now, "{} 的单元越过了此刻", iv.as_str());
+                assert!(
+                    !unit.keys.contains(&format!("k-{current}")),
+                    "{} 把当月的月档圈进来了",
+                    iv.as_str()
+                );
+            }
         }
     }
 
