@@ -1,0 +1,87 @@
+{
+  "release_sha256": "5b748da9365cf3a829600b55920fb1535aac34c57d2628d456db276b7a4a5a79",
+  "schema_version": 41,
+  "isolated_database": true,
+  "live_provider_acceptance": false,
+  "checks": [
+    {
+      "method": "GET",
+      "path": "/v1/capabilities",
+      "status": 401,
+      "ms": 0.551
+    },
+    {
+      "method": "GET",
+      "path": "/v1/capabilities",
+      "status": 200,
+      "ms": 6.313
+    },
+    {
+      "method": "POST",
+      "path": "/v1/calls",
+      "status": 200,
+      "ms": 13.14
+    },
+    {
+      "method": "POST",
+      "path": "/v1/calls",
+      "status": 200,
+      "ms": 1.955
+    },
+    {
+      "method": "GET",
+      "path": "/v1/calls/6058c642-2c6c-419d-a3ee-d675eced36ec",
+      "status": 200,
+      "ms": 2.523
+    },
+    {
+      "method": "GET",
+      "path": "/v1/calls/6058c642-2c6c-419d-a3ee-d675eced36ec/review-draft",
+      "status": 200,
+      "ms": 1.213
+    },
+    {
+      "method": "POST",
+      "path": "/v1/calls/6058c642-2c6c-419d-a3ee-d675eced36ec/review-draft",
+      "status": 200,
+      "ms": 3.815
+    },
+    {
+      "method": "GET",
+      "path": "/v1/calls/6058c642-2c6c-419d-a3ee-d675eced36ec/review-draft",
+      "status": 200,
+      "ms": 1.0
+    },
+    {
+      "method": "POST",
+      "path": "/v1/calls",
+      "status": 422,
+      "ms": 0.676
+    },
+    {
+      "method": "POST",
+      "path": "/v1/exchange-connections",
+      "status": 200,
+      "ms": 4.717
+    },
+    {
+      "method": "POST",
+      "path": "/v1/imports",
+      "status": 200,
+      "ms": 11.148
+    },
+    {
+      "method": "POST",
+      "path": "/v1/imports",
+      "status": 200,
+      "ms": 1.696
+    },
+    {
+      "method": "GET",
+      "path": "/v1/trades?connection_id=fbff4a63-8dea-47a0-ade2-8274e6287edd",
+      "status": 200,
+      "ms": 1.367
+    }
+  ],
+  "result": "passed"
+}

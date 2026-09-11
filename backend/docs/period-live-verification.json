@@ -1,0 +1,52 @@
+{
+  "scope": {
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT"
+    ],
+    "intervals": [
+      "1h",
+      "4h"
+    ],
+    "recent_bars_per_range": 512
+  },
+  "checks": [
+    "missing/empty/unsupported period rejected before enqueue, both scopes",
+    "real local OCR and screenshot geometry executed; search period declared by test",
+    "12 bounded real Binance history index jobs completed",
+    "actual BTC listing boundary clips pre-listing range; 128 real early 1h bars tested",
+    "1h: 2 distinct-contract results, all same-period; live followthrough SVG verified",
+    "4h: 2 distinct-contract results, all same-period; live followthrough SVG verified",
+    "zero history subscriptions; fewer than 300 temporary features"
+  ],
+  "raw_market_persisted": false,
+  "binary_sha256": "ebe3ece5430670e44b70a8788b718600dc6f1db76f14f0365ca33074b7a56afd",
+  "recognized_interval": null,
+  "chart_states": [
+    {
+      "symbol": "BTCUSDT",
+      "interval": "1h",
+      "has_closed_followthrough": true
+    },
+    {
+      "symbol": "ETHUSDT",
+      "interval": "1h",
+      "has_closed_followthrough": true
+    },
+    {
+      "symbol": "BTCUSDT",
+      "interval": "4h",
+      "has_closed_followthrough": false
+    },
+    {
+      "symbol": "ETHUSDT",
+      "interval": "4h",
+      "has_closed_followthrough": true
+    }
+  ],
+  "published_features": 193,
+  "status": "passed",
+  "isolated_database_deleted": true,
+  "temporary_directory_deleted": true,
+  "completed_at": "2026-09-10T10:15:11.648640+00:00"
+}

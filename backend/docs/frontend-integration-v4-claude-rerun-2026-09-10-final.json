@@ -1,0 +1,39 @@
+{
+  "isolated_database": true,
+  "unmodified_frontend_test_sha256": "93d1206805341c429df236125e3aafb00363dae2bf53fe93b4b14963f8b4ee00",
+  "exit_code": 0,
+  "log": "/Users/mdd/zhk/scorebook-backend/docs/frontend-integration-v4.log",
+  "binary_sha256": "ebe3ece5430670e44b70a8788b718600dc6f1db76f14f0365ca33074b7a56afd",
+  "diagnosis": {
+    "statistics_members_without_unsupported_limit": {
+      "count": 5,
+      "http_status": 200
+    },
+    "unconfigured_chat_run": {
+      "status": "queued",
+      "job_status": "blocked_capability",
+      "model_id": "unconfigured",
+      "error_code": "chat_model_not_configured",
+      "answer": null
+    },
+    "embedding_jobs_before_wait": [
+      [
+        "succeeded",
+        null,
+        6
+      ]
+    ],
+    "structure_search_after_indexing": {
+      "original_hits": 0,
+      "after_index_hits": 3
+    },
+    "embedding_jobs_after_wait": [
+      [
+        "succeeded",
+        null,
+        6
+      ]
+    ]
+  },
+  "note": "这一份是 2026-09-10 前端改动全部落地之后的复跑（空态去插画、失败态就地重试、输入法与焦点修正）。用的是一次性数据库和一次性存储目录，用户自己的记录、原图和复盘没有参与。原始的 81/3 证据保存在 frontend-integration-v4.json 里，未被覆盖。"
+}

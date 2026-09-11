@@ -1,0 +1,13 @@
+{
+  "dataset": "100000 synthetic calls in isolated scorebook_test",
+  "samples": 1000,
+  "concurrency": 8,
+  "warmup": 30,
+  "p50_ms": 3.38,
+  "p95_ms": 4.31,
+  "p99_ms": 6.26,
+  "max_ms": 20.23,
+  "elapsed_seconds": 0.45,
+  "error_count": 0,
+  "limits": "Warm local API list/text search only; not 30-minute mixed-load, disk recovery, or full corpus image search acceptance."
+}

@@ -1,0 +1,13 @@
+{
+  "allocations": 50000,
+  "book_snapshots": 100,
+  "cycle_pages": 250,
+  "duplicate_scope": "separate repetition test",
+  "epoch_cycles": 25000,
+  "fills": 50000,
+  "import_and_projection_ms": 13882,
+  "imports": 100,
+  "list_p95_ms": 30.281166000000002,
+  "processed_fills_per_import": 500,
+  "synthetic": true
+}

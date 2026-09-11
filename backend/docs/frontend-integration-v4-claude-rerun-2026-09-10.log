@@ -1,0 +1,159 @@
+
+> scorebook-frontend@0.1.0 test:integration
+> tsx test/integration.ts
+
+
+能力清单
+  后端自述：{"backend_version":"0.4.0","baseline":"T1_250_day_declared_source_plan","chat_generation":{"configured":false,"model_id":"unconfigured","runtime":"durable_tools_citations_original_images_sse"},"conditional_monitor":{"available":true,"source_change":"explicit_generation_checked_decision","source_plans":["rest_continuous_v1","daily_archive_v1"]},"configuration_status_is_not_live_acceptance":true,"encrypted_backup":{"engine_configured":true,"repository_configured":false,"restore_policy":"empty_isolated_database_and_verified_assets"},"exchange_accounts":{"adapter":"binance_read_only","configured":false},"formal_statistics":"frozen_members_and_rule_groups","historical_search":"published_coverage_and_exact_source_revalidation","history_plans":"bounded_catalog_scopes_and_incremental_subscriptions","image_structure_search":{"available":true,"model":"candle-geometry-v2","real_image_quality_validated":false},"image_visual_search":{"configured":true,"model":"dinov2-small-v1"},"knowledge_index":{"configured":true,"model":"bge-m3-dense-v1"},"market_binance":"real_usd_m_and_coin_m_contracts","market_sources":["rest","monthly_archive"],"raw_market_storage":"none","records":"immutable_originals","reviews":"resumable_drafts_and_evidence_checked_publication","screenshot_ocr":{"configured":true,"unknown_parameters":"require_explicit_input"},"trade_ledger":"immutable_batch_ingestion_and_incremental_book_snapshots","vector_database":"pgvector"}
+  ✓ 后端报出图像结构检索能力
+  ✓ 问答能力的说法读得懂（一句话或者一个对象）
+  这台机器上问答还没配好
+
+记录：上传截图 → 保存判断
+  ✓ 三条判断都写进了库
+
+重试不会写出第二条
+  ✓ 同一个 Idempotency-Key 重发返回同一条记录
+  ✓ 库里只有一条，重试没有写出第二条
+
+改了内容就是新的一次操作
+  ✓ 换了 key 的新内容是另一条记录
+
+翻页不跳条、不重复
+  ✓ 分页走完拿到的条数和一次拉全一致
+  ✓ 分页没有重复
+  ✓ 分页没有漏条
+
+复盘与版本冲突
+  ✓ 版本对不上时返回 409
+  ✓ 冲突码是 revision_conflict
+  ✓ 重读版本号后同一份草稿存了下来
+
+复盘草稿：离开再回来还在，两处同时写会拦住
+  ✓ 还没写的时候没有草稿
+  ✓ 存草稿把草稿版本推进一格
+  ✓ 回来的时候草稿还在
+  ✓ 拿旧的草稿版本号再存会被拦下
+  ✓ 拦下来的理由是 draft_revision_conflict
+  ✓ 被拦下之后先写的那份原样留着
+
+发布复盘：结果对不上就不让发
+  ✓ 没选这次和上次的关系就发不出去
+  ✓ 对着没看过的结果发布会被拦下
+  ✓ 拦下来的理由是 review_outcomes_changed
+  ✓ 发布出来的是一条复盘
+  ✓ 发布之后草稿版本继续往前走
+  ✓ 发布之后草稿就不在了
+  ✓ 旧标签页迟到的保存救不回已发布的草稿
+
+待复盘清单与提醒
+  ✓ 刚发布的那条进了「已复盘」
+  ✓ 分组名写错会被拒
+  ✓ 提醒时间存下来了
+  ✓ 设了提醒的记录进了「稍后再看」
+  ✓ 提醒时间不能设在过去
+  ✓ 这条记录的版本没有被清单和提醒动过
+
+翻更早的历史：不重复也不漏
+  ✓ 历史按从新到旧发回来
+  ✓ 一页一页翻完和一次拉全一样多
+  ✓ 翻页没有重复
+  ✓ 翻页没有漏条
+  ✓ 历史类别写错会被拒
+
+按图搜索：我的记录库
+  ✓ 查询图和证据图是同一份文件（sha256 相同）
+  ✓ 查询图另占一条 attachment，不会顶掉证据
+  ✓ 不说周期就不给搜
+  ✓ 结构检索返回了结果
+  ✓ 结果里没有查询图自己
+  ✓ 后端明说分数是相似度不是胜率
+  ✓ 分组口径是精确图再确认过的行情段
+  ✓ 每条都带余弦距离
+  ✓ 结果按接近程度排好序
+  ✓ 框一块再搜，口径和排序跟整图一样（区域坐标按原图像素）
+  ✓ 框选后的会话和整图不是同一次
+  ✓ 限定品种后只剩这个品种的记录
+
+搜索反馈只认这次会话里的结果
+  ✓ 给一个不在结果里的图打分会被拒
+  ✓ 拒绝的理由是 not_a_search_result
+  ✓ 给结果里的图打分可以存下来
+
+两种描述子一起搜（hybrid-v2）
+  ✓ 两种一起时不再给单一距离
+
+历史行情：先准备范围，再回去搜
+  已准备的范围：0 段
+  ✓ 历史检索说明自己只覆盖已准备的范围
+  ✓ 历史检索带回覆盖范围，前端据此说明能搜到哪一段
+  ✓ 没准备过的范围不会凭空搜出命中
+
+按图索骥：先认图，再起一次检索
+  ✓ 认图数出了 K 线根数
+  ✓ 认图自己列出边界，不藏着
+  ✓ 认不出来的字段就是 null，不猜
+  ✓ 后端不声称语义质量已经验收
+  ✓ 图型只说“像普通 K 线”，不打包票
+  ✓ 检索按 chart-match-v2 起了一次作业
+  ✓ 检索跑到了终态
+  ✓ 最终结果自报口径是结构相似，不是概率
+  ✓ 默认不做反向匹配，反向要人自己选
+  ✓ 最终结果带着被排除的候选，不悄悄丢掉
+  ✓ 后端不声称这套已经验收过
+
+在记下来的东西里找：片段不等于全文
+  ✓ 检索自报这是翻出来的顺序，不是概率
+  ✓ 检索自报融合协议
+  ✓ 检索带回索引进度，前端据此说明还有多少条搜不到
+  ✓ 刚写进去的话搜得到
+  ✓ 命中给的是原文里的一段，带起止字节
+  ✓ 读全文读回来的是同一版
+  ✓ 往下翻用的是后端给的字节游标
+  ✓ 一页页读到底，拼出来的长度就是后端说的字节数
+  ✓ 翻到底也没换版本
+  ✓ 命中报的起止字节，在补上开头那行 source_kind（11 字节）之后正好切出那段原文
+  ✓ 这段话确实来自这一版正文，引用点得开
+  ✓ 要错版本会被拒，不会把两版文字接在一起
+
+统计：一次 run 就是一份固定口径
+  ✓ 统计跑到了固定状态
+  ✓ 后端不给置信区间，并且说明为什么
+  ✓ 成员构成是数出来的，不是估的
+  ✓ 成员清单不收 limit，页大小是后端定的
+  ✓ 同一次 run 能翻出它数了哪些记录
+  ✓ 成员和这次 run 的快照绑在一起
+  ✓ 成员按 ordinal 排好序
+  ✓ 按游标翻完不重复、不回头
+  ✓ 翻完的成员条数就是统计自己数的 claim_count
+  ✓ 去掉重复的记录数也和 call_count 对得上
+
+问过去的自己：没接模型就照实说
+  ✓ 没配模型时也照样收下这次提问，只是跑不起来
+  ✓ 模型位置照实写着「没配」，不假装接了一个
+  ✓ 作业停在「缺能力」上，不是失败也不是一直排队
+  ✓ 停下来的理由就是 chat_model_not_configured
+  ✓ 没接模型就没有答案，answer 是 null，不是一句编出来的话
+
+导出一份带得走的副本
+  ✓ 导出做完了
+  ✓ 清单要走代理带鉴权才拿得到
+  ✓ 清单里写着自己是哪一种格式
+  ✓ 导出里有判断记录
+  ✓ 页面上那三个数字来自清单本身，不是估的
+  ✓ 导出目录之外的文件下载不到
+
+凭证只在服务端
+  ✓ 绕开代理直连后端会被拒
+  ✓ 图片字节要走代理带鉴权才拿得到
+  ✓ 图片响应不许被缓存
+
+行情图只在内存里画
+  ✓ 临时重画一段行情返回 SVG
+  ✓ 行情图明说不落盘
+
+原话不做多空猜测
+  ✓ 没有显式协议时表态保持 unknown
+  ✓ 没有口径时模板是 T0
+
+106 项通过，0 项失败

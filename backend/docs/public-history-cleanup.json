@@ -1,0 +1,22 @@
+{
+  "authorized_scope": "public historical demo/test indexes and their search results only",
+  "started_at": "2026-09-10T10:16:18.269122+00:00",
+  "original_counts_before": {
+    "calls": 71,
+    "reviews": 45,
+    "attachments": 58
+  },
+  "removed_feature_rows": 3170,
+  "removed_generations": 37,
+  "original_counts_after": {
+    "calls": 71,
+    "reviews": 45,
+    "attachments": 58
+  },
+  "original_rows_unchanged": true,
+  "remaining_public_features": 0,
+  "remaining_coverage_segments": 0,
+  "active_history_subscriptions": 0,
+  "old_test_database_deleted": true,
+  "completed_at": "2026-09-10T10:16:18.563124+00:00"
+}

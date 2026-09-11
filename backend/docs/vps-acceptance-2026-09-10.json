@@ -1,0 +1,51 @@
+{
+  "isolated_database": "scorebook_vps_acceptance_7d4a95d61084",
+  "scope": {
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT"
+    ],
+    "interval": "4h",
+    "month": "2026-08"
+  },
+  "checks": [
+    "66 real BTC 4h archive candles fetched with complete coverage and checksums",
+    "Linux Tesseract OCR recognized actual test chart label",
+    "real DINOv2 384-dimensional and BGE-M3 1024-dimensional inference succeeded",
+    "screenshot analysis succeeded; missing search period rejected in both scopes",
+    "two real archive indexes, same-period search, distinct-contract top results and regenerated SVG passed"
+  ],
+  "ocr_words": [
+    "BTCUSDT",
+    "4h",
+    "tory",
+    "hes,",
+    "alkt",
+    "mouth",
+    "it!",
+    "aytat",
+    "oy",
+    "a,"
+  ],
+  "ocr_recognized": {
+    "auto_accept_confidence_threshold": 0.98,
+    "interval": null,
+    "precision_validated": false,
+    "symbol": null,
+    "unknown_fields_are_not_inferred": true
+  },
+  "results": [
+    {
+      "symbol": "BTCUSDT",
+      "interval": "4h"
+    },
+    {
+      "symbol": "ETHUSDT",
+      "interval": "4h"
+    }
+  ],
+  "temporary_features": 16,
+  "status": "passed",
+  "temporary_database_deleted": true,
+  "temporary_files_deleted": true
+}

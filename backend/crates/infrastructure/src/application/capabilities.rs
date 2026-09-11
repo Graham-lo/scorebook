@@ -1,0 +1,11 @@
+//! Implementation and configuration are distinct; no expensive provider probe here.
+use super::Services;
+use crate::error::Result;
+use serde_json::{Value, json};
+use uuid::Uuid;
+pub async fn get(s: &Services, owner: Uuid) -> Result<Value> {
+    let configured:Value=sqlx::query_scalar("SELECT jsonb_build_object('exchange_credential_reference',EXISTS(SELECT 1 FROM exchange_credentials WHERE owner_id=$1),'backup_configuration',EXISTS(SELECT 1 FROM backup_configurations WHERE owner_id=$1 AND enabled))").bind(owner).fetch_one(&s.db.pool).await?;
+    Ok(
+        json!({"backend_version":"0.4.0","records":"immutable_originals","reviews":"resumable_drafts_and_evidence_checked_publication","market_binance":"real_usd_m_and_coin_m_contracts","market_sources":["rest","monthly_archive"],"raw_market_storage":"none","vector_database":"pgvector","image_structure_search":{"model":"candle-geometry-v2","available":true,"real_image_quality_validated":false},"image_visual_search":{"model":"dinov2-small-v1","configured":s.vision.url.is_some()},"screenshot_ocr":{"configured":std::env::var_os("SCOREBOOK_OCR_EXECUTABLE").is_some(),"unknown_parameters":"require_explicit_input"},"historical_search":"published_coverage_and_exact_source_revalidation","history_plans":"bounded_catalog_scopes_and_incremental_subscriptions","conditional_monitor":{"available":true,"source_plans":["rest_continuous_v1","daily_archive_v1"],"source_change":"explicit_generation_checked_decision"},"formal_statistics":"frozen_members_and_rule_groups","baseline":"T1_250_day_declared_source_plan","trade_ledger":"immutable_batch_ingestion_and_incremental_book_snapshots","exchange_accounts":{"adapter":"binance_read_only","configured":configured["exchange_credential_reference"]},"knowledge_index":{"model":scorebook_core::knowledge_index::MODEL,"configured":s.text.configured()},"chat_generation":{"runtime":"durable_tools_citations_original_images_sse","model_id":s.chat.model_id(),"configured":s.chat.model_id()!="unconfigured"},"encrypted_backup":{"engine_configured":s.restic.configured(),"repository_configured":configured["backup_configuration"],"restore_policy":"empty_isolated_database_and_verified_assets"},"configuration_status_is_not_live_acceptance":true}),
+    )
+}
