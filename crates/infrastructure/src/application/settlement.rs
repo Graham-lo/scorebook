@@ -117,7 +117,7 @@ pub async fn settle(s: &Services, j: &Job) -> Result<Value> {
         .await?;
     let active:Option<Uuid>=sqlx::query_scalar("SELECT id FROM jobs WHERE id=$1 AND owner_id=$2 AND lease_owner=$3 AND generation=$4 AND status='running' AND lease_until>now() FOR UPDATE").bind(j.id).bind(j.owner).bind(j.lease).bind(j.generation).fetch_optional(&mut *tx).await?;
     if active.is_none() {
-        return Err(Error::conflict("lease_lost"));
+        return Err(crate::application::jobs::lease_lost());
     }
     // Serialize original publication and revisions for the same immutable claim.
     sqlx::query("SELECT id FROM calls WHERE owner_id=$1 AND id=$2 FOR UPDATE")

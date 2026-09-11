@@ -203,13 +203,18 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
         query.candles.clone()
     };
     let vector = chart_match::descriptor(&query_candles)?;
-    let candidates = if input.scope == ChartScope::BinanceHistory {
+    // 公开语料里有来路证不出来的窗口时，那几条候选会被丢掉。丢了多少要跟着结果走
+    // 到底；私有语料没有这个概念，恒为 0。
+    let (candidates, unproven) = if input.scope == ChartScope::BinanceHistory {
         repository::public_candidates(s, &input, vector).await?
     } else {
         let visual = visual_query::encode(s, j.owner, &input, &query.quality.region).await?;
-        repository::private_candidates(s, j.owner, &input, vector, visual).await?
+        (
+            repository::private_candidates(s, j.owner, &input, vector, visual).await?,
+            0,
+        )
     };
-    repository::publish(s,j,&json!({"status":"provisional","items":candidates,"protocol":chart_match::PROTOCOL,"quality_validated":false}),false).await?;
+    repository::publish(s,j,&json!({"status":"provisional","items":candidates,"protocol":chart_match::PROTOCOL,"quality_validated":false,"windows_dropped_for_unproven_source":unproven}),false).await?;
     let (ranked, excluded) = rerank::run(s, j, &input, &query.candles, candidates).await?;
     // One window per contract only makes sense while the contract is still in
     // question; a search already restricted to one returns its best windows.
@@ -219,7 +224,7 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
         IntervalPolicy::AnyInterval => "any_interval",
     };
     let ranked = best_matches(ranked, grouped, input.limit.unwrap_or(3));
-    let result = json!({"search_run_id":j.id,"protocol":chart_match::PROTOCOL,"status":"final","items":ranked,"excluded_candidates":excluded,"scope":input.scope,"interval":input.interval,"interval_policy":interval_policy,"rejected_by_hand":input.exclude.len(),"cutoff_at":input.cutoff_at,"quality_validated":false,"query_quality":query.quality,"coverage":"published_geometry_v2_only","candidate_budget":3000,"rerank_budget":30,"grouping":if grouped {"best_verified_window_per_contract"} else if input.scope == ChartScope::BinanceHistory {"best_verified_windows_of_the_named_contract"} else {"exact_image_then_confirmed_episode"},"raw_market_storage":"none"});
+    let result = json!({"search_run_id":j.id,"protocol":chart_match::PROTOCOL,"status":"final","items":ranked,"excluded_candidates":excluded,"scope":input.scope,"interval":input.interval,"interval_policy":interval_policy,"rejected_by_hand":input.exclude.len(),"windows_dropped_for_unproven_source":unproven,"cutoff_at":input.cutoff_at,"quality_validated":false,"query_quality":query.quality,"coverage":"published_geometry_v2_only","candidate_budget":3000,"rerank_budget":30,"grouping":if grouped {"best_verified_window_per_contract"} else if input.scope == ChartScope::BinanceHistory {"best_verified_windows_of_the_named_contract"} else {"exact_image_then_confirmed_episode"},"raw_market_storage":"none"});
     repository::publish(s, j, &result, true).await?;
     Ok(result)
 }

@@ -382,7 +382,7 @@ async fn fenced_tx<'a>(s: &'a Services, j: &Job) -> Result<sqlx::Transaction<'a,
         .await?;
     let active:Option<Uuid>=sqlx::query_scalar("SELECT id FROM jobs WHERE id=$1 AND owner_id=$2 AND lease_owner=$3 AND generation=$4 AND status='running' AND lease_until>now() FOR UPDATE").bind(j.id).bind(j.owner).bind(j.lease).bind(j.generation).fetch_optional(&mut *tx).await?;
     if active.is_none() {
-        return Err(Error::conflict("lease_lost"));
+        return Err(jobs::lease_lost());
     }
     Ok(tx)
 }
@@ -433,7 +433,16 @@ async fn publish_index(
     if status != "ready" {
         if let Some(retained) = retained {
             // A provider correction or new gap after a retry must not publish abandoned checkpoint windows.
-            sqlx::query("DELETE FROM public_market.generation_features l USING public_market.features f WHERE l.generation_id=$1 AND l.feature_id=f.id AND NOT EXISTS(SELECT 1 FROM jsonb_to_recordset($2) AS r(start_at timestamptz,model_id text,input_hash text) WHERE r.start_at=f.start_at AND r.model_id=f.model_id AND r.input_hash=f.input_hash)").bind(generation).bind(retained).execute(&mut *tx).await?;
+            //
+            // 撤回链接的同时必须把 `published` 一起撤掉。一个世代允许公布两次（`ready`
+            // 但源范围不完整的世代还能被重新抢占补跑），第一次公布已经把那一批窗口
+            // 标成 `published=true` 了；补跑如果拉到的第一根 K 线换了位置，窗口网格
+            // 整体错位，旧的那一批就不在 `retained` 里，链接被这一句删掉，行却还挂着
+            // `published`——从此它是一条谁都证不出来路的公开证据。1d 扇出补跑那天
+            // 19 个品种、2470 行就是这么来的。所以：这一句删掉的链接如果是某一行的
+            // 最后一份 ready 认领，那一行当场下架。`WITH` 里两条子语句共用同一个快照，
+            // 看不见彼此的改动，所以下面要显式排掉本世代这一份（它正在被删）。
+            sqlx::query("WITH dropped AS (DELETE FROM public_market.generation_features l USING public_market.features f WHERE l.generation_id=$1 AND l.feature_id=f.id AND NOT EXISTS(SELECT 1 FROM jsonb_to_recordset($2) AS r(start_at timestamptz,model_id text,input_hash text) WHERE r.start_at=f.start_at AND r.model_id=f.model_id AND r.input_hash=f.input_hash) RETURNING f.id,f.market,f.timeframe) UPDATE public_market.features f SET published=false FROM dropped d WHERE f.id=d.id AND f.market=d.market AND f.timeframe=d.timeframe AND f.published AND NOT EXISTS(SELECT 1 FROM public_market.generation_features l2 JOIN public_market.generations g ON g.id=l2.generation_id WHERE l2.feature_id=f.id AND l2.generation_id<>$1 AND g.status='ready')").bind(generation).bind(retained).execute(&mut *tx).await?;
         }
         let changed=sqlx::query("UPDATE public_market.generations SET status='ready',published_at=now(),coverage=$4 WHERE id=$1 AND producer_job=$2 AND producer_lease=$3").bind(generation).bind(j.id).bind(j.lease).bind(coverage).execute(&mut *tx).await?;
         if changed.rows_affected() != 1 {
@@ -533,7 +542,7 @@ pub async fn search_mode(
             break;
         }
     }
-    attach_market_sources(&mut tx, &mut selected).await?;
+    let unproven = attach_market_sources(&mut tx, &mut selected).await?;
     let coverage:Vec<Value>=sqlx::query_scalar("SELECT coverage FROM public_market.generations WHERE status='ready' AND ($1::text IS NULL OR body->>'symbol'=$1) AND ($2::text IS NULL OR body->>'market'=$2) AND ($3::text IS NULL OR body->>'interval'=$3) AND body->'models' ? $4 AND (body->>'start_at')::timestamptz<$5 ORDER BY published_at DESC,id DESC LIMIT 100").bind(&input.symbol).bind(&input.market).bind(&input.interval).bind(&input.model_id).bind(cutoff).fetch_all(&mut *tx).await?;
     let corpus_version: Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT max(published_at) FROM public_market.generations WHERE status='ready'",
@@ -541,7 +550,7 @@ pub async fn search_mode(
     .fetch_one(&mut *tx)
     .await?;
     let id = Uuid::new_v4();
-    let result = json!({"session_id":id,"items":selected,"model_id":input.model_id,"cutoff_at":cutoff,"query_quality":quality,"coverage":coverage,"coverage_list_limit":100,"scope":"only_ready_indexes;not_all_binance_history","coverage_url":"/v1/history/coverage","coverage_is_capped_by_query_cutoff":true,"quality_validated":false,"ranking":"hnsw_relaxed_resorted_v3;half_window_spacing","corpus_version":corpus_version,"candidate_budget":3000,"deduplication_budget":1000,"score_meaning":"similarity_not_probability"});
+    let result = json!({"session_id":id,"items":selected,"model_id":input.model_id,"cutoff_at":cutoff,"query_quality":quality,"coverage":coverage,"coverage_list_limit":100,"scope":"only_ready_indexes;not_all_binance_history","coverage_url":"/v1/history/coverage","coverage_is_capped_by_query_cutoff":true,"quality_validated":false,"ranking":"hnsw_relaxed_resorted_v3;half_window_spacing","corpus_version":corpus_version,"candidate_budget":3000,"deduplication_budget":1000,"score_meaning":"similarity_not_probability","windows_dropped_for_unproven_source":unproven});
     if !persist {
         tx.commit().await?;
         let mut result = result;
@@ -612,10 +621,17 @@ pub async fn revalidate(s: &Services, owner: Uuid, id: Uuid, key: &str) -> Resul
     Ok(result)
 }
 
+/// 给每个候选窗口贴上它的行情来源。来路证不出来的窗口一格都不许端出去——没有
+/// 任何 ready 世代认领这一行，或者认领它的世代不是 `rest`/`monthly_archive`，这一条
+/// 不松。松的是「证不出来之后怎么办」：原来是整次检索直接报错退出，等于让一行丢失的
+/// 链接替用户决定今天搜不了图（1d 扇出补跑之后有 19 个品种中招，候选池一取 30 个合约
+/// 就几乎必然踩到，真实检索大面积报错）。现在只把那一个候选**丢掉**，剩下的照常返回。
+///
+/// 丢掉的条数原样返回，调用方必须把它写进结果里：静悄悄地少给几条，比报错更不能接受。
 pub async fn attach_market_sources(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    items: &mut [Value],
-) -> Result<()> {
+    items: &mut Vec<Value>,
+) -> Result<usize> {
     if items.len() > 50 {
         return Err(Error::bad("market_source_lookup_budget"));
     }
@@ -628,17 +644,27 @@ pub async fn attach_market_sources(
         .collect::<Result<_>>()?;
     let rows:Vec<(Uuid,String)>=sqlx::query_as("SELECT DISTINCT ON(l.feature_id) l.feature_id,g.body->>'source' FROM public_market.generation_features l JOIN public_market.generations g ON g.id=l.generation_id WHERE l.feature_id=ANY($1) AND g.status='ready' ORDER BY l.feature_id,g.published_at DESC,g.id DESC").bind(ids).fetch_all(&mut **tx).await?;
     let sources: std::collections::HashMap<_, _> = rows.into_iter().collect();
-    for item in items {
+    let mut kept: Vec<Value> = Vec::with_capacity(items.len());
+    let mut dropped: Vec<Uuid> = vec![];
+    for mut item in std::mem::take(items) {
         let id: Uuid = serde_json::from_value(item["id"].clone())
             .map_err(|_| Error::bad("invalid_window_identity"))?;
-        let source = sources
+        let Some(source) = sources
             .get(&id)
             .filter(|v| matches!(v.as_str(), "rest" | "monthly_archive"))
-            .ok_or_else(|| Error::bad("indexed_window_source_unproven"))?;
+        else {
+            dropped.push(id);
+            continue;
+        };
         item["market_source"] = json!(source);
         if let Some(chart) = item.get_mut("chart_request") {
             chart["source"] = json!(source);
         }
+        kept.push(item);
     }
-    Ok(())
+    if !dropped.is_empty() {
+        tracing::warn!(feature_ids=?dropped,"indexed windows dropped from the result; no ready generation proves their market source");
+    }
+    *items = kept;
+    Ok(dropped.len())
 }

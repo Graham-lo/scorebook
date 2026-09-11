@@ -15,11 +15,13 @@ pub async fn publish(s: &Services, j: &Job, value: &Value, complete: bool) -> Re
     tx.commit().await?;
     Ok(())
 }
+/// 返回候选池，外加「因为来路证不出来而被丢掉的窗口条数」——那个数字要一路带到
+/// 检索结果里，不能在这里咽掉。
 pub async fn public_candidates(
     s: &Services,
     input: &ChartSearchInput,
     vector: Vec<f32>,
-) -> Result<Vec<Value>> {
+) -> Result<(Vec<Value>, usize)> {
     let mut tx = s.db.pool.begin().await?;
     crate::adapters::ann::configure(&mut tx).await?;
     // 排除写在 ANN 的那一层里，不是查完再在内存里滤：人否掉三条之后要补上三条
@@ -63,9 +65,9 @@ pub async fn public_candidates(
         }
     }
     let mut tx = s.db.pool.begin().await?;
-    super::super::history::attach_market_sources(&mut tx, &mut selected).await?;
+    let unproven = super::super::history::attach_market_sources(&mut tx, &mut selected).await?;
     tx.commit().await?;
-    Ok(selected)
+    Ok((selected, unproven))
 }
 pub async fn private_candidates(
     s: &Services,

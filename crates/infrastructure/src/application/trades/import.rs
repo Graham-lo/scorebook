@@ -174,7 +174,7 @@ async fn apply(
     if let Some(c) = checkpoint.job() {
         let alive:Option<Uuid>=sqlx::query_scalar("SELECT id FROM jobs WHERE id=$1 AND owner_id=$2 AND generation=$3 AND lease_owner=$4 AND status='running' AND lease_until>now() FOR UPDATE").bind(c.id).bind(owner).bind(c.generation).bind(c.lease).fetch_optional(&mut *tx).await?;
         if alive.is_none() {
-            return Err(Error::conflict("lease_lost"));
+            return Err(crate::application::jobs::lease_lost());
         }
     }
     let id = Uuid::new_v4();
