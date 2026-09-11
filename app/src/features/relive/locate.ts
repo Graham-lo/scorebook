@@ -30,6 +30,7 @@ import {
   postLocate,
   putLocation,
   type AttachmentLocation,
+  type LocateIndex,
   type LocateJob,
   type LocateState,
   type LocationInput,
@@ -98,6 +99,15 @@ export function locatePanel(options: LocateOptions): LocatePanel {
   // 也不许把他挑的东西换掉。三项合起来记一个标记——挑了品种市场就跟着走，
   // 只保住品种、让轮询去改市场，会配出一个并不存在的组合。
   let touched = false
+  // 人说「都不是」说过的那些候选窗口，按这张图累加。
+  //
+  // 从前每按一次「都不是」都只是把同一次检索再跑一遍：索引只有判断时刻前面那
+  // 一段，第二次起后端发现已经建过就直接复用，于是五条任务给出逐字节相同的三
+  // 段。既然人已经看过并且否掉了，这一次就要把它们连同前几轮的一起报给后端：
+  // 后端凭这个知道该往更早的历史里去找，也知道哪几段不必再拿出来。
+  const rejected = new Set<string>()
+  /** 后端上一次说这次检索推到了哪一段、还能不能再往前。 */
+  let reach: LocateIndex | null = null
 
   /** 按什么去找：钉住的位置最大，其次后端认出来的，再次这条记录，最后兜底。 */
   function wanted(): LocateTarget {
@@ -109,6 +119,33 @@ export function locatePanel(options: LocateOptions): LocatePanel {
   }
 
   let target: LocateTarget = wanted()
+  /**
+   * 之前否掉的那些跟这一次没关系了。
+   *
+   * 换了品种、市场或者周期，找的就是另一件事，旧的否决不该跟过来；钉住了、或者
+   * 离开了这张图也一样。
+   */
+  function forget(): void {
+    if (!rejected.size && !reach) return
+    rejected.clear()
+    reach = null
+    locateAction.reset()
+  }
+  /** 这三段人看过了，都不是。累加，不是替换。 */
+  function refuse(items: HistoryCandidate[]): void {
+    for (const item of items) rejected.add(item.id)
+  }
+  /** 后端说再往前没有了：不能再摆出一副还能继续找的样子。 */
+  function exhausted(): boolean {
+    return rejected.size > 0 && reach?.exhausted === true
+  }
+  /** 到头了这件事要说清楚：往前找到哪儿、看过几段、人否掉了几段。 */
+  function exhaustedLine(): string {
+    const from = reach?.range?.start_at
+    const spans = (reach?.span ?? 0) + 1
+    const reached = from ? `往前已经找到 ${from.slice(0, 10)} UTC，` : '往前已经到头了：'
+    return `${reached}一共 ${spans} 段历史，你否掉了 ${rejected.size} 段。再往前没有了。`
+  }
   /** 缺省的品种是从截图上认出来的，不是从记录继承的：这件事要说一句。 */
   function readSymbol(): boolean {
     return !touched && !location && Boolean(read.symbol) && target.symbol === read.symbol
@@ -154,6 +191,7 @@ export function locatePanel(options: LocateOptions): LocatePanel {
         onPick: (value) => {
           if (!value) return
           touched = true
+          forget()
           target.symbol = value
           // 目录里这个合约挂在哪个市场，市场就跟着走，不让人再猜一次。
           const found = cached(value)
@@ -172,6 +210,7 @@ export function locatePanel(options: LocateOptions): LocatePanel {
         ],
         onPick: (value) => {
           touched = true
+          forget()
           target.market = value as Market
           repaint()
         },
@@ -185,6 +224,7 @@ export function locatePanel(options: LocateOptions): LocatePanel {
           INTERVALS.map((value) => ({ label: value, value, on: value === target.interval })),
         onPick: (value) => {
           touched = true
+          forget()
           target.interval = value
           repaint()
         },
@@ -251,7 +291,18 @@ export function locatePanel(options: LocateOptions): LocatePanel {
       return [row]
     }
     if (phase.at === 'working') {
-      const row = h('div.rlv-lrow', {}, h('i.rlv-spin'), h('span', { text: '正在按图找位置' }))
+      // 人刚按过「都不是」的时候，这句话必须和上一轮不一样：这一次不是原地
+      // 重试，是往判断时刻更早的那一段历史里去，拉的是没拉过的 K 线。这段路
+      // 要建索引，比第一次慢，得让人知道在等什么。
+      const row = rejected.size
+        ? h(
+            'div.rlv-lrow',
+            {},
+            h('i.rlv-spin'),
+            h('span', { text: '正在往更早的历史里找' }),
+            h('span.faint', { text: `这一次要先把那一段的 K 线拉下来，比头一次慢。已经排除 ${rejected.size} 段。` }),
+          )
+        : h('div.rlv-lrow', {}, h('i.rlv-spin'), h('span', { text: '正在按图找位置' }))
       return [row]
     }
     if (phase.at === 'failed') {
@@ -267,12 +318,15 @@ export function locatePanel(options: LocateOptions): LocatePanel {
       ]
     }
     if (phase.at === 'nomatch') {
+      const done = exhausted()
       return [
         h(
           'div.rlv-lrow',
           {},
           h('span', { text: '公开历史里没有对得上的一段。' }),
-          h('button.btn.sm.ghost', { text: '再找一次', on: { click: () => void run(true) } }),
+          done
+            ? h('span.faint', { text: exhaustedLine() })
+            : h('button.btn.sm.ghost', { text: '再找一次', on: { click: () => void run(true) } }),
           tail,
         ),
         targetRow(),
@@ -284,13 +338,27 @@ export function locatePanel(options: LocateOptions): LocatePanel {
       run0.items.forEach((item, index) => {
         list.appendChild(candidate(item, index, run0.runId))
       })
+      const done = exhausted()
       return [
         h(
           'div.rlv-lrow',
           {},
           h('span', { text: '哪一段是这张图？' }),
-          // 三段都不是的时候要有路走：再让后端找一次，而不是被迫钉一段错的。
-          h('button.btn.sm.ghost', { text: '都不是', on: { click: () => void run(true) } }),
+          // 三段都不是的时候要有路走：把这三段记下来报给后端，让它往更早的历史
+          // 里再找一段没看过的，而不是被迫钉一段错的。
+          //
+          // 后端说再往前没有了，就不能再摆出这个按钮：按下去只会原地转一圈。
+          done
+            ? h('span.faint', { text: exhaustedLine() })
+            : h('button.btn.sm.ghost', {
+                text: '都不是',
+                on: {
+                  click: () => {
+                    refuse(run0.items)
+                    void run(true)
+                  },
+                },
+              }),
           tail,
         ),
         // 「都不是」按下去就是按这一排再找一次。它既然决定下一次找什么，就不能
@@ -393,6 +461,8 @@ export function locatePanel(options: LocateOptions): LocatePanel {
   }
 
   function settle(saved: AttachmentLocation): void {
+    // 钉住了，这张图的事就了了：否决集合留着只会在撤销重钉时冒出来。
+    forget()
     location = saved
     phase = { at: 'idle' }
     repaint()
@@ -494,10 +564,15 @@ export function locatePanel(options: LocateOptions): LocatePanel {
     try {
       // 这张图要按哪个品种、哪个周期找，一起发过去；后端认不认新字段都不影响
       // 旧行为——不填就是记录自己的品种。
-      const wanted = target.symbol ? { ...target } : null
+      // 否掉过的那几段一起发过去：既是「这些不必再拿给我看」，也是「这一次
+      // 别在原地重试」。一条都没否过的时候这一格整个不出现，请求体和从前一样。
+      const refused = [...rejected]
+      const wanted = target.symbol ? { ...target, ...(refused.length ? { exclude: refused } : {}) } : null
       const started = await postLocate(
         attachment.id,
-        locateAction.keyFor({ id: attachment.id, ...(wanted ?? {}) }),
+        // 幂等键要跟着否决集合走：从前每一轮的键逐字节相同，第二次按下去拿回
+        // 来的就是上一轮那条任务。
+        locateAction.keyFor({ id: attachment.id, ...(wanted ?? {}), refused }),
         wanted,
         { signal },
       )
@@ -541,6 +616,9 @@ export function locatePanel(options: LocateOptions): LocatePanel {
 
   /** 任务到终态了：有候选就让人挑，没候选就把这个事实说出来。 */
   function settleJob(job: LocateJob | null): void {
+    // 这一次推到了第几段、还能不能再往前，由后端说了算。旧后端没有这一格，
+    // 那就当作「还能再往前」——它本来也没有推段这回事。
+    reach = job?.result?.index ?? null
     const items = ambiguous(job)
     if (items.length) {
       phase = { at: 'picked', items, runId: runIdOf(job) }
@@ -570,6 +648,8 @@ export function locatePanel(options: LocateOptions): LocatePanel {
       alive = false
       polling += 1
       lane.cancel()
+      // 离开这张图：下次再打开是重新开始，不背着上一次的否决。
+      forget()
     },
   }
 }

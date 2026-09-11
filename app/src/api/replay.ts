@@ -175,6 +175,24 @@ export interface LocateJob {
 export interface LocateResult {
   outcome?: 'located' | 'ambiguous' | 'already_located' | string
   candidates?: unknown[]
+  /** 这一次的检索是在哪一段历史上跑的。旧后端没有这一格。 */
+  index?: LocateIndex
+  [key: string]: unknown
+}
+
+/**
+ * 这一次往前推到了第几段、那一段是哪一段、还能不能再往前。
+ *
+ * `span` 从 0 数起：0 就是判断时刻前面那一段，也就是从前唯一的那一段。
+ * `exhausted` 为真表示再往前没有了——要么段数到了上限，要么这个合约的历史
+ * 本来就没那么早。`reason` 是 `range_exhausted` 的时候，「都不是」已经无路可走。
+ */
+export interface LocateIndex {
+  built?: boolean
+  reason?: string | null
+  span?: number
+  exhausted?: boolean
+  range?: { start_at?: Instant; end_at?: Instant; bars?: number }
   [key: string]: unknown
 }
 
@@ -205,6 +223,12 @@ export interface LocateRequest {
   symbol: string
   market: Market
   interval: string
+  /**
+   * 人已经看过并且说了「都不是」的那些候选窗口，累加的：第三轮要把前两轮一共
+   * 六条都写在这里。给了就不是原地重试——后端会把索引沿时间轴再往前推一段，
+   * 拉没拉过的 K 线。不给（或者空的）就是从前那条路，请求体一格不变。
+   */
+  exclude?: Uuid[]
 }
 
 /** 人按了「钉到真实行情」才发。同一张图已经有任务在跑就返回那一个。 */
