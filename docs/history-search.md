@@ -10,6 +10,8 @@
 
 向量候选预算为 3,000，物化后最多检查前 1,000 条，为每个合约保留最多 3 个不紧邻的片段，并选最多 30 个做真实来源核验和精排。公共结果最后按分数排序，每个合约保留最佳片段，默认 3 个；前端提供 3/5/10。个人记录按原图和已确认记录组去重，未知周期记录不混入。
 
+人看过候选并说「都不是」时，那几条的 id 下一轮以 `exclude` 传回来（公开历史里是 `public_market.features` 的窗口 id，个人记录里是附件 id，结果条目自己带的那个 id 就是要写回来的东西）。排除写在 ANN 取数那一条 SQL 里——候选 CTE 的 `id<>ALL(...)`，**在 `LIMIT 3000` 之前**生效，不是查完之后再在内存里滤：滤在后面得到的只是同一批答案的短版本，而人要的是补上三条没看过的。`exclude` 是累加的，先去重再看上限，最多 100 条（`MAX_EXCLUDE`），越界 422；空列表时 `<>ALL('{}')` 恒为真，请求体与 SQL 行为跟从前逐字节相同。重温那一侧的「都不是」是另一件事——它改的不是这一轮的候选而是搜索范围，见 docs/replay-spec.md §1.7。
+
 匹配完成后使用候选的 chart_request 再取数据，绘图请求的 match_end_at 标明原匹配结束位置。后续 32/64/128 根仅用于展示，不能影响召回、评分、排序。仅画真实已收盘 K 线，未来不存在就明说。候选指定 REST 或官方归档来源，不能静默换源。
 
 ## 历史范围与资源
@@ -20,8 +22,42 @@
 
 特征、元数据、索引在 PostgreSQL/pgvector 的磁盘表中；查询只读取所需页并缓存。少量候选 K 线分组取入 RAM，原始行情和系统图不写数据库/文件/离线缓存。向量数越大仍有索引 I/O、缓存和维护成本，不宣称 TB 级单机性能已经验收。
 
+## 索引的广度：按月档扇出（`history.universe`）
+
+刻舟求剑要的是「广」：任意品种、任意周期地找相似结构。库里只有四个品种时，那句「任意」是假的。`history.universe` 作业（`batch` 队列）按 24 小时 ticker 取一个 market 的前 200 个合约，把它们的历史灌进 `public_market.features`。一条作业只做一个周期，这是用户明确要求的分法：粗周期先跑完，检索就能在那一档上工作，细周期什么时候跑由人决定。
+
+名单排序是「24 小时成交额名次 + 24 小时成交笔数名次」两项相加（Borda）后升序，和相同按简称字典序（`application/instrument_popularity.rs`）。只按成交额排，几笔巨鲸单就足以把一个其实没人在交易的合约顶进名单；只按笔数排又会挑出一堆碎单的小票。名单连同每个品种当时的成交额、笔数和两项各自的名次一起存进 `public_market.universe_snapshots` / `universe_members`，作业进度存 `universe_index_runs`：ticker 是快照，前 200 名每天都在变，不存档事后就没人答得出「这一轮到底搜了哪 200 个、截止到哪一天」。
+
+取数只走 `data.binance.vision` 的月度归档，不走 REST。`adapters/binance_archive.rs` 全文没有一处 `budget.reserve`，S3 静态对象不占 fapi 的限频配额——两百个品种、十年历史这件事能做，前提就是这一条。一段范围的月档并发下载一次，解析出来的 bars 直接喂给 64/128/256 三档窗口（`STRIDE=4`）各建一个世代，而不是每档各下一遍同一个 zip。作业每 45 秒（`STEP_BUDGET`）把进度写下来、让出队列。归档里缺一个月是常态（新币、下架、币安漏传），记进 `failures` 继续走。一根 K 线都不落盘，写下的仍然只有向量和时间坐标。
+
+这条路目前**没有 HTTP 路由，openapi 里也没有条目**：作业靠直接往 `jobs` 插一行来排（kind `history.universe`，体里给 `market`/`interval`/`top`），入口是故意押后的。
+
 ## 当前运行决定与验收
 
 按用户 2026-09-10 最新要求，只交付功能，不启动历史同步。实际测试用 BTC/ETH 两品种、1h/4h 两周期、每范围 512 根近期真实 K 线，另测 BTC 上线附近 128 根 1h K 线。193 条临时特征通过同周期检索与后续图验证后，隔离库与临时目录立即删除。
 
-主库演示历史已清空，当前公共特征和覆盖均为 0，自动历史订阅为 0。用户原图、记录和复盘保留。证据见 period-live-verification.json、public-history-cleanup.json。真实截图质量盲测与大规模性能仍未完成。
+上面那句「不启动历史同步」说的是**滚动订阅**，这一条至今没变；但「公共特征和覆盖均为 0」从 2026-09-11 起不再成立：`attachment.locate` 的按需建索引和 `history.universe` 的月档扇出都会往公共索引里写行，后者是人一条一条排的作业，不是订阅。2026-09-11 16:4x 实测主库，都是那一刻的事实、不是承诺，也都在当天那轮补跑开始之前测的（补跑的结果另记）：
+
+- `public_market.features` 已发布的行：1d 70862、1h 9758、30m 137、3d 29。
+- `public_market.coverage_segments`：1d 467 段 `complete` / 475 段 `partial`，1h 21 段 `complete`，30m 1 段，3d 1 段。
+- 那 475 段 1d `partial` 要分两种看：其中 167 段各是某个品种最早的一段、`actual_start` 就是它的上线日期——那是照实截断，永远不会变成 `complete`；剩下 308 段是月档没下全，属于 2026-09-11「建了一半的世代得留着让人补齐」那一改之后重新补得回来的（补跑能把段从 `partial` 升成 `complete`，规则见 docs/status.md 当日条目）。
+- `replay_bars` 131 行（一次性展示缓存，带 `expires_at`，与索引无关）。
+
+数字会过期，查询不会。要当下的实况，自己跑这几条：
+
+```sql
+SELECT timeframe, count(*) FROM public_market.features WHERE published GROUP BY 1 ORDER BY 2 DESC;
+SELECT timeframe, status, count(*) FROM public_market.coverage_segments GROUP BY 1,2 ORDER BY 1,2;
+SELECT count(*) FROM replay_bars;
+SELECT status, count(*) FROM history_subscriptions GROUP BY 1;   -- 滚动的历史订阅有没有开
+-- 1d 的 partial 段分成「上市晚、照实截断」和「月档没下全、还补得回来」两类
+WITH seg AS (
+  SELECT symbol, status, start_at, actual_start,
+         row_number() OVER (PARTITION BY symbol ORDER BY start_at) AS no
+  FROM public_market.coverage_segments WHERE market='usd_m' AND timeframe='1d')
+SELECT count(*) FILTER (WHERE no=1 AND actual_start>start_at) AS listed_late,
+       count(*) FILTER (WHERE NOT (no=1 AND actual_start>start_at)) AS recoverable
+FROM seg WHERE status='partial';
+```
+
+用户原图、记录和复盘保留。2026-09-10 的清理证据见 period-live-verification.json、public-history-cleanup.json——它们记的是那一天的状态，不是现在的。真实截图质量盲测与大规模性能仍未完成，「币安全部历史已建成」的覆盖结论也仍然没有发布。
