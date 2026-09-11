@@ -6,5 +6,5 @@ test('refresh restores the same task, period, source and ROI without market byte
   assert.deepEqual(readCheckpoint(JSON.stringify({ ...saved, rawCandles: [1], svg: '<svg/>' })), saved)
 })
 test('unscoped, malformed or unsupported saved tasks are not resumed', () => {
-  for (const value of [null, { ...saved, interval: null }, { ...saved, interval: '2h' }, { ...saved, region: { x: -1, y: 0, width: 10, height: 10 } }]) assert.equal(readCheckpoint(JSON.stringify(value)), null)
+  for (const value of [null, { ...saved, interval: null }, { ...saved, interval: '7h' }, { ...saved, region: { x: -1, y: 0, width: 10, height: 10 } }]) assert.equal(readCheckpoint(JSON.stringify(value)), null)
 })

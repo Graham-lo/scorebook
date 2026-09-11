@@ -1,5 +1,7 @@
+import { INTERVALS } from '../../data/session'
+
 /** A period belongs to this screenshot/region, never a global search preference. */
-export const SEARCH_PERIODS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
+export const SEARCH_PERIODS = INTERVALS
 export type SearchPeriod = typeof SEARCH_PERIODS[number]
 
 export class QueryPeriod {

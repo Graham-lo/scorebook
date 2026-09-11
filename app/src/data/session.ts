@@ -284,15 +284,28 @@ export async function describe(symbol: string, market: Market): Promise<Instrume
 }
 
 /** The intervals the backend's chart and history endpoints accept. */
-export const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'] as const
+export const INTERVALS = [
+  '1m', '3m', '5m', '15m', '30m',
+  '1h', '2h', '4h', '6h', '8h', '12h',
+  '1d', '3d', '1w', '1M',
+] as const
 export type Interval = (typeof INTERVALS)[number]
 
-/** 一根 K 线有多少秒。和后端的表一致，用来算一段时间里有多少根。 */
+/** 一根 K 线有多少秒。和后端的表一致，用来算一段时间里有多少根；1M 按 30 天估算，只用于估算根数，不用于对齐。 */
 export const INTERVAL_SECONDS: Record<Interval, number> = {
   '1m': 60,
+  '3m': 180,
   '5m': 300,
   '15m': 900,
+  '30m': 1_800,
   '1h': 3_600,
+  '2h': 7_200,
   '4h': 14_400,
+  '6h': 21_600,
+  '8h': 28_800,
+  '12h': 43_200,
   '1d': 86_400,
+  '3d': 259_200,
+  '1w': 604_800,
+  '1M': 2_592_000,
 }

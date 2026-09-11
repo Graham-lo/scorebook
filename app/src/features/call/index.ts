@@ -32,7 +32,7 @@ import type {
 import { PATHS, STANCES, ruleRows, sentence } from '../../data/criteria'
 import { flowOf, fromCallDetail } from '../../data/flow'
 import { figures, head as headOutcome, original, pendingState, whyLine } from '../../data/outcome'
-import { INTERVALS, MARKET_LABELS } from '../../data/session'
+import { INTERVALS, INTERVAL_SECONDS, MARKET_LABELS } from '../../data/session'
 import { Gate, detail, invalidate, knownTags, tagIndex } from '../../data/store'
 import { dateTime, elapsed, horizon, relative } from '../../data/time'
 import { go } from '../../router'
@@ -61,16 +61,6 @@ import { REVIEW_ACTIONS } from '../review/draft'
 import { tradeSummary } from '../review/trades'
 import { reviewImages } from '../../ui/image-picker'
 import { executionSection } from './execution'
-
-/** The system chart is drawn from the same intervals the backend accepts. */
-const INTERVAL_SECONDS: Record<string, number> = {
-  '1m': 60,
-  '5m': 300,
-  '15m': 900,
-  '1h': 3600,
-  '4h': 14400,
-  '1d': 86400,
-}
 
 const CORRECTIONS: { value: 'metadata_evidence' | 'parser_error' | 'annotation'; label: string }[] =
   [
@@ -801,7 +791,7 @@ export function callPage(host: HTMLElement, arg: string): () => void {
 
   function chartSection(d: CallDetail): HTMLElement {
     const interval = d.timeframe && INTERVALS.includes(d.timeframe as never) ? d.timeframe : '1h'
-    const seconds = INTERVAL_SECONDS[interval] ?? 3600
+    const seconds = INTERVAL_SECONDS[interval as keyof typeof INTERVAL_SECONDS] ?? 3600
     const submitted = new Date(d.submitted_at).getTime()
     const start = new Date(submitted - 120 * seconds * 1000)
     const end = new Date(Math.min(Date.now(), submitted + 60 * seconds * 1000))

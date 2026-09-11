@@ -18,6 +18,6 @@ test('new screenshot or region cannot inherit the prior screenshot period', () =
   period.reset()
   assert.equal(period.value, null)
   assert.throws(() => period.select(''), /周期/)
-  assert.throws(() => period.select('2h'), /周期/)
+  assert.throws(() => period.select('7h'), /周期/)
   assert.equal(period.value, null)
 })

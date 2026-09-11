@@ -113,6 +113,7 @@ export function barsPerSecond(interval: string): number {
   if (interval === '1m') return 20
   if (interval === '3m' || interval === '5m' || interval === '15m' || interval === '30m') return 10
   if (interval === '1h' || interval === '2h') return 6
+  if (interval === '3d' || interval === '1w' || interval === '1M') return 2
   return 3
 }
 
