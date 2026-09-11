@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "test:integration": "tsx test/integration.ts"
   },
   "devDependencies": {

@@ -100,3 +100,77 @@ export function atr(bars: OHLC[], n: number): Line {
   }
   return out
 }
+
+export interface MacdLines {
+  /** 快慢两条 EMA 的差。两条都还没起头的位置是 null。 */
+  dif: Line
+  /** DIF 的 EMA，从 DIF 有值那一段开始算。 */
+  dea: Line
+  /** 2 ×（DIF − DEA）。柱子按国内画法乘 2，和截图上的幅度对得上。 */
+  hist: Line
+}
+
+/**
+ * MACD。截图里用的是 (10, 30, 9)，不是默认的 (12, 26, 9)，所以三个参数都要能改。
+ *
+ * DEA 是「DIF 的 EMA」——DIF 前面那一段是 null，不能把 null 当 0 喂进去，否则
+ * 起头几根会被压下去。这里先把 DIF 有值的那一截取出来单独求 EMA，再放回原位。
+ */
+export function macd(closes: number[], fast: number, slow: number, signal: number): MacdLines {
+  const blank = (): Line => new Array(closes.length).fill(null)
+  const out: MacdLines = { dif: blank(), dea: blank(), hist: blank() }
+  const ok = (n: number) => Number.isInteger(n) && n >= 1 && n <= 500
+  if (!ok(fast) || !ok(slow) || !ok(signal) || fast >= slow) return out
+
+  const quick = ema(closes, fast)
+  const slowly = ema(closes, slow)
+  const dif = out.dif
+  const tail: number[] = []
+  let from = -1
+  for (let i = 0; i < closes.length; i += 1) {
+    const a = quick[i]
+    const b = slowly[i]
+    if (a === null || a === undefined || b === null || b === undefined) continue
+    dif[i] = a - b
+    if (from === -1) from = i
+    tail.push(a - b)
+  }
+  if (from === -1) return out
+
+  const dea = ema(tail, signal)
+  for (let i = 0; i < dea.length; i += 1) {
+    const v = dea[i]
+    if (v === null || v === undefined) continue
+    const at = from + i
+    out.dea[at] = v
+    out.hist[at] = ((dif[at] as number) - v) * 2
+  }
+  return out
+}
+
+/**
+ * Wilder RSI。第 n 根上出第一个值（用前 n 根的涨跌幅平均起头），之后递推。
+ *
+ * 一整段都不跌的时候分母是 0——直接给 100，不让它变成 NaN 把线断掉。
+ */
+export function rsi(closes: number[], n: number): Line {
+  const out: Line = new Array(closes.length).fill(null)
+  if (!Number.isInteger(n) || n < 1 || n > 500 || closes.length <= n) return out
+  let up = 0
+  let down = 0
+  for (let i = 1; i <= n; i += 1) {
+    const change = (closes[i] as number) - (closes[i - 1] as number)
+    if (change >= 0) up += change
+    else down -= change
+  }
+  up /= n
+  down /= n
+  out[n] = down === 0 ? 100 : 100 - 100 / (1 + up / down)
+  for (let i = n + 1; i < closes.length; i += 1) {
+    const change = (closes[i] as number) - (closes[i - 1] as number)
+    up = (up * (n - 1) + (change > 0 ? change : 0)) / n
+    down = (down * (n - 1) + (change < 0 ? -change : 0)) / n
+    out[i] = down === 0 ? 100 : 100 - 100 / (1 + up / down)
+  }
+  return out
+}
