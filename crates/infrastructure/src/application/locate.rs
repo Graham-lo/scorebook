@@ -135,13 +135,91 @@ async fn call_target(
     ))
 }
 
+/// 这张截图自己写着的三元组，一张图至多读一次。
+///
+/// 「截图是闪迪或者 mu，默认应该把品种识别出来才对，没有识别出来让用户自己
+/// 选择」：同板块对比图上的标的跟记录本身的不是一回事，图上那行代码 OCR 一直读
+/// 得出来，只是从没人问过它。
+///
+/// 三道闸把这条路的代价和风险都关住：已经钉住的图不必再猜，读过的图直接取
+/// `attachment_reads` 里那一行（面板两秒轮询一次 GET locate，不能每轮都开一个
+/// OCR 子进程），读出来的东西不管是不是空的都记一行——「看过了」本身就是结论。
+///
+/// 出错一律当作没认出来：OCR 可执行文件没配、视觉服务停着，读这一条路也得照常
+/// 200 回原来的兜底值。只有这张图自己永远读不出来（字节对不上、OCR 返回的东西
+/// 不合法）才记行，能力性的不可用不记——不然视觉服务停一阵，每张图都会被永久
+/// 标成「看过了」。
+async fn screenshot_reading(s: &Services, owner: Uuid, attachment: Uuid) -> LocateOverride {
+    let nothing = LocateOverride::default();
+    let pinned: std::result::Result<bool, _> = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM attachment_locations WHERE owner_id=$1 AND attachment_id=$2)",
+    )
+    .bind(owner)
+    .bind(attachment)
+    .fetch_one(&s.db.pool)
+    .await;
+    if !matches!(pinned, Ok(false)) {
+        return nothing;
+    }
+    let cached: Option<(Option<String>, Option<String>)> = match sqlx::query_as(
+        "SELECT symbol,interval FROM attachment_reads WHERE owner_id=$1 AND attachment_id=$2",
+    )
+    .bind(owner)
+    .bind(attachment)
+    .fetch_optional(&s.db.pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => return nothing,
+    };
+    let (symbol, interval) = match cached {
+        Some(v) => v,
+        None => match super::chart_search::read_labels(s, owner, attachment).await {
+            Ok((symbol, _, interval)) => {
+                let _ = sqlx::query("INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval) VALUES($1,$2,$3,$4) ON CONFLICT(owner_id,attachment_id) DO NOTHING")
+                    .bind(owner).bind(attachment).bind(&symbol).bind(&interval)
+                    .execute(&s.db.pool).await;
+                (symbol, interval)
+            }
+            Err(e) => {
+                if e.kind == crate::error::ErrorKind::Invalid {
+                    let _ = sqlx::query("INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval) VALUES($1,$2,NULL,NULL) ON CONFLICT(owner_id,attachment_id) DO NOTHING")
+                        .bind(owner).bind(attachment).execute(&s.db.pool).await;
+                }
+                tracing::debug!(code = %e.code, "screenshot label read did not produce a default");
+                return nothing;
+            }
+        },
+    };
+    // 市场跟着认出来的品种走，不继承记录的：对比图上的标的未必同市场。现查
+    // catalog 而不是存进 attachment_reads，这张表只记 OCR 看见的东西。
+    let market = match &symbol {
+        Some(symbol) => sqlx::query_scalar::<_, String>(
+            "SELECT market FROM instrument_catalog WHERE symbol=$1 GROUP BY market HAVING count(*)>0",
+        )
+        .bind(symbol)
+        .fetch_all(&s.db.pool)
+        .await
+        .ok()
+        .filter(|v| v.len() == 1)
+        .and_then(|v| v.into_iter().next()),
+        None => None,
+    };
+    LocateOverride {
+        symbol,
+        market,
+        interval,
+    }
+}
+
 /// 实际用来找图的三元组：这次给的覆盖值最优先，其次是最近一次 job 里记下的，
-/// 最后才是记录本身的。任何一格查不出来就留 null，不编。
+/// 再次是图上自己写着的，最后才是记录本身的。任何一格查不出来就留 null，不编。
 async fn resolved(
     tx: &mut Transaction<'_, Postgres>,
     owner: Uuid,
     attachment: Uuid,
     over: &LocateOverride,
+    read: &LocateOverride,
 ) -> Result<Value> {
     let job: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('symbol',j.body->>'symbol','market',j.body->>'market','interval',j.body->>'interval') FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id'=$2::text ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
         .bind(owner)
@@ -157,22 +235,24 @@ async fn resolved(
         Some(call) => call_target(tx, owner, call).await.ok(),
         None => None,
     };
-    let pick = |given: Option<&str>, key: &str, fallback: Option<&str>| -> Value {
-        given
-            .map(str::to_string)
-            .or_else(|| {
-                job.as_ref()
-                    .and_then(|v| v[key].as_str())
-                    .map(str::to_string)
-            })
-            .or_else(|| fallback.map(str::to_string))
-            .map(Value::String)
-            .unwrap_or(Value::Null)
-    };
+    let pick =
+        |given: Option<&str>, key: &str, seen: Option<&str>, fallback: Option<&str>| -> Value {
+            given
+                .map(str::to_string)
+                .or_else(|| {
+                    job.as_ref()
+                        .and_then(|v| v[key].as_str())
+                        .map(str::to_string)
+                })
+                .or_else(|| seen.map(str::to_string))
+                .or_else(|| fallback.map(str::to_string))
+                .map(Value::String)
+                .unwrap_or(Value::Null)
+        };
     Ok(json!({
-        "symbol":pick(over.symbol.as_deref(),"symbol",from_call.as_ref().map(|t|t.0.as_str())),
-        "market":pick(over.market.as_deref(),"market",from_call.as_ref().map(|t|t.1.as_str())),
-        "interval":pick(over.interval.as_deref(),"interval",from_call.as_ref().map(|t|t.2.as_str())),
+        "symbol":pick(over.symbol.as_deref(),"symbol",read.symbol.as_deref(),from_call.as_ref().map(|t|t.0.as_str())),
+        "market":pick(over.market.as_deref(),"market",read.market.as_deref(),from_call.as_ref().map(|t|t.1.as_str())),
+        "interval":pick(over.interval.as_deref(),"interval",read.interval.as_deref(),from_call.as_ref().map(|t|t.2.as_str())),
     }))
 }
 
@@ -181,6 +261,8 @@ const LATEST_JOB: &str = "SELECT jsonb_build_object('id',j.id,'status',j.status,
 
 /// The screenshot's pin and the most recent attempt at making one.
 pub async fn get(s: &Services, owner: Uuid, attachment: Uuid) -> Result<Value> {
+    // 先读图，再开事务：OCR 要一枚视觉许可加一个子进程，不该攥着数据库连接跑。
+    let read = screenshot_reading(s, owner, attachment).await;
     let mut tx = s.db.pool.begin().await?;
     owned(&mut tx, owner, attachment).await?;
     let location: Option<Value> = sqlx::query_scalar(LOCATION)
@@ -193,7 +275,14 @@ pub async fn get(s: &Services, owner: Uuid, attachment: Uuid) -> Result<Value> {
         .bind(attachment.to_string())
         .fetch_optional(&mut *tx)
         .await?;
-    let used = resolved(&mut tx, owner, attachment, &LocateOverride::default()).await?;
+    let used = resolved(
+        &mut tx,
+        owner,
+        attachment,
+        &LocateOverride::default(),
+        &read,
+    )
+    .await?;
     tx.commit().await?;
     Ok(
         json!({"location":location,"job":job,"symbol":used["symbol"],"market":used["market"],"interval":used["interval"]}),
@@ -227,6 +316,9 @@ pub async fn request(
     input: LocateOverride,
 ) -> Result<Value> {
     let over = checked_override(&input)?;
+    // GET 与 POST 回显的默认值得是同一份，所以这里也问一次图；读过之后是一次
+    // 主键查表，没有第二个 OCR 子进程。
+    let read = screenshot_reading(s, owner, attachment).await;
     // 覆盖值进指纹：同一把 Idempotency-Key 换了品种就是另一次请求，不该回放旧结果。
     // 不给覆盖时指纹与从前逐字节相同。
     let mut body = json!({"attachment_id":attachment});
@@ -282,7 +374,14 @@ pub async fn request(
         .bind(attachment)
         .fetch_optional(&mut *tx)
         .await?;
-    let used = resolved(&mut tx, owner, attachment, &LocateOverride::default()).await?;
+    let used = resolved(
+        &mut tx,
+        owner,
+        attachment,
+        &LocateOverride::default(),
+        &read,
+    )
+    .await?;
     let v = json!({"location":location,"job":job,"deduplicated":deduplicated,"symbol":used["symbol"],"market":used["market"],"interval":used["interval"]});
     crate::adapters::db::Database::finish(&mut tx, owner, "attachment.locate", key, &body, &v)
         .await?;

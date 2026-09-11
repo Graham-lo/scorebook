@@ -12,6 +12,8 @@ use scorebook_core::{api::chart_search::*, domain::chart_match};
 use serde_json::{Value, json};
 use uuid::Uuid;
 mod analysis;
+/// 只读图上那行字的识别：定位面板拿它当「这张图默认是哪个品种」。
+pub use analysis::read as read_labels;
 pub mod reindex;
 mod repository;
 mod rerank;
