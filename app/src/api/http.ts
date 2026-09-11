@@ -94,6 +94,25 @@ export async function putJson<T>(
   return body.data
 }
 
+/** 只改给出的那几个字段，别的原样留着。 */
+export async function patchJson<T>(
+  path: string,
+  payload: unknown,
+  opts: RequestOptions = {},
+): Promise<T> {
+  const response = await send(
+    path,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    opts,
+  )
+  const body = (await response.json()) as { data: T }
+  return body.data
+}
+
 /** 204，没有回执体。 */
 export async function sendDelete(path: string, opts: RequestOptions = {}): Promise<void> {
   await send(path, { method: 'DELETE' }, opts)

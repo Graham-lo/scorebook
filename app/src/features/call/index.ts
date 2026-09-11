@@ -635,6 +635,8 @@ export function callPage(host: HTMLElement, arg: string): () => void {
             call: d,
             attachment: shot,
             onChange: () => void afterWrite(),
+            // 身份改了，这一页上这张图的名字和排序都要跟着变。
+            onKind: () => void afterWrite(),
           })
           host.replaceChildren(panel.node)
           if (!pinned) panel.start()

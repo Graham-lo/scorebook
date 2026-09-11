@@ -21,6 +21,7 @@ import type {
 } from './types'
 
 export type { AttachmentLocation, ChartSetup }
+export type { ChartSetupWire } from './types'
 
 export interface ReplayWindow {
   start_at: Instant
@@ -87,12 +88,31 @@ export interface Replay {
   marks: ReplayMarks | null
   bars: Bar[]
   storage_policy: string
+  /**
+   * 这一份里到底有没有 K 线。`bars=none` 问回来的是 false（`bars` 是空的，
+   * 后端也没有去拉行情）。字段本身可能整个缺失——那是还没部署这一版的后端，
+   * 这时候 `bars` 非空就直接用它。
+   */
+  bars_included?: boolean
   /** 后台正在给这条记录的截图找位置。找完了要重新拉一次这一段。 */
   locating?: { job_id: Uuid; status: string } | null
 }
 
-export function getReplay(callId: Uuid, opts: RequestOptions = {}): Promise<Replay> {
-  return getJson<Replay>(`/v1/calls/${callId}/replay`, opts)
+export interface ReplayOptions extends RequestOptions {
+  /**
+   * `none` 只要这一段的身份和边界（品种、周期、窗口、价位、标注），不要 K 线，
+   * 后端也不会去拉行情——K 线由浏览器自己直连交易所取。取不到再用 `full` 回来
+   * 问一次。缺省就是 `full`，和以前一样。
+   */
+  bars?: 'none' | 'full'
+}
+
+export function getReplay(callId: Uuid, opts: ReplayOptions = {}): Promise<Replay> {
+  const { bars, ...rest } = opts
+  return getJson<Replay>(`/v1/calls/${callId}/replay`, {
+    ...rest,
+    query: { ...rest.query, ...(bars ? { bars } : {}) },
+  })
 }
 
 /**
@@ -166,13 +186,26 @@ export function getLocate(attachmentId: Uuid, opts: RequestOptions = {}): Promis
   return getJson<LocateState>(`/v1/attachments/${attachmentId}/locate`, opts)
 }
 
+/**
+ * 这一次要按哪个品种、哪个周期去找。
+ *
+ * 缺省是记录自己的品种，可是一条记录上挂的三张图未必都是这个品种——同板块的
+ * 对比图就不是。所以每张图都能自己说清楚要找什么，不说才退回记录品种。
+ */
+export interface LocateRequest {
+  symbol: string
+  market: Market
+  interval: string
+}
+
 /** 人按了「钉到真实行情」才发。同一张图已经有任务在跑就返回那一个。 */
 export function postLocate(
   attachmentId: Uuid,
   idempotencyKey: string,
+  body: LocateRequest | null = null,
   opts: RequestOptions = {},
 ): Promise<LocateState> {
-  return postJson<LocateState>(`/v1/attachments/${attachmentId}/locate`, {}, {
+  return postJson<LocateState>(`/v1/attachments/${attachmentId}/locate`, body ?? {}, {
     ...opts,
     idempotencyKey,
   })
@@ -196,4 +229,13 @@ export function putChartSetup(
   })
 }
 
-export const EMPTY_SETUP: ChartSetup = { ma: [], ema: [], boll: null, atr: null }
+/** 一条线都不画、一个副图都不开。 */
+export const EMPTY_SETUP: ChartSetup = {
+  ma: [],
+  ema: [],
+  boll: null,
+  atr: null,
+  volume: null,
+  macd: null,
+  rsi: null,
+}

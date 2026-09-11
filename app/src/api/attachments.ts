@@ -1,6 +1,23 @@
 import { ApiError, NetworkError } from './errors'
-import { getBlob, postForm, type RequestOptions } from './http'
+import { getBlob, patchJson, postForm, type RequestOptions } from './http'
 import type { Attachment, AttachmentKind, Uuid } from './types'
+
+/**
+ * 改这张图的身份：现场图还是参考图。
+ *
+ * 一条记录挂三张 1h 图，其中两张是同板块的对比图——那两张不是这条记录的现场，
+ * 按记录品种去定位必然钉错一段。所以身份要能改：标成参考图之后它就不再参与
+ * 自动定位，已经钉上的位置也不动（要撤是另一件事，走 deleteLocation）。
+ *
+ * 后端还没上这条路由的时候返回 404，由调用方照实说一句，不要静默当成改好了。
+ */
+export function patchKind(
+  id: Uuid,
+  kind: AttachmentKind,
+  opts: RequestOptions = {},
+): Promise<Attachment> {
+  return patchJson<Attachment>(`/v1/attachments/${id}`, { kind }, opts)
+}
 
 export function upload(
   file: Blob,

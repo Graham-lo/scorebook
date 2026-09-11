@@ -96,13 +96,32 @@ export interface AttachmentLocation {
   matched_by?: 'user' | 'auto' | string
 }
 
-/** 这条记录的图上要画哪几条线。后端只校验形状，不算指标。 */
+/**
+ * 这条记录的图上要画哪几条线、开哪几个副图。后端只校验形状，不算指标——
+ * 值全部在浏览器里从这一段 K 线自己算（见 features/relive/indicators.ts）。
+ *
+ * 这是「算好的」那一份：每个字段都在。从后端拿回来的那一份是 `ChartSetupWire`，
+ * 里面什么都可能缺，进界面之前先过一次 `normalizeSetup`。
+ */
 export interface ChartSetup {
+  /** 主图上的简单均线周期。 */
   ma: number[]
+  /** 主图上的指数均线周期。ma + ema 一共不超过 8 条。 */
   ema: number[]
   boll: { n: number; k: string } | null
   atr: { n: number } | null
+  /** 成交量副图。开着的时候里面是要叠的几条量均线（最多 6 条）。 */
+  volume: { ma: number[] } | null
+  /** MACD 副图。fast 必须小于 slow。 */
+  macd: { fast: number; slow: number; signal: number } | null
+  rsi: { n: number } | null
 }
+
+/**
+ * 后端回来的样子。新字段还没部署时整片缺失，早先存下来的记录里也只有前四项，
+ * 所以这里每一个都是可缺的——缺了就是「这一项没开」，不是错误。
+ */
+export type ChartSetupWire = Partial<ChartSetup>
 
 /**
  * Rows come back as `to_jsonb(attachments) - owner_id`, so every column of the
@@ -277,8 +296,8 @@ export interface CallDetail {
   episode_links: EpisodeLinkRecord[]
   tags: TagRecord[]
   adoptions: AdoptionRecord[]
-  /** 这条记录的图上画哪几条线。没设过就是 null。 */
-  chart_setup?: ChartSetup | null
+  /** 这条记录的图上画哪几条线。没设过就是 null，设过也可能只有其中几项。 */
+  chart_setup?: ChartSetupWire | null
 }
 
 export interface CreatedCall {
@@ -370,6 +389,12 @@ export interface Bar {
   high: Decimal
   low: Decimal
   close: Decimal
+  /**
+   * 这一根的成交量。老版本后端不带这个字段，直连交易所取回来的一定带。
+   * 缺失和 null 都当作「这一段没有成交量」，不要拿 0 顶上——0 是一根没有人
+   * 成交的 K 线，和「没这个数」不是一回事。
+   */
+  volume?: Decimal | null
 }
 
 export interface MarketData {
