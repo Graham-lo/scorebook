@@ -185,6 +185,7 @@
             "type": "string"
           },
           "score": {
+            "description": "匹配分。线上一直是字符串，因为库里是 `numeric`，回显时走 `score::text`，\n不让它路过 f64 掉精度。但前端把刚拿到的 `match.score` 原样回填时它是个\nJSON 数字，整个请求体会被 Json 提取器直接顶掉，报出来的只是一句\n`invalid_request`——哪个字段错了都看不见。所以收的时候两种都认，数字按\n它的十进制写法收下；发出去的仍然只有字符串一种形状。",
             "type": [
               "string",
               "null"
@@ -499,8 +500,14 @@
             ]
           },
           "interval": {
-            "description": "Required selected screenshot interval; cross-interval search is not supported.",
-            "type": "string"
+            "description": "The screenshot interval: required under `same_interval`, and must be null\nunder `any_interval`, where shape alone decides and the period is free.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interval_policy": {
+            "$ref": "#/components/schemas/IntervalPolicy"
           },
           "limit": {
             "minimum": 0,
@@ -543,8 +550,7 @@
         },
         "required": [
           "attachment_id",
-          "scope",
-          "interval"
+          "scope"
         ],
         "type": "object"
       },
@@ -1970,6 +1976,14 @@
           "model_id"
         ],
         "type": "object"
+      },
+      "IntervalPolicy": {
+        "description": "Whether the search stays inside the selected interval or compares shape only.",
+        "enum": [
+          "same_interval",
+          "any_interval"
+        ],
+        "type": "string"
       },
       "KnowledgeSearch": {
         "additionalProperties": false,

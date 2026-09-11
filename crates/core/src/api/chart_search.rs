@@ -19,8 +19,8 @@ pub struct ChartSearchInput {
     pub scope: ChartScope,
     pub symbol: Option<String>,
     pub market: Option<String>,
-    /// Required selected screenshot interval; cross-interval search is not supported.
-    #[schema(required = true, nullable = false)]
+    /// The screenshot interval: required under `same_interval`, and must be null
+    /// under `any_interval`, where shape alone decides and the period is free.
     pub interval: Option<String>,
     pub cutoff_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -28,12 +28,23 @@ pub struct ChartSearchInput {
     #[serde(default)]
     pub red_up: bool,
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub interval_policy: IntervalPolicy,
 }
 #[derive(Clone, Serialize, Deserialize, ToSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChartScope {
     Private,
     BinanceHistory,
+}
+
+/// Whether the search stays inside the selected interval or compares shape only.
+#[derive(Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IntervalPolicy {
+    #[default]
+    SameInterval,
+    AnyInterval,
 }
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]

@@ -1830,6 +1830,81 @@ async fn screenshot_search_requires_period_before_creating_any_job() {
 }
 
 #[tokio::test]
+async fn screenshot_search_without_a_period_needs_the_any_interval_choice_spelled_out() {
+    let (s, owner, _tmp) = setup().await;
+    let attachment = Uuid::new_v4();
+    // 建一张真实附件：不限周期那一路要走到建 job，附件不在就只会 404。
+    sqlx::query("INSERT INTO attachments(id,owner_id,sha256,mime,size,width,height,kind) VALUES($1,$2,'test','image/png',1,640,320,'query')")
+        .bind(attachment)
+        .bind(owner)
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    let before: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    // 人点了「不限周期」：不带周期也能建出检索。
+    for (key, body) in [
+        (
+            "any-missing",
+            json!({"attachment_id":attachment,"scope":"private","interval_policy":"any_interval"}),
+        ),
+        (
+            "any-null",
+            json!({"attachment_id":attachment,"scope":"private","interval":null,"interval_policy":"any_interval"}),
+        ),
+    ] {
+        let v = chart_search::create(&s, owner, key, serde_json::from_value(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(v["status"], "queued");
+    }
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before + 2);
+    // 「不限周期」又带着一个周期，是两种意思打架，一条 job 也不能建。
+    let error = chart_search::create(
+        &s,
+        owner,
+        "any-with-period",
+        serde_json::from_value(
+            json!({"attachment_id":attachment,"scope":"private","interval":"1h","interval_policy":"any_interval"}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "chart_interval_conflict");
+    // 没点「不限」——无论写不写 same_interval——缺周期还是得让人先去选。
+    for (key, body) in [
+        (
+            "same-explicit",
+            json!({"attachment_id":attachment,"scope":"private","interval_policy":"same_interval"}),
+        ),
+        (
+            "same-default",
+            json!({"attachment_id":attachment,"scope":"private"}),
+        ),
+    ] {
+        let error = chart_search::create(&s, owner, key, serde_json::from_value(body).unwrap())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "chart_interval_required");
+    }
+    let last: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(last, before + 2);
+}
+
+#[tokio::test]
 async fn index_coverage_counts_persisted_whole_image_vectors_as_ready() {
     let (s, owner, _tmp) = setup().await;
     // region 为空时 digest(&None) 得到的就是这个哈希，整图向量只认它。

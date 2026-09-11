@@ -75,6 +75,26 @@ pub async fn analyze(
     tx.commit().await?;
     Ok(value)
 }
+/// 周期由策略决定：默认必须挑一个周期；显式选了「不限」就不许再带周期，
+/// 免得「用户选了不限」和「前端漏传周期」这两件事混成同一个请求。
+fn check_interval(input: &ChartSearchInput) -> Result<()> {
+    match input.interval_policy {
+        IntervalPolicy::SameInterval => {
+            chart_match::require_interval(input.interval.as_deref())?;
+        }
+        IntervalPolicy::AnyInterval => {
+            if input
+                .interval
+                .as_deref()
+                .is_some_and(|v| !v.trim().is_empty())
+            {
+                return Err(Error::bad("chart_interval_conflict"));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn create(
     s: &Services,
     owner: Uuid,
@@ -89,7 +109,7 @@ pub async fn create(
     {
         return Err(Error::bad("invalid_chart_search"));
     }
-    chart_match::require_interval(input.interval.as_deref())?;
+    check_interval(&input)?;
     let original = json!(input);
     let (mut tx, cached) = s.db.write(owner, "chart.search", key, &original).await?;
     if let Some(v) = cached {
@@ -150,7 +170,7 @@ pub async fn cancel(
 pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     let input: ChartSearchInput =
         serde_json::from_value(j.body.clone()).map_err(|_| Error::bad("invalid_search_job"))?;
-    chart_match::require_interval(input.interval.as_deref())?;
+    check_interval(&input)?;
     let (query, _, _) = analysis::evidence(
         s,
         j.owner,
@@ -181,8 +201,12 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     // One window per contract only makes sense while the contract is still in
     // question; a search already restricted to one returns its best windows.
     let grouped = input.scope == ChartScope::BinanceHistory && input.symbol.is_none();
+    let interval_policy = match input.interval_policy {
+        IntervalPolicy::SameInterval => "same_interval_only",
+        IntervalPolicy::AnyInterval => "any_interval",
+    };
     let ranked = best_matches(ranked, grouped, input.limit.unwrap_or(3));
-    let result = json!({"search_run_id":j.id,"protocol":chart_match::PROTOCOL,"status":"final","items":ranked,"excluded_candidates":excluded,"scope":input.scope,"interval":input.interval,"interval_policy":"same_interval_only","cutoff_at":input.cutoff_at,"quality_validated":false,"query_quality":query.quality,"coverage":"published_geometry_v2_only","candidate_budget":3000,"rerank_budget":30,"grouping":if grouped {"best_verified_window_per_contract"} else if input.scope == ChartScope::BinanceHistory {"best_verified_windows_of_the_named_contract"} else {"exact_image_then_confirmed_episode"},"raw_market_storage":"none"});
+    let result = json!({"search_run_id":j.id,"protocol":chart_match::PROTOCOL,"status":"final","items":ranked,"excluded_candidates":excluded,"scope":input.scope,"interval":input.interval,"interval_policy":interval_policy,"cutoff_at":input.cutoff_at,"quality_validated":false,"query_quality":query.quality,"coverage":"published_geometry_v2_only","candidate_budget":3000,"rerank_budget":30,"grouping":if grouped {"best_verified_window_per_contract"} else if input.scope == ChartScope::BinanceHistory {"best_verified_windows_of_the_named_contract"} else {"exact_image_then_confirmed_episode"},"raw_market_storage":"none"});
     repository::publish(s, j, &result, true).await?;
     Ok(result)
 }

@@ -355,9 +355,15 @@ components:
           - string
           - 'null'
         interval:
-          description: Required selected screenshot interval; cross-interval search
-            is not supported.
-          type: string
+          description: 'The screenshot interval: required under `same_interval`, and
+            must be null
+
+            under `any_interval`, where shape alone decides and the period is free.'
+          type:
+          - string
+          - 'null'
+        interval_policy:
+          $ref: '#/components/schemas/IntervalPolicy'
         limit:
           minimum: 0
           type:
@@ -384,7 +390,6 @@ components:
       required:
       - attachment_id
       - scope
-      - interval
       type: object
     ChartSetup:
       additionalProperties: false
@@ -1379,6 +1384,13 @@ components:
       required:
       - model_id
       type: object
+    IntervalPolicy:
+      description: Whether the search stays inside the selected interval or compares
+        shape only.
+      enum:
+      - same_interval
+      - any_interval
+      type: string
     KnowledgeSearch:
       additionalProperties: false
       properties:

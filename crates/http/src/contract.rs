@@ -53,6 +53,7 @@ use utoipa::OpenApi;
     scorebook_core::domain::replay::TriggerLevel,
     scorebook_core::api::chart_search::ChartAnalysisInput,
     scorebook_core::api::chart_search::ChartSearchInput,
+    scorebook_core::api::chart_search::IntervalPolicy,
     scorebook_core::api::chart_search::SearchRunControl,
     scorebook_core::domain::chart_match::GeometryQuality,
     scorebook_core::domain::chart_match::MatchScore,
