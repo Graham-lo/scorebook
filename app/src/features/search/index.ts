@@ -24,7 +24,7 @@
 import { awake } from '../../ui/awake'
 import type { SearchScope } from '../../api/chart'
 import { forgetQuery } from '../../data/query-context'
-import type { Uuid } from '../../api/types'
+import type { Market, Uuid } from '../../api/types'
 import { go } from '../../router'
 import { h } from '../../ui/dom'
 import { ChartView } from '../../ui/media'
@@ -44,14 +44,29 @@ export function searchPage(host: HTMLElement, arg: string): () => void {
   /** 每一处还在轮询的东西留一个停手的开关，离开页面时一起关掉。 */
   const watchers = new Set<() => void>()
 
-  // #/search/like/<attachment_id> — 从一条记录的现场图直接开搜。
+  // #/search/like/<attachment_id> — 从一条记录的图直接开搜。
   if (arg.startsWith('like/')) {
     const id = arg.slice(5)
-    if (id && id !== state.queryId) {
+    const hint = pendingHint?.id === id ? pendingHint.hint : null
+    // 提示只对送它过来的那一次导航有效；用过就扔，免得下一次进来还按旧记录填。
+    pendingHint = null
+    // 带着提示来的每一次都重新铺一遍，哪怕图还是上一次那张：这颗按钮说的是
+    // 「先在任意品种里找」，上一轮人自己筛过的品种不该留在这儿接着生效。没提示
+    // 的（手打地址、刷新）照旧只认换图，不动人已经调好的那些格子。
+    if (id && (hint || id !== state.queryId)) {
       state.queryId = id
-      period.reset()
-      state.queryName = '这条记录的现场图'
       state.region = null
+      // 周期先替人填上：私有范围的检索按周期联表，不选就按不动「开始搜索」，
+      // 而这张图是从哪条记录来的，周期那条记录自己已经写过一遍了。记录上没写、
+      // 或者写的不是支持的周期，就照旧空着——形状里没有周期这个信息，前端不猜。
+      const known = period.suggestion(hint?.interval)
+      if (known) period.select(known)
+      else period.reset()
+      // 市场跟着记录走，品种不跟：人要的是「先在任意品种里找」，盯住某一个是
+      // 他自己去筛选里挑的下一步，不是这里替他做的决定。
+      state.market = hint?.market ?? null
+      state.symbol = null
+      state.queryName = hint?.name ?? '这条记录的图'
       forgetAnalysis()
       forgetRun()
     }
@@ -183,7 +198,24 @@ export function searchPage(host: HTMLElement, arg: string): () => void {
   }
 }
 
+/**
+ * 那条记录已经知道的事，跟着图一起送过来。
+ *
+ * 只是起点，不是条件：进了这一页每一项都还在人自己手里，清掉就是清掉了。
+ */
+export interface SearchLikeHint {
+  /** 记录上写的周期。没写就是没写，这里不拿形状去猜一个。 */
+  interval?: string | null
+  market?: Market | null
+  /** 这张图在那条记录里叫什么：当时的现场，还是附带的参考。 */
+  name?: string
+}
+
+/** 路由里只带得动一个附件号，剩下的提示搁在这儿等这一页自己来取。 */
+let pendingHint: { id: Uuid; hint: SearchLikeHint } | null = null
+
 /** Where the call page sends the trader when they want more like this picture. */
-export function searchLike(attachmentId: Uuid): void {
+export function searchLike(attachmentId: Uuid, hint: SearchLikeHint = {}): void {
+  pendingHint = { id: attachmentId, hint }
   go(`search/like/${attachmentId}`)
 }

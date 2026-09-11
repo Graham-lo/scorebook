@@ -59,6 +59,7 @@ import { displayId } from '../find/row'
 import { locatePanel } from '../relive/locate'
 import { REVIEW_ACTIONS } from '../review/draft'
 import { tradeSummary } from '../review/trades'
+import { searchLike } from '../search'
 import { reviewImages } from '../../ui/image-picker'
 import { executionSection } from './execution'
 
@@ -581,6 +582,8 @@ export function callPage(host: HTMLElement, arg: string): () => void {
         }),
       )
       bar.appendChild(pinButton(d, shot, pinBox))
+      const like = likeButton(d, shot)
+      if (like) bar.appendChild(like)
       clear(pinBox)
       pinBox.hidden = true
 
@@ -646,6 +649,31 @@ export function callPage(host: HTMLElement, arg: string): () => void {
     // 这一段是后端自动匹配上的，不是人确认的：把这件事标在按钮上。
     if (pinned?.matched_by === 'auto') button.appendChild(h('span.rlv-lauto', { text: '自动' }))
     return button
+  }
+
+  /**
+   * 「这种画面以前在哪儿见过」——把这一张直接送进按图找，不用人再翻出来传一遍。
+   *
+   * 只有「当时」和「参考图」挂这个按钮：它们是人做判断时看的那个画面，比的就是
+   * 这个。「后来」那张是答案不是局面，拿结果去找相似的开头，问的不是同一件事，
+   * 所以那一格不出现这个按钮。
+   *
+   * 周期和市场是这条记录自己写过的，跟着带过去，省掉一次「明明就写在这儿」的
+   * 手填；品种不带——默认先在任意品种里找，要盯住某一个是人自己去筛选里挑。
+   */
+  function likeButton(d: CallDetail, shot: Attachment): HTMLElement | null {
+    if (shot.kind !== 'scene' && shot.kind !== 'reference') return null
+    return h('button.btn.sm.ghost', {
+      text: '找同类局面',
+      on: {
+        click: () =>
+          searchLike(shot.id, {
+            interval: d.timeframe,
+            market: d.market,
+            name: shot.kind === 'scene' ? '这条记录的现场图' : '这条记录的参考图',
+          }),
+      },
+    })
   }
 
   function wordsSection(d: CallDetail): HTMLElement {

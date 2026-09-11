@@ -99,10 +99,24 @@ export function paintQuery(ctx: SearchCtx, pane: HTMLElement): void {
       slot.replaceWith(made.node)
       paintRegionLine()
     })
-    .catch(() => {
-      if (ctx.alive() && paint === paintNo) {
-        slot.replaceChildren(h('div.shot-wait.failed', { text: '这张图读不出来。' }))
+    .catch((error: unknown) => {
+      if (!ctx.alive() || paint !== paintNo) return
+      // 查询图后端只留 24 小时，而它的编号存在本标签页会话里，活得比它久：隔天
+      // 回到这一页，指着的那张可能已经被收走了。那不是「读不出来」，是没了——
+      // 照实说，并且把这一页退回到「放一张图」，而不是留一个点不动的空位，
+      // 更不能让「开始搜索」按下去才发现图不在。
+      if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
+        state.queryId = null
+        state.queryName = ''
+        state.region = null
+        forgetAnalysis()
+        forgetRun()
+        ctx.repaintQuery()
+        ctx.repaintResults()
+        problem('这张查询图已经不在了——临时查询图只保留 24 小时。重新放一张吧。')
+        return
       }
+      slot.replaceChildren(h('div.shot-wait.failed', { text: '这张图读不出来。' }))
     })
 
   const regionLine = h('div.row', { style: 'gap:10px;flex-wrap:wrap' })
