@@ -178,10 +178,17 @@ export interface LocateResult {
   [key: string]: unknown
 }
 
+/**
+ * 后端读这张截图标题栏认出来的品种、市场、周期。认不出来就是 null——
+ * 它宁可不填也不替人编一个，前端照样不许自己补一个上去。
+ */
 export interface LocateState {
   location: AttachmentLocation | null
   job: LocateJob | null
   deduplicated?: boolean
+  symbol?: string | null
+  market?: Market | null
+  interval?: string | null
 }
 
 export function getLocate(attachmentId: Uuid, opts: RequestOptions = {}): Promise<LocateState> {

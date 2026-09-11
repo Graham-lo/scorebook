@@ -71,6 +71,8 @@ export interface LocatePanel {
   node: HTMLElement
   /** 看一眼这张图有没有位置、有没有任务在跑。不会自己开新任务。 */
   start: () => void
+  /** 连进度都不看，只问一句后端从这张图上认出了什么品种。 */
+  peek: () => void
   destroy: () => void
 }
 
@@ -86,12 +88,34 @@ export function locatePanel(options: LocateOptions): LocatePanel {
   let phase: Phase = options.pending ? { at: 'working' } : { at: 'idle' }
   let location = attachment.location ?? null
   let kind = attachment.kind
-  const target: LocateTarget = {
-    symbol: location?.symbol ?? call.instrument ?? '',
-    market: location?.market ?? call.market ?? 'usd_m',
-    interval: location?.interval ?? pickInterval(call) ?? '1h',
+  /** 后端从这张截图的标题栏上认出来的。认不出来的那一项就是 null，前端不补。 */
+  let read: { symbol: string | null; market: Market | null; interval: string | null } = {
+    symbol: null,
+    market: null,
+    interval: null,
+  }
+  // 人自己在选择器里挑过一次，这一排就归他了：后面每两秒一次的轮询再回来，
+  // 也不许把他挑的东西换掉。三项合起来记一个标记——挑了品种市场就跟着走，
+  // 只保住品种、让轮询去改市场，会配出一个并不存在的组合。
+  let touched = false
+
+  /** 按什么去找：钉住的位置最大，其次后端认出来的，再次这条记录，最后兜底。 */
+  function wanted(): LocateTarget {
+    return {
+      symbol: location?.symbol ?? read.symbol ?? call.instrument ?? '',
+      market: location?.market ?? read.market ?? call.market ?? 'usd_m',
+      interval: location?.interval ?? read.interval ?? pickInterval(call) ?? '1h',
+    }
+  }
+
+  let target: LocateTarget = wanted()
+  /** 缺省的品种是从截图上认出来的，不是从记录继承的：这件事要说一句。 */
+  function readSymbol(): boolean {
+    return !touched && !location && Boolean(read.symbol) && target.symbol === read.symbol
   }
   let alive = true
+  /** GET locate 问过没有：问过就不用再为「认出了什么品种」单独问一趟。 */
+  let asked = false
   let polling = 0
   const lane = new Latest()
   const writeAction = new WriteAction()
@@ -129,6 +153,7 @@ export function locatePanel(options: LocateOptions): LocatePanel {
         },
         onPick: (value) => {
           if (!value) return
+          touched = true
           target.symbol = value
           // 目录里这个合约挂在哪个市场，市场就跟着走，不让人再猜一次。
           const found = cached(value)
@@ -146,6 +171,7 @@ export function locatePanel(options: LocateOptions): LocatePanel {
           { label: MARKET_LABELS.coin_m, value: 'coin_m', on: target.market === 'coin_m' },
         ],
         onPick: (value) => {
+          touched = true
           target.market = value as Market
           repaint()
         },
@@ -158,12 +184,18 @@ export function locatePanel(options: LocateOptions): LocatePanel {
         items: () =>
           INTERVALS.map((value) => ({ label: value, value, on: value === target.interval })),
         onPick: (value) => {
+          touched = true
           target.interval = value
           repaint()
         },
         footer: () => '截图上是哪个周期就选哪个，和记录写的周期可以不一样。',
       }).node,
     )
+    // 认出来的品种是猜的，人有权改。所以既要让人看见这一格不是从记录继承来的，
+    // 又不能摆出一副已经定了的样子——一句小字跟在选择器后面就够。
+    if (readSymbol()) {
+      row.appendChild(h('span.rlv-slabel', { text: '品种是从这张截图上认出来的，不对就改' }))
+    }
     return row
   }
 
@@ -261,6 +293,9 @@ export function locatePanel(options: LocateOptions): LocatePanel {
           h('button.btn.sm.ghost', { text: '都不是', on: { click: () => void run(true) } }),
           tail,
         ),
+        // 「都不是」按下去就是按这一排再找一次。它既然决定下一次找什么，就不能
+        // 藏着——三段都不对，多半正是品种认岔了。
+        targetRow(),
         list,
       ]
     }
@@ -366,12 +401,49 @@ export function locatePanel(options: LocateOptions): LocatePanel {
 
   function start(): void {
     if (phase.at === 'working' && polling > 0) return
+    asked = true
     void run(false)
+  }
+
+  /**
+   * 只看一眼后端认出了什么，不碰进度，也绝不会开任务。
+   *
+   * 参考图不自动定位，它那一路根本不发 GET locate，可它恰恰是最需要这个答案的
+   * 一张——同板块的对比图按记录的品种去找必然找错。所以给它留一条只读的路。
+   */
+  function peek(): void {
+    if (location || asked) return
+    asked = true
+    void getLocate(attachment.id)
+      .then((state) => { absorb(state) })
+      .catch(() => { /* 问不到就维持记录自己的品种，这一格本来就是可以改的。 */ })
+  }
+
+  /**
+   * 把后端认出来的品种收下来。
+   *
+   * 面板开着的时候每两秒问一次，所以这个答案是会「过一会儿才到」的：到了就要
+   * 落到选择器上，不能停在建面板那一刻知道的东西上。但人只要自己挑过一次，
+   * 这里就不再动它——轮询把人刚挑的品种抢回去，比不认识品种更糟。
+   */
+  function absorb(state: LocateState): void {
+    if (!alive) return
+    read = {
+      symbol: state.symbol ?? null,
+      market: state.market ?? null,
+      interval: state.interval ?? null,
+    }
+    if (touched) return
+    const next = wanted()
+    if (next.symbol === target.symbol && next.market === target.market && next.interval === target.interval) return
+    target = next
+    repaint()
   }
 
   /** manual 表示这一次是人按的：只有人按了才会让后端新开一次匹配。 */
   async function run(manual: boolean): Promise<void> {
     if (location) return
+    asked = true
     const mine = ++polling
     const signal = lane.begin()
     const current = () => alive && mine === polling && !signal.aborted
@@ -397,6 +469,7 @@ export function locatePanel(options: LocateOptions): LocatePanel {
     signal: AbortSignal,
   ): Promise<void> {
     if (!current()) return
+    absorb(state)
     if (state.location) {
       settle(state.location)
       return
@@ -453,6 +526,8 @@ export function locatePanel(options: LocateOptions): LocatePanel {
         continue
       }
       if (!current()) return
+      // 轮询这一路也要收：品种是后端读图认出来的，它可能比位置先有结论。
+      absorb(state)
       if (state.location) {
         settle(state.location)
         return
@@ -490,6 +565,7 @@ export function locatePanel(options: LocateOptions): LocatePanel {
   return {
     node,
     start,
+    peek,
     destroy: () => {
       alive = false
       polling += 1
@@ -556,6 +632,10 @@ export function locateBoard(options: LocateBoardOptions): LocateBoard {
     ) {
       options.asked?.add(shot.id)
       panel.start()
+    } else if (!shot.location) {
+      // 不自动找的那些（参考图，或者这次会话已经问过的）也要知道后端认出了
+      // 什么品种：缺省摆着记录的品种，人点下去就钉错一段。
+      panel.peek()
     }
     return h(
       'div.rlv-bcard',
