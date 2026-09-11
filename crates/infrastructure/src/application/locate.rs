@@ -212,8 +212,41 @@ async fn screenshot_reading(s: &Services, owner: Uuid, attachment: Uuid) -> Loca
     }
 }
 
-/// 实际用来找图的三元组：这次给的覆盖值最优先，其次是最近一次 job 里记下的，
-/// 再次是图上自己写着的，最后才是记录本身的。任何一格查不出来就留 null，不编。
+/// 调用方这次明确挑过的那几格。job 体里的三元组一向是满的——没挑的由
+/// `call_target` 补成记录自己的——所以只有另记一份凭据，事后才分得出
+/// 「有人选了它」和「那天的默认值」。
+fn chosen_fields(over: &LocateOverride) -> Vec<&'static str> {
+    [
+        ("symbol", &over.symbol),
+        ("market", &over.market),
+        ("interval", &over.interval),
+    ]
+    .into_iter()
+    .filter(|(_, v)| v.is_some())
+    .map(|(name, _)| name)
+    .collect()
+}
+
+/// job 这一层只对挑过的那几格说话。
+///
+/// 「值在 job 体里」从来不等于「有人选过它」：`request` 给没覆盖的格子填的是记录
+/// 当天的标的，`enqueue_after_review` 更是整组都来自记录。这些默认值一旦被当成
+/// 决定，一张跑过定位的图就永远被第一次的默认值盖住——SK 海力士那条记录里，图上
+/// 明明写着 SNDK/MU，九张却全解析成 SKHYUSDT。没有这份凭据的 job（改这条规则之前
+/// 入队的全部，以及复盘发布排的每一条）一律按「一格都没挑」算，让位给图上写着的。
+fn picked(job: Option<&Value>, key: &str) -> Option<String> {
+    let job = job?;
+    let chosen = job["chosen"].as_array()?;
+    if !chosen.iter().any(|v| v.as_str() == Some(key)) {
+        return None;
+    }
+    job[key].as_str().map(str::to_string)
+}
+
+/// 实际用来找图的三元组：这次给的覆盖值最优先，其次是最近一次 job 里**挑过**的
+/// 那几格，再次是图上自己写着的，最后才是记录本身的。逐格论资排辈：一次只挑了
+/// 周期的请求，不该把它随手带上的品种也一起抬进来。任何一格查不出来就留 null，
+/// 不编。
 async fn resolved(
     tx: &mut Transaction<'_, Postgres>,
     owner: Uuid,
@@ -221,7 +254,7 @@ async fn resolved(
     over: &LocateOverride,
     read: &LocateOverride,
 ) -> Result<Value> {
-    let job: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('symbol',j.body->>'symbol','market',j.body->>'market','interval',j.body->>'interval') FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id'=$2::text ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
+    let job: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('symbol',j.body->>'symbol','market',j.body->>'market','interval',j.body->>'interval','chosen',j.body->'chosen') FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id'=$2::text ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
         .bind(owner)
         .bind(attachment.to_string())
         .fetch_optional(&mut **tx)
@@ -239,11 +272,7 @@ async fn resolved(
         |given: Option<&str>, key: &str, seen: Option<&str>, fallback: Option<&str>| -> Value {
             given
                 .map(str::to_string)
-                .or_else(|| {
-                    job.as_ref()
-                        .and_then(|v| v[key].as_str())
-                        .map(str::to_string)
-                })
+                .or_else(|| picked(job.as_ref(), key))
                 .or_else(|| seen.map(str::to_string))
                 .or_else(|| fallback.map(str::to_string))
                 .map(Value::String)
@@ -357,12 +386,16 @@ pub async fn request(
             // is what makes this attempt's key unique.
             let done:i64=sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1 AND kind='attachment.locate' AND body->>'attachment_id'=$2::text")
                 .bind(owner).bind(attachment.to_string()).fetch_one(&mut *tx).await?;
+            // 三元组照旧写满（worker 读的就是这三格，一个字节都不能变），另记
+            // 一份「这几格是人选的」：其余几格只是当天记录的标的，事后不该拿它
+            // 去盖图上写着的东西。
+            let chosen = chosen_fields(&over);
             let id = jobs::enqueue_tx(
                 &mut tx,
                 owner,
                 KIND,
                 &format!("{attachment}:manual:{done}"),
-                json!({"call_id":call,"attachment_id":attachment,"trigger":"manual","symbol":symbol,"market":market,"interval":interval}),
+                json!({"call_id":call,"attachment_id":attachment,"trigger":"manual","symbol":symbol,"market":market,"interval":interval,"chosen":chosen}),
             )
             .await?;
             sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'status',j.status,'result',j.result,'created_at',j.created_at) FROM jobs j WHERE j.id=$1")
@@ -671,5 +704,58 @@ mod decision_tests {
         // Nothing that looks like the screenshot at all.
         assert!(!confident(&[item(0.4)], 0.85, 0.05));
         assert!(!confident(&[], 0.85, 0.05));
+    }
+}
+
+#[cfg(test)]
+mod provenance_tests {
+    use super::*;
+    fn some(v: &str) -> Option<String> {
+        Some(v.to_string())
+    }
+
+    #[test]
+    fn only_the_fields_the_caller_chose_are_marked() {
+        assert!(chosen_fields(&LocateOverride::default()).is_empty());
+        assert_eq!(
+            chosen_fields(&LocateOverride {
+                symbol: None,
+                market: None,
+                interval: some("15m"),
+            }),
+            ["interval"]
+        );
+        assert_eq!(
+            chosen_fields(&LocateOverride {
+                symbol: some("SNDKUSDT"),
+                market: some("usd_m"),
+                interval: some("1h"),
+            }),
+            ["symbol", "market", "interval"]
+        );
+    }
+
+    #[test]
+    fn a_job_speaks_only_for_what_someone_picked() {
+        // 只挑了周期的那一次：品种是当天记录的默认值，跟着来的不算数。
+        let one =
+            json!({"symbol":"SKHYUSDT","market":"usd_m","interval":"15m","chosen":["interval"]});
+        assert_eq!(picked(Some(&one), "interval"), some("15m"));
+        assert_eq!(picked(Some(&one), "symbol"), None);
+        assert_eq!(picked(Some(&one), "market"), None);
+
+        // 改这条规则之前入队的 job，以及复盘发布排的那一条：没有凭据，一格都
+        // 不算挑过——它们的三元组只是记录自己的标的，压不过图上写着的。
+        let legacy = json!({"symbol":"SKHYUSDT","market":"usd_m","interval":"1h"});
+        for key in ["symbol", "market", "interval"] {
+            assert_eq!(picked(Some(&legacy), key), None);
+        }
+        let auto = json!({"trigger":"review_published"});
+        assert_eq!(picked(Some(&auto), "symbol"), None);
+        assert_eq!(picked(None, "symbol"), None);
+
+        // 凭据说挑过、值却不在（谁手改过 job 体）：当没挑过，往下让。
+        let torn = json!({"chosen":["symbol"]});
+        assert_eq!(picked(Some(&torn), "symbol"), None);
     }
 }

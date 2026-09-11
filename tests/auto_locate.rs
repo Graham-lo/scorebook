@@ -580,3 +580,93 @@ async fn the_automatic_match_still_follows_the_record() {
     assert_eq!(seen["symbol"], "ETHUSDT");
     assert_eq!(seen["interval"], "1h");
 }
+
+/// job 体里的三元组一向是满的，可其中只有人明确挑过的那几格算数：其余几格是
+/// 入队当天记录自己的标的，拿它去盖图上写着的品种，等于让「那天的默认值」压过
+/// 证据。SK 海力士那条记录九张图全解析成 SKHYUSDT，就是这么来的。
+#[tokio::test]
+async fn a_job_only_outranks_the_screenshot_where_someone_actually_chose() {
+    let (s, o, _tmp) = setup().await;
+    let (call, attachment) = record(&s, o, "chosen").await;
+    // 这张图自己写着 SOLUSDT / 4h，记录写的是 ETHUSDT / 1h。OCR 的结果本来就记在
+    // attachment_reads 里，这里直接摆一行，测的是排序而不是识别。
+    sqlx::query(
+        "INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval) VALUES($1,$2,'SOLUSDT','4h')",
+    )
+    .bind(o)
+    .bind(attachment)
+    .execute(&s.db.pool)
+    .await
+    .unwrap();
+
+    // 复盘发布排的那一次自动定位：整组都来自记录，一格都没人挑过，压不过图。
+    knowledge::review(&s, o, "review", review_of(call))
+        .await
+        .unwrap();
+    let seen = locate::get(&s, o, attachment).await.unwrap();
+    assert_eq!(seen["symbol"], "SOLUSDT");
+    assert_eq!(seen["interval"], "4h");
+    assert_eq!(seen["market"], "usd_m");
+    sqlx::query(
+        "UPDATE jobs SET status='succeeded' WHERE owner_id=$1 AND kind='attachment.locate'",
+    )
+    .bind(o)
+    .execute(&s.db.pool)
+    .await
+    .unwrap();
+
+    // 只挑了周期的手动请求：周期听人的，品种仍旧听图的——记录的 ETHUSDT 是被
+    // request 补进 job 体的默认值，不是谁的决定。
+    let one = locate::request(
+        &s,
+        o,
+        attachment,
+        "chosen-1",
+        over(json!({"interval":"15m"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(one["interval"], "15m");
+    assert_eq!(one["symbol"], "SOLUSDT");
+    let body: Value = sqlx::query_scalar(
+        "SELECT body FROM jobs WHERE owner_id=$1 AND kind='attachment.locate' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(o)
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    // worker 读的那三格照旧写满，凭据是另加的一格。
+    assert_eq!(body["symbol"], "ETHUSDT");
+    assert_eq!(body["market"], "usd_m");
+    assert_eq!(body["interval"], "15m");
+    assert_eq!(body["chosen"], json!(["interval"]));
+    let seen = locate::get(&s, o, attachment).await.unwrap();
+    assert_eq!(seen["symbol"], "SOLUSDT");
+    assert_eq!(seen["interval"], "15m");
+
+    // 改这条规则之前入队的 job 没有这份凭据，一律按一格都没挑过算：整组让位给图。
+    sqlx::query("UPDATE jobs SET body=body-'chosen', status='succeeded' WHERE owner_id=$1 AND kind='attachment.locate'")
+        .bind(o)
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    let seen = locate::get(&s, o, attachment).await.unwrap();
+    assert_eq!(seen["symbol"], "SOLUSDT");
+    assert_eq!(seen["interval"], "4h");
+
+    // 反过来，真挑了品种的那一次照样压得过图：人比 OCR 说了算。
+    let two = locate::request(
+        &s,
+        o,
+        attachment,
+        "chosen-2",
+        over(json!({"symbol":"SKHYUSDT"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(two["symbol"], "SKHYUSDT");
+    assert_eq!(two["interval"], "4h");
+    let seen = locate::get(&s, o, attachment).await.unwrap();
+    assert_eq!(seen["symbol"], "SKHYUSDT");
+    assert_eq!(seen["interval"], "4h");
+}
