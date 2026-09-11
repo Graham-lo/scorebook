@@ -8,7 +8,8 @@ use chrono::{DateTime, Duration, Utc};
 use scorebook::{
     adapters::{db::Database, storage::Storage, vision::Vision},
     application::{
-        Services, calls, dto::*, jobs, knowledge, locate, ports::MarketDataProvider, replay,
+        Services, calls, dto::*, history, jobs, knowledge, locate, ports::MarketDataProvider,
+        replay,
     },
 };
 use serde_json::{Value, json};
@@ -364,6 +365,106 @@ async fn a_match_builds_the_window_index_around_the_judgment_moment_once() {
     assert_eq!(again["reason"], "already_indexed");
     assert_eq!(again["range"], built["range"]);
     assert_eq!(index_rows(&s, start, end).await, (features, segments));
+}
+
+/// 这一段范围里连着的整点 K 线，够 `index_generation` 自己切窗口。
+fn hourly(start: DateTime<Utc>, count: i64) -> Vec<scorebook::domain::criteria::Bar> {
+    (0..count)
+        .map(|i| scorebook::domain::criteria::Bar {
+            start: start + Duration::hours(i),
+            end: start + Duration::hours(i + 1),
+            open: "100".into(),
+            high: "101".into(),
+            low: "99".into(),
+            close: (100. + (i as f64 * 0.3).sin()).to_string(),
+            volume: None,
+        })
+        .collect()
+}
+
+/// 这一段建到哪一步了：覆盖段的状态，和这个品种落下来的特征行数。
+async fn segment_of(s: &Services, symbol: &str) -> (String, i64) {
+    let status:String=sqlx::query_scalar("SELECT status FROM public_market.coverage_segments WHERE symbol=$1 AND market='usd_m' AND timeframe='1h'")
+        .bind(symbol).fetch_one(&s.db.pool).await.unwrap();
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM public_market.features WHERE symbol=$1 AND published",
+    )
+    .bind(symbol)
+    .fetch_one(&s.db.pool)
+    .await
+    .unwrap();
+    (status, rows)
+}
+
+/// 建了一半的世代，得留着让人补齐。
+///
+/// 月档掉了几个的那一趟照样以 `status='ready'` 收尾，只是覆盖记录里写着
+/// `source_range_complete=false`、覆盖段停在 `partial`。从前 `index_generation` 一进门
+/// 就认这个 ready 短路返回，把调用方手上刚下好的 K 线原样扔掉——那 475 段 1d 于是
+/// 永远补不上。现在只有真的建齐了才短路：补跑要能把段从 `partial` 升成 `complete`，
+/// 把之前缺的特征行补进去；而真的建齐的那些，一次也不许重建，因为永久标记那三件套
+/// （世代 ready + 覆盖段 complete + 特征 published）是「重温」和「刻舟求剑」共同的地基。
+#[tokio::test]
+async fn a_generation_left_half_built_is_picked_up_again_and_a_complete_one_is_not() {
+    let (s, o, _tmp) = setup().await;
+    let (call, _attachment) = record(&s, o, "partial").await;
+    knowledge::review(&s, o, "review", review_of(call))
+        .await
+        .unwrap();
+    let j = claim_locate(&s, o).await;
+
+    let start: DateTime<Utc> = "2024-03-01T00:00:00Z".parse().unwrap();
+    let input = history::HistoryIndexRequest {
+        source: history::HistorySource::MonthlyArchive,
+        symbol: "PARTIALUSDT".into(),
+        market: "usd_m".into(),
+        interval: "1h".into(),
+        start_at: start,
+        end_at: start + Duration::hours(96),
+        window_bars: 64,
+        stride_bars: 1,
+        models: vec![scorebook_core::domain::chart_match::MODEL.into()],
+    };
+    let generation = history::generation_of(&s, &input).await.unwrap();
+
+    // 第一趟：月档掉了尾巴，只拿到 80 根，切得出 17 个 64 根窗口。照样写进 features
+    // 供检索，但不配拿永久标记。
+    let short = hourly(start, 80);
+    let first = history::index_generation(&s, &j, generation, &input, &short, false)
+        .await
+        .unwrap();
+    assert_eq!(first["source_range_complete"], false);
+    assert_eq!(first["feature_rows"], 17);
+    assert_eq!(
+        segment_of(&s, "PARTIALUSDT").await,
+        ("partial".to_string(), 17)
+    );
+
+    // 第二趟：这回 96 根齐了。上一版的短路会在这里原样返回 partial 的覆盖记录，
+    // 把这 96 根丢掉；现在它必须接着建，段升成 complete，缺的 16 行补齐。
+    let whole = hourly(start, 96);
+    let second = history::index_generation(&s, &j, generation, &input, &whole, true)
+        .await
+        .unwrap();
+    assert_eq!(second["source_range_complete"], true);
+    assert_eq!(second["feature_rows"], 33);
+    assert_eq!(
+        segment_of(&s, "PARTIALUSDT").await,
+        ("complete".to_string(), 33)
+    );
+
+    // 第三趟：已经建齐了就一步都不许再走。故意递进去残缺的 80 根 + complete=false，
+    // 真重建的话覆盖记录会退回 17 行、段会掉回 partial——这两样都不许发生。
+    let again = history::index_generation(&s, &j, generation, &input, &short, false)
+        .await
+        .unwrap();
+    assert_eq!(again["feature_rows"], 33);
+    assert_eq!(again["source_range_complete"], true);
+    assert_eq!(again, second);
+    assert_eq!(
+        segment_of(&s, "PARTIALUSDT").await,
+        ("complete".to_string(), 33)
+    );
 }
 
 /// 「都不是」不该是原地重试。

@@ -72,6 +72,11 @@ pub fn validate(input: &HistoryIndexRequest) -> Result<()> {
 const GENERATION: &str = "INSERT INTO public_market.generations(id,request_hash,body) VALUES(md5($1::jsonb::text)::uuid,md5($1::jsonb::text),$1) ON CONFLICT(request_hash) DO UPDATE SET request_hash=EXCLUDED.request_hash RETURNING id";
 const READY_COVERAGE: &str =
     "SELECT coverage FROM public_market.generations WHERE id=$1 AND status='ready'";
+/// `status='ready'` 只说明那一趟跑完了，没说它产出的东西够不够：月档掉了几个的世代
+/// 同样是 ready，只是覆盖记录里写着 `source_range_complete=false`。真的把一段建齐了
+/// 才配短路，所以这里连覆盖记录一起问。用 jsonb 直接比而不是 `::boolean` 转换：
+/// 字段缺了、或者写进去的不是布尔，都算不完整，不会中途抛错。
+const COMPLETE_COVERAGE: &str = "SELECT coverage FROM public_market.generations WHERE id=$1 AND status='ready' AND coverage->'source_range_complete'='true'::jsonb";
 pub async fn request(
     s: &Services,
     owner: Uuid,
@@ -112,7 +117,13 @@ pub async fn build(s: &Services, j: &Job) -> Result<Value> {
     if let Some(v) = ready {
         return Ok(v);
     }
-    let ready:Option<(Uuid,Value)>=sqlx::query_as("SELECT g.id,g.coverage FROM public_market.generations g JOIN history_indexes i ON i.generation_id=g.id WHERE i.owner_id=$1 AND i.id=$2 AND g.status='ready'").bind(j.owner).bind(j.id).fetch_optional(&s.db.pool).await?;
+    // 和 `COMPLETE_COVERAGE` 是同一条规矩，只是这里要连着 `history_indexes` 一起查，
+    // 借不了那个常量：ready 本身不是永久标记，ready 且源范围完整才是。少了这半句，
+    // 一个 `POST /v1/history/indexes` 想重建上次建残了的那段范围，会一根 K 线都不拉
+    // 就把那份 partial 覆盖记录原样还回去——和扇出那扇门后面是同一个冻结。放开之后
+    // 这种 POST 会真的重下一遍，但这是人自己发请求要的，范围也是请求体框死的，值。
+    // （`coverage` 两张表都有这一列，判据必须写 `g.` 限定。）
+    let ready:Option<(Uuid,Value)>=sqlx::query_as("SELECT g.id,g.coverage FROM public_market.generations g JOIN history_indexes i ON i.generation_id=g.id WHERE i.owner_id=$1 AND i.id=$2 AND g.status='ready' AND g.coverage->'source_range_complete'='true'::jsonb").bind(j.owner).bind(j.id).fetch_optional(&s.db.pool).await?;
     if let Some((generation, coverage)) = ready {
         publish_index(s, j, generation, &coverage, None).await?;
         return Ok(coverage);
@@ -201,6 +212,10 @@ pub async fn index_range(s: &Services, j: &Job, input: &HistoryIndexRequest) -> 
         .bind(&body)
         .fetch_one(&s.db.pool)
         .await?;
+    // 这里和 `index_generation` 那边的判据故意不一样：那边是拿着已经下好的 bars 进
+    // 来的，短路白白扔掉手上的行情，所以只认真正完整的覆盖；这一条是下载之前的短路，
+    // 只有重温走（`locate::ensure_index`），K 线是 REST 一段一段拉的，续跑不要钱全靠
+    // 这一句，而且那边范围短通常是合约上市晚，不是下载掉了段。
     if let Some(coverage) = sqlx::query_scalar::<_, Value>(READY_COVERAGE)
         .bind(generation)
         .fetch_optional(&s.db.pool)
@@ -263,7 +278,9 @@ pub async fn index_generation(
     complete: bool,
 ) -> Result<Value> {
     validate(input)?;
-    if let Some(coverage) = sqlx::query_scalar::<_, Value>(READY_COVERAGE)
+    // 只有把源范围真的建齐了才短路。建了一半的世代（月档掉了几个）照样是 ready，
+    // 拿它短路等于把调用方手上已经下好的 bars 白扔掉，那一段就永远补不上了。
+    if let Some(coverage) = sqlx::query_scalar::<_, Value>(COMPLETE_COVERAGE)
         .bind(generation)
         .fetch_optional(&s.db.pool)
         .await?
@@ -272,7 +289,10 @@ pub async fn index_generation(
         return Ok(coverage);
     }
     let mut reservation = fenced_tx(s, j).await?;
-    let reserved:Option<Uuid>=sqlx::query_scalar("UPDATE public_market.generations g SET producer_job=$2,producer_lease=$3,status='running' WHERE id=$1 AND status<>'ready' AND (producer_job IS NULL OR producer_job=$2 OR NOT EXISTS(SELECT 1 FROM jobs active WHERE active.id=g.producer_job AND active.lease_owner=g.producer_lease AND active.status='running' AND active.lease_until>now())) RETURNING id").bind(generation).bind(j.id).bind(j.lease).fetch_optional(&mut *reservation).await?;
+    // 抢占条件要和上面的短路条件对齐：ready 但不完整的世代必须还能被重新抢占，否则
+    // 刚放行的那些行会卡在这里报 `shared_index_build_in_progress`，比原来的毛病更糟。
+    // 真正建齐的世代仍然抢不到——它已经在上面短路返回了。
+    let reserved:Option<Uuid>=sqlx::query_scalar("UPDATE public_market.generations g SET producer_job=$2,producer_lease=$3,status='running' WHERE id=$1 AND (status<>'ready' OR (coverage->'source_range_complete'='true'::jsonb) IS NOT TRUE) AND (producer_job IS NULL OR producer_job=$2 OR NOT EXISTS(SELECT 1 FROM jobs active WHERE active.id=g.producer_job AND active.lease_owner=g.producer_lease AND active.status='running' AND active.lease_until>now())) RETURNING id").bind(generation).bind(j.id).bind(j.lease).fetch_optional(&mut *reservation).await?;
     if reserved.is_none() {
         return Err(Error::deferred(
             "shared_index_build_in_progress",
@@ -431,7 +451,10 @@ async fn publish_index(
         sqlx::query("UPDATE public_market.features old SET published=false FROM public_market.features fresh JOIN public_market.generation_features l ON l.feature_id=fresh.id AND l.generation_id=$1 WHERE old.published AND old.id<>fresh.id AND old.market=fresh.market AND old.symbol=fresh.symbol AND old.timeframe=fresh.timeframe AND old.start_at=fresh.start_at AND old.end_at=fresh.end_at AND old.bars_count=fresh.bars_count AND old.model_id=fresh.model_id AND old.render_version=fresh.render_version").bind(generation).execute(&mut *tx).await?;
         sqlx::query("UPDATE public_market.features f SET published=true WHERE NOT published AND EXISTS(SELECT 1 FROM public_market.generation_features l WHERE l.generation_id=$1 AND l.feature_id=f.id)").bind(generation).execute(&mut *tx).await?;
     }
-    sqlx::query("INSERT INTO public_market.coverage_segments(generation_id,market,symbol,timeframe,start_at,end_at,actual_start,actual_end,status) VALUES($1,$2->>'market',$2->>'symbol',$2->>'interval',($2->>'requested_start')::timestamptz,($2->>'requested_end')::timestamptz,($2->>'actual_start')::timestamptz,($2->>'actual_end')::timestamptz,CASE WHEN ($2->>'source_range_complete')::boolean THEN 'complete' ELSE 'partial' END) ON CONFLICT(generation_id) DO NOTHING").bind(generation).bind(coverage).execute(&mut *tx).await?;
+    // 补跑要能把 `partial` 升成 `complete`，否则永久标记永远不会出现，`covered_windows`
+    // 就会一轮一轮地把同一段重下。反过来不行：`complete` 是永久标记，后来一次抖动的
+    // 重试不许把它抹回 `partial`，所以只在旧行还不是 `complete` 时才覆盖。
+    sqlx::query("INSERT INTO public_market.coverage_segments AS c(generation_id,market,symbol,timeframe,start_at,end_at,actual_start,actual_end,status) VALUES($1,$2->>'market',$2->>'symbol',$2->>'interval',($2->>'requested_start')::timestamptz,($2->>'requested_end')::timestamptz,($2->>'actual_start')::timestamptz,($2->>'actual_end')::timestamptz,CASE WHEN ($2->>'source_range_complete')::boolean THEN 'complete' ELSE 'partial' END) ON CONFLICT(generation_id) DO UPDATE SET actual_start=EXCLUDED.actual_start,actual_end=EXCLUDED.actual_end,status=EXCLUDED.status,checked_at=now() WHERE c.status<>'complete'").bind(generation).bind(coverage).execute(&mut *tx).await?;
     sqlx::query("UPDATE history_indexes SET status='ready',completed_at=now(),coverage=$3 WHERE owner_id=$1 AND id=$2").bind(j.owner).bind(j.id).bind(coverage).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())
