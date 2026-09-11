@@ -1,5 +1,10 @@
+//! 品种目录：合约清单只从 `instrument_catalog` 读，REST 只负责把它刷新。
+//!
+//! 热度排序要的 24 小时成交额是实时的，拉不到就退回目录自己的顺序 —— 币安不通
+//! 的时候还能选品种，比"排得最准"重要。
 use super::Services;
 use crate::error::{Error, Result};
+use chrono::{DateTime, Utc};
 pub use scorebook_core::api::instruments::*;
 use serde_json::{Value, json};
 
@@ -36,11 +41,30 @@ pub async fn list(s: &Services, f: InstrumentFilter) -> Result<Value> {
         return Err(Error::bad("market_not_supported"));
     }
     let popular = query.is_empty();
+    // 热度排序失败不该让整张清单打不开：退化成目录顺序，并在响应里说清楚。
+    let mut degraded = false;
     let ranked = if popular {
-        super::instrument_popularity::symbols(s, &market).await?
+        match super::instrument_popularity::symbols(s, &market).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(code=%e.code,market=%market,"instrument ranking unavailable; serving catalogue order");
+                degraded = true;
+                vec![]
+            }
+        }
     } else {
         vec![]
     };
+    let refreshed_at: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT max(refreshed_at) FROM instrument_catalog WHERE venue='binance' AND market=$1",
+    )
+    .bind(&market)
+    .fetch_one(&s.db.pool)
+    .await?;
+    if degraded && refreshed_at.is_none() {
+        // 实时的拿不到，库里也从来没刷进来过：这时候没有任何能交代的东西。
+        return Err(Error::transient("instruments_unavailable"));
+    }
     let snapshot = crate::adapters::db::digest(&json!([market, f.asset_class, ranked]));
     let cursor = if popular {
         match f.cursor {
@@ -80,7 +104,12 @@ pub async fn list(s: &Services, f: InstrumentFilter) -> Result<Value> {
     } else {
         None
     };
+    let ordering = match (popular, degraded) {
+        (true, false) => "trading_then_24h_quote_turnover",
+        (true, true) => "trading_then_symbol",
+        (false, _) => "exact_symbol_then_base_asset_then_prefix_then_contains",
+    };
     Ok(
-        json!({"items":items,"next_cursor":next,"default_market":"usd_m","source":"binance_contract_exchange_info","identity_policy":"contract_symbol_and_underlying_type;never_infer_from_ticker_name","price_type":"trade","ordering":if popular{"trading_then_24h_quote_turnover"}else{"exact_symbol_then_base_asset_then_prefix_then_contains"},"ranking_storage":"memory_only","ranking_cache_seconds":60}),
+        json!({"items":items,"next_cursor":next,"default_market":"usd_m","source":if degraded{"cached"}else{"binance_contract_exchange_info"},"refreshed_at":refreshed_at,"identity_policy":"contract_symbol_and_underlying_type;never_infer_from_ticker_name","price_type":"trade","ordering":ordering,"ranking_storage":"memory_only","ranking_cache_seconds":60}),
     )
 }

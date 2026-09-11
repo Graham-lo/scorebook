@@ -175,3 +175,97 @@ async fn mixed_language_catalog_is_complete_and_invalid_batch_is_atomic() {
     .unwrap();
     assert_eq!(count, 0);
 }
+
+/// 币安不通的时候：清单照旧打得开，只是说清楚这是库里存着的那份。
+struct Offline;
+impl ports::MarketDataProvider for Offline {
+    fn tickers_24h<'a>(&'a self, _: &'a str) -> ports::ProviderFuture<'a> {
+        Box::pin(async {
+            Err(scorebook_core::error::Error::transient(
+                "provider_unavailable",
+            ))
+        })
+    }
+    fn klines<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a str,
+        _: &'a str,
+        _: chrono::DateTime<chrono::Utc>,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> ports::ProviderFuture<'a> {
+        Box::pin(async { panic!("the instrument list never fetches prices") })
+    }
+    fn trades<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a str,
+        _: chrono::DateTime<chrono::Utc>,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> ports::ProviderFuture<'a> {
+        Box::pin(async { panic!("the instrument list never fetches trades") })
+    }
+    fn exchange_info<'a>(&'a self, _: &'a str) -> ports::ProviderFuture<'a> {
+        Box::pin(async {
+            Err(scorebook_core::error::Error::transient(
+                "provider_unavailable",
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn an_unreachable_exchange_still_lets_the_trader_pick_an_instrument() {
+    let db = Database::connect(&common::test_db_url()).await.unwrap();
+    db.migrate().await.unwrap();
+    let storage = tempfile::tempdir().unwrap();
+    let s = Services::new(db, Storage::new(storage.path()), Vision::new(None))
+        .unwrap()
+        .with_market(std::sync::Arc::new(Catalog { invalid: false }));
+    instruments::refresh(&s).await.unwrap();
+    let live = instruments::list(&s, serde_json::from_value(json!({"limit":5})).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(live["source"], "binance_contract_exchange_info");
+    assert_eq!(live["ordering"], "trading_then_24h_quote_turnover");
+    assert!(live["refreshed_at"].is_string());
+
+    // 刷新失败不清空目录：上一次成功的那份原样留着。
+    let down = s.clone().with_market(std::sync::Arc::new(Offline));
+    assert_eq!(
+        instruments::refresh(&down).await.unwrap_err().code,
+        "provider_unavailable"
+    );
+    let cached = instruments::list(&down, serde_json::from_value(json!({"limit":5})).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(cached["source"], "cached");
+    assert_eq!(cached["ordering"], "trading_then_symbol");
+    assert_eq!(cached["refreshed_at"], live["refreshed_at"]);
+    assert!(!cached["items"].as_array().unwrap().is_empty());
+    assert_eq!(cached["items"][0]["symbol"], "BTCUSDT");
+    assert_eq!(cached["ranking_storage"], "memory_only");
+    // 按名字找不碰热度，所以断网也是完整的那条路。
+    let searched = instruments::list(
+        &down,
+        serde_json::from_value(json!({"q":"btc","limit":5})).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(searched["items"][0]["symbol"], "BTCUSDT");
+    assert!(searched["refreshed_at"].is_string());
+
+    // 实时的拿不到、库里也从来没有过：这时候才认输，而且是可重试的认输。
+    sqlx::query("DELETE FROM instrument_catalog WHERE market='coin_m'")
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    let empty = instruments::list(
+        &down,
+        serde_json::from_value(json!({"market":"coin_m"})).unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(empty.code, "instruments_unavailable");
+    assert_eq!(empty.kind, scorebook::error::ErrorKind::Unavailable);
+}

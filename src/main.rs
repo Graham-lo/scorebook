@@ -193,7 +193,17 @@ async fn main() -> anyhow::Result<()> {
                 workers.spawn(async move {
                     let mut next_gc=tokio::time::Instant::now();
                     let mut next_replay_sweep=tokio::time::Instant::now();
+                    let mut next_instruments=tokio::time::Instant::now();
                     loop {
+                        // 品种目录六小时刷一次，启动先刷一次：这样交易所那边挂了，
+                        // /v1/instruments 还能拿库里最后一次成功的结果顶着。
+                        if queue=="maintenance" && tokio::time::Instant::now()>=next_instruments {
+                            match scorebook::application::instruments::refresh(&services).await {
+                                Ok(v)=>tracing::info!(contracts=%v["contracts_refreshed"],"instrument catalogue refreshed"),
+                                Err(e)=>tracing::warn!(code=%e.code,"instrument refresh failed; catalogue left as it was"),
+                            }
+                            next_instruments=tokio::time::Instant::now()+std::time::Duration::from_secs(6*3600);
+                        }
                         // Hourly fallback for replay bars the frontend never deleted on exit.
                         if queue=="maintenance" && tokio::time::Instant::now()>=next_replay_sweep {
                             match scorebook::application::replay::sweep(&services).await {
