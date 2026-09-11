@@ -195,9 +195,8 @@ async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8
             return Err(Error::bad("archive_memory_budget_exceeded"));
         }
         data.extend_from_slice(&chunk);
-        let expected = std::time::Duration::from_secs_f64(data.len() as f64 / (2. * 1024. * 1024.));
-        if expected > started.elapsed() {
-            tokio::time::sleep(expected - started.elapsed()).await;
+        if let Some(wait) = super::throttle(data.len(), 2. * 1024. * 1024., started.elapsed()) {
+            tokio::time::sleep(wait).await;
         }
     }
     Ok(data)

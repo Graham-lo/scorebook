@@ -231,7 +231,10 @@ async fn an_unreachable_exchange_still_lets_the_trader_pick_an_instrument() {
         .await
         .unwrap();
     assert_eq!(live["source"], "binance_contract_exchange_info");
-    assert_eq!(live["ordering"], "trading_then_24h_turnover_and_trade_count");
+    assert_eq!(
+        live["ordering"],
+        "trading_then_24h_turnover_and_trade_count"
+    );
     assert!(live["refreshed_at"].is_string());
 
     // 刷新失败不清空目录：上一次成功的那份原样留着。

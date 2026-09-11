@@ -10,3 +10,4 @@ __pycache__/
 /text_encoder/__pycache__/
 
 /ops/bin/
+/ops/tmp/

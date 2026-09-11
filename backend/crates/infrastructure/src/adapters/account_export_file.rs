@@ -50,9 +50,8 @@ pub async fn download(url: String) -> Result<Vec<u8>> {
             return Err(Error::bad("account_export_download_budget_exceeded"));
         }
         bytes.extend_from_slice(&chunk);
-        let due = std::time::Duration::from_secs_f64(bytes.len() as f64 / (2. * 1024. * 1024.));
-        if due > started.elapsed() {
-            tokio::time::sleep(due - started.elapsed()).await;
+        if let Some(wait) = super::throttle(bytes.len(), 2. * 1024. * 1024., started.elapsed()) {
+            tokio::time::sleep(wait).await;
         }
     }
     Ok(bytes)

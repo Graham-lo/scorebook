@@ -3,7 +3,7 @@
 | 数据 | 身份 / 生命周期 |
 |---|---|
 | calls / call_state | 原判断不可变；展示变更 revision 与草稿时钟独立 |
-| attachments / call_attachments | 用户原字节及明确引用；kind 区分现场、补充、参考、查询。`kind` 是唯一可以事后改的列（`PATCH /v1/attachments/{id}`，只在 scene/supplement/reference 之间改；用途是人事后才看得准的判断，不是证据），0046 起 attachments 上的整行不可变触发器换成"只有 kind 可改"，字节、sha256、尺寸、上传时间照旧一格都动不得 |
+| attachments / call_attachments | 用户原字节及明确引用；kind 区分现场、补充、参考、查询。`kind` 是唯一可以事后改的列（`PATCH /v1/attachments/{id}`，只在 scene/supplement/reference 之间改；用途是人事后才看得准的判断，不是证据），0046 起 attachments 上的整行不可变触发器换成"只有 kind 可改"，字节、sha256、尺寸、上传时间照旧一格都动不得。0050 再放开一样更轻的：「这条记录此刻拿哪一张当现场图」是判断不是证据，状态放在链接上（`call_attachments` 的 `attached_at`/`superseded_at`/`superseded_by`），附件行一行不删、一个字节不动。`attached_at` 必须自成一列而不能拿 `uploaded_at` 顶替——把一张旧图重新指回来当生效图时它的 `uploaded_at` 是旧的，按那个排它永远翻不了身。`superseded_at IS NULL` 就是正在生效，回填让迁移前后谁在生效逐行不变。「一条记录至多一张生效的现场图」不靠唯一索引（索引看不见 `kind`，而抄一份 `kind` 过来又会被 0046 允许改 kind 这件事立刻搞坏），靠换图那个事务同一条记录上 `FOR UPDATE` 串行，读的一侧保留 `ORDER BY ... LIMIT 1` 兜底 |
 | reviews / review_outcome_refs | 已发布复盘不可变，引用用户当时确认的 outcome IDs |
 | review_queue_projection | 业务事务内更新的可重建队列状态；分类索引避免长期累计后逐条重算 |
 | review_drafts / review_preferences | 可恢复草稿和稍后提醒，各自 CAS；正式发布不重写原话 |
@@ -26,12 +26,13 @@
 
 所有私有引用按 owner 查询并使用明确外键/关联表。删除不是扫描任意文本中的 UUID。行情 OHLC、逐笔成交、系统生成 SVG/PNG 不属于持久数据，禁止出现在上述表、队列、导出或日志中。原用户截图仍是长期保留的证据。
 
-## v4（迁移 0020—0046）
+## v4（迁移 0020—0050）
 
 | 模块 | 主表与语义 |
 |---|---|
 | 搜图 | `chart_analyses` 原图识别元数据；`chart_search_runs` 可取消任务和有来源坐标的结果；`image_index_status` / `image_reindex_runs` 明确旧模型切换进度 |
 | 公共历史 | `public_market.instrument_lifecycles` / `catalog_versions` 合约事实；`history_availability` 原始文件存在和 checksum 边界；`source_revisions` 文件版本；`coverage_segments` 实际区间（截图定位任务按 market/symbol/timeframe + `status='complete'` + 区间包含，再按所在 generation 的 `body->>'window_bars'` 检查 64/128/256 三档是否齐全，来决定要不要现建索引）；`features` 30 分区（2 个 market × 15 个周期）派生向量、`feature_locator` / `generation_features` 归属。它们不存公共 OHLC |
+| 扇出名单 | `public_market.universe_snapshots` 一次 `history.universe` 作业当时用的那份前 N 名单的头（`captured_at`/`market`/`size`/`candidates`/`ranking`/`source`）；`universe_members` 名单本身，每行带这个品种当时的 `quote_volume`、`trade_count` 和 `turnover_rank`/`trades_rank` 两个各自的名次；`universe_index_runs` 作业进度与结账（`symbol_no`/`symbols_total`、`units_built`/`skipped`/`failed`、`months_downloaded`、`feature_rows`，以及 `failures` 这个 jsonb 数组，每条带 `symbol` 和 `code`）。存档的理由是 24 小时 ticker 是快照、前 200 名每天都在变：不存下来，事后就没人答得出「这一轮到底搜了哪 200 个、截止到哪一天」。排序是成交额名次与成交笔数名次相加（Borda）后升序，见 docs/history-search.md。这三张表都不存 OHLC |
 | K 线周期 | 唯一真相源是 `scorebook_core::domain::interval::Interval`（`crates/core/src/domain/interval.rs`），全代码库不得再写第二份周期白名单。支持币安合约 klines 全部 15 个周期：`1m` `3m` `5m` `15m` `30m` `1h` `2h` `4h` `6h` `8h` `12h` `1d` `3d` `1w` `1M`，字符串一律沿用币安写法且**区分大小写**（`1m` 是一分钟、`1M` 是一个月）。对齐与币安一致：分钟/小时/`1d` 按 Unix 纪元整除，`1w` 开在周一 00:00 UTC，`1M` 开在每月 1 日 00:00 UTC 且长度不固定（28~31 天）。`3d` **不是**纪元整除：实测币安 3d 开盘日从不落在 `epoch_days % 3 == 0` 上——2023-08-16T00:00Z 起全部 USDⓈ-M 合约共用 `epoch_days % 3 == 1` 的那条网格（实测开盘 2026-09-05 / 09-08 / 09-11，2026-10-01 不是开盘、2026-09-29 与 10-02 才是），在此之前 BTCUSDT 走 `% 3 == 2`（实测 2023-01-01、2023-08-14），2023-08-14 那根是只有 2 天的短棒，锚点自此前移一天；`add_bars`/`bars_between` 按固定 3 天步进，跨越这根短棒时会差 1 根。另注：COIN-M 与 2023-08-16 之前的 USDⓈ-M 三日线其实是**按每个合约各自的上市首日**起算的（实测 BTCUSD_PERP ≡ 2、ETHUSD_PERP ≡ 0，同一天并不同格），`Interval::floor` 只有时间戳没有合约上下文，建模的是 2023-08-16 起的 USDⓈ-M 网格。`features` 的月线分区**表名**叫 `features_<market>_1mo`（PostgreSQL 未加引号标识符折叠成小写，`1M` 会与 `1m` 撞名），但分区键与 `timeframe` 列存的仍是币安原文 `1M`。限制：`criteria.trigger.interval_seconds` 的 `bar_close` 触发只认固定秒数周期，**月线（`1M`）不支持 bar_close 触发**，命中时返回 `trigger_interval_not_supported`；其余 14 个周期都可用 |
 | 历史订阅 | `history_subscriptions` 声明和预算；`history_subscription_plans` 本轮有界计划；`history_plan_scopes` 冻结实际来源范围；`history_subscription_cursors` 每合约/周期/尺度的下个窗口起点 |
 | 真实交易 | `exchange_connections` 账户声明；`exchange_credentials` 仅 Keychain 引用；`trade_imports` 不可变来源回执；`trade_fills` / `account_ledger_entries` 原币种 Decimal 流水；`account_asset_totals` 仅按新入库行更新的可重算汇总 |

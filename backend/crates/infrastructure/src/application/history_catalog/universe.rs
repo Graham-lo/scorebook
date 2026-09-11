@@ -16,7 +16,7 @@
 //!
 //! 续跑是白拿的：`generations.status='ready'` + `coverage_segments.status='complete'`
 //! + `features.published=true` 这三件一套本来就是永久标记，做完一个单元就有，
-//! 下次扫到直接跳过。中途停最多丢正在做的那一个单元。
+//!   下次扫到直接跳过。中途停最多丢正在做的那一个单元。
 use super::*;
 use chrono::NaiveDate;
 use scorebook_core::domain::criteria::Bar;
@@ -49,10 +49,7 @@ struct Scope {
 }
 
 fn scope_of(body: &Value) -> Result<Scope> {
-    let market = body["market"]
-        .as_str()
-        .unwrap_or("usd_m")
-        .to_string();
+    let market = body["market"].as_str().unwrap_or("usd_m").to_string();
     let interval = body["interval"]
         .as_str()
         .ok_or_else(|| Error::bad("invalid_universe_job"))?
@@ -249,10 +246,7 @@ fn units(iv: super::super::history::Interval, listing: &[(i64, String)]) -> Resu
 
 /// 把一段里的月档并发下载、校验、解压、解析成内存里的 bars。返回 (bars, 来源明细,
 /// 失败的 key)。下载完就只剩 bars 在内存里，压缩包和 CSV 都不落盘。
-async fn fetch(
-    s: &Services,
-    unit: &Unit,
-) -> (Vec<Bar>, Vec<Value>, Vec<(String, String)>) {
+async fn fetch(s: &Services, unit: &Unit) -> (Vec<Bar>, Vec<Value>, Vec<(String, String)>) {
     let mut ok = Vec::new();
     let mut failed = Vec::new();
     // 按批并发：一次发 DOWNLOAD_FANOUT 个请求，等这一批回来再发下一批。
@@ -545,8 +539,8 @@ async fn save(s: &Services, j: &Job, tally: &Tally, no: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::history::Interval;
+    use super::*;
 
     #[test]
     fn a_chunk_holds_enough_bars_for_the_largest_window_and_stays_inside_validate() {
@@ -648,9 +642,7 @@ mod tests {
     #[test]
     fn units_tile_the_listing_without_reaching_past_the_first_or_last_archived_month() {
         let first = (2020 - 1970) * 12; // 2020-01
-        let listing: Vec<(i64, String)> = (0..30)
-            .map(|i| (first + i, format!("k-{i}")))
-            .collect();
+        let listing: Vec<(i64, String)> = (0..30).map(|i| (first + i, format!("k-{i}"))).collect();
         let units = units(Interval::D1, &listing).unwrap();
         assert!(!units.is_empty());
         assert_eq!(units[0].start, at(2020, 1).unwrap());
