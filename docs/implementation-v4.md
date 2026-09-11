@@ -1,7 +1,7 @@
 # Scorebook｜剩余后端功能实施方案 v4
 
 日期：2026-09-10
-代码依据：`/Users/mdd/zhk/scorebook-backend`，提交 `eccd1f917433b92e61179c27c4c3556cedf19f3f`。
+代码依据：本仓库，提交 `eccd1f917433b92e61179c27c4c3556cedf19f3f`。
 状态：实施中；新增功能尚未验收。用户已取消 P6，本轮只做 P1/P2/P3/P4/P5/P7。
 
 ## 1. 本次范围与固定原则

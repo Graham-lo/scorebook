@@ -2,7 +2,7 @@
 
 请把现有 Scorebook 前端接入这个版本的真实 Rust 后端，并完成主要流程测试。你负责前端视觉和交互：精致、克制、苹果风，视觉与细节体验优先。请先阅读本项目的 review-experience.md，把长期复盘作为第一优先级。
 
-后端目录 `/Users/mdd/zhk/scorebook-backend`，远程 `https://github.com/Graham-lo/scorebook-backend`，分支 `codex/backend-reliability-performance-v3`。前端目录 `/Users/mdd/zhk/scorebook-frontend`，Claude 原型 `local.html`。只在已有用户设计基础上做模块化对接，不重置用户改动，不把旧演示数据当真实功能。前端是否已有工程/Git 以现场检查为准。
+后端目录是本机的这个仓库，远程 `https://github.com/Graham-lo/scorebook-backend`，分支 `codex/backend-reliability-performance-v3`。前端目录 `~/zhk/scorebook-frontend`，Claude 原型 `local.html`。只在已有用户设计基础上做模块化对接，不重置用户改动，不把旧演示数据当真实功能。前端是否已有工程/Git 以现场检查为准。
 
 先读 README.md、docs/status.md、docs/review-experience.md、docs/api-workflows.md、docs/history-search.md 和 contracts/openapi.json。DTO 在 crates/core/src/api，用例在 crates/infrastructure/src/application，HTTP 在 crates/http/src。OpenAPI 请求类型真实生成，部分响应仍是通用 JSON，需要结合这些用例和集成测试确认字段。
 

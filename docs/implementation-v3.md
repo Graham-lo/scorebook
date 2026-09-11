@@ -15,7 +15,7 @@
 
 ## 不保留旧 fallback
 
-已核对 `/Users/mdd/.codex/memories/MEMORY.md` 第 8 节“不保留隐藏 legacy fallback”，并采用用户更严格的本轮要求。仅参考架构原则，未沿用其他项目的 VPS/部署配置。
+已核对 `~/.codex/memories/MEMORY.md` 第 8 节“不保留隐藏 legacy fallback”，并采用用户更严格的本轮要求。仅参考架构原则，未沿用其他项目的 VPS/部署配置。
 
 旧 src/application、src/adapters、src/domain、src/http 已迁入唯一 workspace 实现；旧 spot 适配、history_windows 运行查询、单图 /embed、v1 归档宽松校验等路径移除。混合检索缺一模型明确失败，精确向量检索仅用于测试对照。重试/进程恢复继续执行同一新版协议，归档恢复需要同一校验身份，不伪装成功。
 

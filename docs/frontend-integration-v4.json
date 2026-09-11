@@ -2,7 +2,7 @@
   "isolated_database": true,
   "unmodified_frontend_test_sha256": "4c955862ed0ddff5de3ee029693e55ad2c59584c91bf3a35d9043b1cff2d2ce5",
   "exit_code": 1,
-  "log": "/Users/mdd/zhk/scorebook-backend/docs/frontend-integration-v4.log",
+  "log": "docs/frontend-integration-v4.log",
   "binary_sha256": "5fec43a7be9a880da3671330793ab44dea8ac18bdb83dcb42ad5729068f3712b",
   "diagnosis": {
     "statistics_members_without_unsupported_limit": {
