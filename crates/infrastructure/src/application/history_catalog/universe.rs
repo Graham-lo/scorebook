@@ -270,6 +270,24 @@ async fn fetch(
             }
         }
     }
+    // 掉下来的月份单独再试一次，这次一个一个来。第一次跑 1d 有五十多个月档报
+    // `archive_source_unavailable`——那是对象存储在并发下回的非 404 错误码，不是「没有
+    // 这个月」。漏一个月的代价不止这一个月：拼出来的 bars 中间有断口，跨过断口的窗口
+    // 全部算数不了，TRXUSDT 就是这么少掉六百多个窗口的。所以宁可慢一点也要补这一手。
+    let mut retry = Vec::new();
+    std::mem::swap(&mut retry, &mut failed);
+    for (key, code) in retry {
+        if code == "archive_not_available" {
+            // 404 是真的没有这个月，再问一次也还是没有。
+            failed.push((key, code));
+            continue;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        match s.archives.klines(&key, unit.start, unit.end).await {
+            Ok(v) => ok.push((key, v)),
+            Err(e) => failed.push((key, e.code)),
+        }
+    }
     // key 里的 `YYYY-MM` 字典序就是时间序，排完直接拼。
     ok.sort_by(|a, b| a.0.cmp(&b.0));
     let mut bars = Vec::new();
