@@ -27,18 +27,22 @@ pub async fn embed_mode(
 ) -> Result<(Vector, Value, String)> {
     crate::adapters::ann::space(model)?;
     let rh = digest(&region);
+    // 裁剪出来的区域向量只说明那一块算过，代表不了整张原图，索引状态因此只认整图。
+    let whole_image = region.is_none();
     let region_json = json!(region);
     let existing=sqlx::query("SELECT embedding,quality FROM image_embeddings WHERE owner_id=$1 AND attachment_id=$2 AND model_id=$3 AND region_hash=$4").bind(owner).bind(id).bind(model).bind(&rh).fetch_optional(&s.db.pool).await?;
     if let Some(r) = existing {
         return Ok((r.get("embedding"), r.get("quality"), rh));
     }
-    let expected: String =
-        sqlx::query_scalar("SELECT sha256 FROM attachments WHERE owner_id=$1 AND id=$2")
-            .bind(owner)
-            .bind(id)
-            .fetch_optional(&s.db.pool)
-            .await?
-            .ok_or_else(Error::not_found)?;
+    // kind 顺带取出来：search 传进来的可能是搜完即弃的 query 图，它不属于记录库原图。
+    let original = sqlx::query("SELECT sha256,kind FROM attachments WHERE owner_id=$1 AND id=$2")
+        .bind(owner)
+        .bind(id)
+        .fetch_optional(&s.db.pool)
+        .await?
+        .ok_or_else(Error::not_found)?;
+    let expected: String = original.get("sha256");
+    let kind: String = original.get("kind");
     let loader = s.clone();
     let selected = model.to_string();
     let f = s
@@ -70,6 +74,12 @@ pub async fn embed_mode(
     sqlx::query("INSERT INTO embedding_models(id,dimension,metadata) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&f.model_id).bind(vector.as_slice().len()as i32).bind(&f.quality).execute(&mut *tx).await?;
     // A model ID has immutable weights/preprocessing; adapter verifies identity.
     sqlx::query("INSERT INTO image_embeddings(id,owner_id,attachment_id,model_id,region,region_hash,embedding,quality) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING").bind(Uuid::new_v4()).bind(owner).bind(id).bind(model).bind(region_json).bind(&rh).bind(&vector).bind(&f.quality).execute(&mut *tx).await?;
+    // 向量是在这里落的库，索引状态却只有 reindex 会写，于是「现场截图算过特征没有」把这里算出来的
+    // 全当没算过。状态跟向量同一个事务写，两边就不可能再各说各话。原图之外的图不进这张表：
+    // 覆盖面按 kind='scene' 统计，给别的 kind 记状态只会让 ready 超过总数。
+    if whole_image && kind == "scene" {
+        sqlx::query("INSERT INTO image_index_status(owner_id,attachment_id,model_id,status,reason) VALUES($1,$2,$3,'ready',NULL) ON CONFLICT(owner_id,attachment_id,model_id) DO UPDATE SET status=EXCLUDED.status,reason=EXCLUDED.reason,checked_at=now()").bind(owner).bind(id).bind(model).execute(&mut *tx).await?;
+    }
     tx.commit().await?;
     Ok((vector, f.quality, rh))
 }

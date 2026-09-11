@@ -1828,3 +1828,55 @@ async fn screenshot_search_requires_period_before_creating_any_job() {
         .unwrap();
     assert_eq!(before, after);
 }
+
+#[tokio::test]
+async fn index_coverage_counts_persisted_whole_image_vectors_as_ready() {
+    let (s, owner, _tmp) = setup().await;
+    // region 为空时 digest(&None) 得到的就是这个哈希，整图向量只认它。
+    let whole = "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b";
+    let crop = "cropped-region-hash";
+    let model = "candle-geometry-v2";
+    let vector = format!("[{}]", vec!["0.1"; 192].join(","));
+    let attachment = |kind: &'static str| {
+        let id = Uuid::new_v4();
+        let pool = s.db.pool.clone();
+        async move {
+            sqlx::query("INSERT INTO attachments(id,owner_id,sha256,mime,size,width,height,kind) VALUES($1,$2,'test','image/png',1,640,320,$3)").bind(id).bind(owner).bind(kind).execute(&pool).await.unwrap();
+            id
+        }
+    };
+    let inferred = attachment("scene").await;
+    let recorded = attachment("scene").await;
+    let cropped = attachment("scene").await;
+    let supplement = attachment("supplement").await;
+    for (id, region_hash) in [
+        (inferred, whole),
+        (recorded, whole),
+        (cropped, crop),
+        (supplement, whole),
+    ] {
+        sqlx::query("INSERT INTO image_embeddings(id,owner_id,attachment_id,model_id,region,region_hash,embedding,quality) VALUES($1,$2,$3,$4,'null',$5,$6::vector,'{}')").bind(Uuid::new_v4()).bind(owner).bind(id).bind(model).bind(region_hash).bind(&vector).execute(&s.db.pool).await.unwrap();
+    }
+    for (id, status, reason) in [
+        (recorded, "ready", None),
+        (cropped, "unsupported", Some("flat_chart_geometry")),
+    ] {
+        sqlx::query("INSERT INTO image_index_status(owner_id,attachment_id,model_id,status,reason) VALUES($1,$2,$3,$4,$5)").bind(owner).bind(id).bind(model).bind(status).bind(reason).execute(&s.db.pool).await.unwrap();
+    }
+    let value = chart_search::reindex::status(&s, owner).await.unwrap();
+    // 三张原图：一张只有向量没有状态行，一张两边都有（只能算一次），一张判定为不支持。
+    assert_eq!(value["originals"], 3);
+    let counted = |status: &str| {
+        value["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["model_id"] == model && r["status"] == status)
+            .map(|r| r["count"].as_i64().unwrap())
+            .sum::<i64>()
+    };
+    assert_eq!(counted("ready"), 2);
+    assert_eq!(counted("unsupported"), 1);
+    // 裁剪区域的向量不算整图算过，supplement 也不属于原图，否则 ready 会超过原图总数。
+    assert!(counted("ready") + counted("unsupported") <= 3);
+}

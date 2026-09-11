@@ -261,6 +261,15 @@ async fn vector_search_works_cross_theme_and_excludes_other_users_and_later_imag
     .await
     .unwrap();
     assert_eq!(past["items"], json!([]));
+    // 向量在哪里落库，索引状态就在哪里记，不必等一次 reindex；搜完即弃的 query 图不是记录库原图，不记。
+    let recorded: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT attachment_id,status FROM image_index_status WHERE owner_id=$1 AND model_id='candle-geometry-v2'",
+    )
+    .bind(o)
+    .fetch_all(&s.db.pool)
+    .await
+    .unwrap();
+    assert_eq!(recorded, vec![(aid, "ready".to_string())]);
     let (other, _) = s.db.create_user("other").await.unwrap();
     assert!(
         similarity::embed(&s, other, aid, None, "candle-geometry-v2")

@@ -72,7 +72,26 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
     )
 }
 pub async fn status(s: &Services, owner: Uuid) -> Result<Value> {
-    let models=sqlx::query("SELECT model_id,status,count(*) AS count FROM image_index_status WHERE owner_id=$1 GROUP BY model_id,status").bind(owner).fetch_all(&s.db.pool).await?;
+    // unsupported 是 reindex 看过图之后才下得了的判断，缺一条状态行推不出来，所以仍只认状态表；
+    // ready 不一样——整图向量本身就是算过的凭据，哪怕这条状态行是在本次改动之前漏掉的也照样算数，
+    // 老数据因此不必重建一遍就能说真话。裁剪区域的向量代表不了整图，只认 region 为空时的 region_hash。
+    let whole = digest(&None::<crate::application::dto::Region>);
+    let models = sqlx::query(
+        "WITH originals AS(SELECT id FROM attachments WHERE owner_id=$1 AND kind='scene'),
+ recorded AS(SELECT i.attachment_id,i.model_id,i.status FROM image_index_status i JOIN originals o ON o.id=i.attachment_id WHERE i.owner_id=$1),
+ inferred AS(SELECT e.attachment_id,e.model_id FROM image_embeddings e JOIN originals o ON o.id=e.attachment_id
+   WHERE e.owner_id=$1 AND e.region_hash=$2 AND e.model_id IN($3,$4)
+   AND NOT EXISTS(SELECT 1 FROM recorded r WHERE r.attachment_id=e.attachment_id AND r.model_id=e.model_id))
+ SELECT model_id,status,count(*) AS count FROM(
+   SELECT model_id,status FROM recorded UNION ALL SELECT model_id,'ready' AS status FROM inferred) x
+ GROUP BY model_id,status",
+    )
+    .bind(owner)
+    .bind(&whole)
+    .bind(chart_match::MODEL)
+    .bind("dinov2-small-v1")
+    .fetch_all(&s.db.pool)
+    .await?;
     let total: i64 =
         sqlx::query_scalar("SELECT count(*) FROM attachments WHERE owner_id=$1 AND kind='scene'")
             .bind(owner)
