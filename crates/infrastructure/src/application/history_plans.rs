@@ -34,8 +34,8 @@ fn validate(input: &HistoryPlanRequest) -> Result<()> {
     }
     for symbol in &input.symbols {
         for interval in &input.intervals {
-            let seconds = history::interval_seconds(interval)?;
-            if (input.end_at - input.start_at).num_seconds() < seconds * input.window_bars as i64 {
+            let iv = history::interval_of(interval)?;
+            if iv.bars_between(input.start_at, input.end_at) < input.window_bars as i64 {
                 return Err(Error::bad("history_plan_range_too_short"));
             }
             history::validate(&history::HistoryIndexRequest {
@@ -44,7 +44,7 @@ fn validate(input: &HistoryPlanRequest) -> Result<()> {
                 market: input.market.clone(),
                 interval: interval.clone(),
                 start_at: input.start_at,
-                end_at: input.start_at + Duration::seconds(seconds * input.window_bars as i64),
+                end_at: iv.add_bars(input.start_at, input.window_bars as i64),
                 window_bars: input.window_bars,
                 stride_bars: input.stride_bars,
                 models: input.models.clone(),
@@ -125,11 +125,10 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
         match child["status"].as_str() {
             Some("succeeded") => {
                 completed += 1;
-                let seconds = history::interval_seconds(&input.intervals[interval])?;
+                let iv = history::interval_of(&input.intervals[interval])?;
                 let end: DateTime<Utc> = serde_json::from_value(child["body"]["end_at"].clone())
                     .map_err(|_| Error::bad("invalid_child_range"))?;
-                start = end
-                    - Duration::seconds((input.window_bars - input.stride_bars) as i64 * seconds);
+                start = iv.add_bars(end, -((input.window_bars - input.stride_bars) as i64));
             }
             Some("failed" | "needs_attention" | "blocked_capability" | "awaiting_input") => {
                 sqlx::query("UPDATE history_plans SET status='needs_attention',updated_at=now() WHERE owner_id=$1 AND id=$2 AND status='running'").bind(j.owner).bind(j.id).execute(&s.db.pool).await?;
@@ -158,13 +157,9 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
         .await?;
         start = start.max(scope.start_at);
         scope_end = scope.end_at;
-        let seconds = history::interval_seconds(&input.intervals[interval])?;
-        start = DateTime::from_timestamp(
-            (start.timestamp() + seconds - 1).div_euclid(seconds) * seconds,
-            0,
-        )
-        .ok_or_else(|| Error::bad("invalid_plan_time"))?;
-        let available = (scope_end - start).num_seconds() / seconds;
+        let iv = history::interval_of(&input.intervals[interval])?;
+        start = iv.ceil(start);
+        let available = iv.bars_between(start, scope_end);
         if available >= input.window_bars as i64 {
             break;
         }
@@ -197,13 +192,13 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
             json!({"plan_id":j.id,"status":"completed","completed_chunks":completed,"coverage":"inspect_public_generations_for_actual_gaps"}),
         );
     }
-    let seconds = history::interval_seconds(&input.intervals[interval])?;
-    let available = (scope_end - start).num_seconds() / seconds;
+    let iv = history::interval_of(&input.intervals[interval])?;
+    let available = iv.bars_between(start, scope_end);
     let starts = ((available - input.window_bars as i64) / input.stride_bars as i64 + 1).min(512);
-    let end = start
-        + Duration::seconds(
-            (input.window_bars as i64 + (starts - 1) * input.stride_bars as i64) * seconds,
-        );
+    let end = iv.add_bars(
+        start,
+        input.window_bars as i64 + (starts - 1) * input.stride_bars as i64,
+    );
     let child = history::HistoryIndexRequest {
         source: input.source.clone(),
         symbol: input.symbols[symbol].clone(),

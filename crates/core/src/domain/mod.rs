@@ -1,6 +1,7 @@
 pub mod calendar;
 pub mod criteria;
 pub mod instrument;
+pub mod interval;
 pub mod parser;
 pub mod statistics;
 

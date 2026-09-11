@@ -15,25 +15,32 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use uuid::Uuid;
 
-pub fn interval_seconds(tf: &str) -> Result<i64> {
-    match tf {
-        "1m" => Ok(60),
-        "5m" => Ok(300),
-        "15m" => Ok(900),
-        "1h" => Ok(3600),
-        "4h" => Ok(14400),
-        "1d" => Ok(86400),
-        _ => Err(Error::bad("unsupported_interval")),
-    }
+pub use scorebook_core::domain::interval::Interval;
+
+/// 唯一的周期入口：只接受币安官方写法，因为这个字符串会落到 `timeframe` 列、
+/// 成为 `public_market.features` 的分区键，还会拼进归档路径。别名解析在
+/// `replay::interval_for`，那里会先归一化成官方写法再进来。
+pub fn interval_of(tf: &str) -> Result<Interval> {
+    Interval::exact(tf).map_err(Into::into)
+}
+
+/// 运行时 SQL 需要「按周期取一步」时用的参数对：周期名数组 + PostgreSQL `interval`
+/// 字面量数组。SQL 里 `JOIN unnest($a::text[],$b::text[]) AS s(name,step)` 就能拿到
+/// 步长，不必在 SQL 里再抄一份 `CASE`，月线也由 PostgreSQL 按日历算。
+pub fn pg_interval_steps() -> (Vec<String>, Vec<String>) {
+    Interval::ALL
+        .iter()
+        .map(|v| (v.as_str().to_string(), v.pg_interval().to_string()))
+        .unzip()
 }
 pub fn validate(input: &HistoryIndexRequest) -> Result<()> {
-    let seconds = interval_seconds(&input.interval)?;
+    let iv = interval_of(&input.interval)?;
     if !matches!(input.market.as_str(), "usd_m" | "coin_m")
         || !scorebook_core::domain::instrument::valid_symbol(&input.symbol)
     {
         return Err(Error::bad("invalid_contract"));
     }
-    let bars = (input.end_at - input.start_at).num_seconds() / seconds;
+    let bars = iv.bars_between(input.start_at, input.end_at);
     if input.start_at >= input.end_at
         || input.end_at > Utc::now()
         || !(32..=256).contains(&input.window_bars)
@@ -244,7 +251,7 @@ pub async fn index_generation(
         ));
     }
     reservation.commit().await?;
-    let step = interval_seconds(&input.interval)?;
+    let iv = interval_of(&input.interval)?;
     let prior:Vec<(DateTime<Utc>,String,String)>=sqlx::query_as("SELECT f.start_at,f.model_id,f.input_hash FROM public_market.features f JOIN public_market.generation_features l ON l.feature_id=f.id WHERE l.generation_id=$1").bind(generation).fetch_all(&s.db.pool).await?;
     let prior: std::collections::HashSet<_> = prior.into_iter().collect();
     let mut retained = Vec::new();
@@ -260,9 +267,8 @@ pub async fn index_generation(
         let mut slices = vec![];
         for slice in block {
             if slice.windows(2).any(|w| w[0].end != w[1].start)
-                || slice
-                    .iter()
-                    .any(|b| (b.end - b.start).num_seconds() != step)
+                // 月线长度不固定，不能拿秒数比，只能按日历核对是不是正好一根。
+                || slice.iter().any(|b| !iv.is_one_bar(b.start, b.end))
             {
                 skipped += 1;
                 continue;

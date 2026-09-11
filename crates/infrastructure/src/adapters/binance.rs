@@ -82,16 +82,12 @@ impl Binance {
         if !scorebook_core::domain::instrument::valid_symbol(symbol) {
             return Err(Error::bad("invalid_symbol"));
         }
-        let duration = match interval {
-            "1m" => 60,
-            "5m" => 300,
-            "15m" => 900,
-            "1h" => 3600,
-            "4h" => 14400,
-            "1d" => 86400,
-            _ => return Err(Error::bad("unsupported_interval")),
-        };
-        if start >= end || (end - start).num_seconds() / duration > 50_000 {
+        // 周期白名单只有 scorebook_core::domain::interval 一份。
+        let iv = scorebook_core::domain::interval::Interval::exact(interval)?;
+        // 根数上限对 1w / 1M 这种可变长度周期也要成立：`bars_between` 对月线按日历
+        // 数，绝不会把 31 天的月份当成 28 天，所以这里不会误判把合法范围拒掉，也不
+        // 会放过超限范围。（需要粗估时用 `min_seconds()`，月线取 28 天下界。）
+        if start >= end || iv.bars_between(start, end) > 50_000 {
             return Err(Error::bad("market_range_too_large"));
         }
         let url = match market {

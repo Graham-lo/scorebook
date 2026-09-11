@@ -314,10 +314,11 @@ pub async fn ensure_index(
     interval: &str,
     judgment: DateTime<Utc>,
 ) -> Result<Value> {
-    let step = super::history::interval_seconds(interval)?;
-    let end = super::replay::floor_at(judgment, step);
+    let iv = super::history::interval_of(interval)?;
+    let end = iv.floor(judgment);
     let bars = 3 * super::history::LOCATE_WINDOWS[2] as i64;
-    let start = end - chrono::Duration::seconds(step * bars);
+    // 按根数后退，1w/1M 这种对齐特殊或长度可变的周期也才是真的 768 根。
+    let start = iv.add_bars(end, -bars);
     let range = json!({"market":market,"symbol":symbol,"interval":interval,"start_at":start,"end_at":end,"bars":bars});
     if super::history::covered(s, market, symbol, interval, start, end).await? {
         return Ok(json!({"built":false,"reason":"already_indexed","range":range}));

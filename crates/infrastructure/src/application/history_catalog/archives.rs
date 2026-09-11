@@ -13,12 +13,13 @@ pub fn archive_prefix(market: &str, period: &str) -> Result<String> {
 }
 pub async fn discover(s: &Services, input: ArchiveCatalogInput) -> Result<Value> {
     super::validate_symbol(&input.symbol)?;
-    super::super::history::interval_seconds(&input.interval)?;
+    let iv = super::super::history::interval_of(&input.interval)?;
+    // 归档目录里的周期段与对外写法只有月线不同（`1M` -> `1mo`）。
     let prefix = format!(
         "{}{}/{}/",
         archive_prefix(&input.market, "monthly")?,
         input.symbol,
-        input.interval
+        iv.archive_segment()
     );
     let listing = s.archives.list(&prefix, input.cursor.as_deref()).await?;
     let rows: Vec<_> = listing
@@ -63,8 +64,8 @@ pub async fn fetch_range(
     end: DateTime<Utc>,
 ) -> Result<(Vec<scorebook_core::domain::criteria::Bar>, Vec<Value>)> {
     super::validate_symbol(symbol)?;
-    let seconds = super::super::history::interval_seconds(interval)?;
-    if start >= end || (end - start).num_seconds() / seconds > 50000 || end > Utc::now() {
+    let iv = super::super::history::interval_of(interval)?;
+    if start >= end || iv.bars_between(start, end) > 50000 || end > Utc::now() {
         return Err(Error::bad("invalid_archive_range"));
     }
     let mut date = NaiveDate::from_ymd_opt(start.year(), start.month(), 1)
@@ -75,13 +76,14 @@ pub async fn fetch_range(
         if sources.len() >= 120 {
             return Err(Error::bad("archive_plan_exceeds_120_months"));
         }
+        let segment = iv.archive_segment();
         let key = format!(
             "{}{}/{}/{}-{}-{}.zip",
             archive_prefix(market, "monthly")?,
             symbol,
-            interval,
+            segment,
             symbol,
-            interval,
+            segment,
             date.format("%Y-%m")
         );
         let source = s.archives.klines(&key, start, end).await?;

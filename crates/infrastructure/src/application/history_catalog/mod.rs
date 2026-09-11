@@ -109,8 +109,7 @@ pub async fn estimate(s: &Services, input: HistoryEstimateInput) -> Result<Value
     let mut rows = Vec::new();
     let mut total = 0u64;
     for tf in &input.intervals {
-        let seconds = super::history::interval_seconds(tf)?;
-        let count = (input.end_at - input.start_at).num_seconds() / seconds;
+        let count = super::history::interval_of(tf)?.bars_between(input.start_at, input.end_at);
         for window in [64i64, 128, 256] {
             let stride = window / 4;
             let windows = if count >= window {

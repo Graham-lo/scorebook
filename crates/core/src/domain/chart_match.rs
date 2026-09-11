@@ -14,9 +14,8 @@ pub fn require_interval(interval: Option<&str>) -> Result<&str> {
     let interval = interval
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| Error::bad("chart_interval_required"))?;
-    if !["1m", "5m", "15m", "1h", "4h", "1d"].contains(&interval) {
-        return Err(Error::bad("unsupported_interval"));
-    }
+    // 周期白名单只有 domain::interval 一份；这里只做校验，返回原字符串。
+    crate::domain::interval::Interval::exact(interval)?;
     Ok(interval)
 }
 

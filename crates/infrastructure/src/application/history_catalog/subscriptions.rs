@@ -131,8 +131,12 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
         }
         // Commit only a completed, gap-free child. Retrying this UPSERT is idempotent.
         let mut tx = jobs::fence(s, j).await?;
-        sqlx::query("INSERT INTO history_subscription_cursors(owner_id,subscription_id,symbol,timeframe,window_bars,next_start) SELECT $1,$2,i.body->>'symbol',i.body->>'interval',(i.body->>'window_bars')::int,max((i.body->>'end_at')::timestamptz-((i.body->>'window_bars')::int-(i.body->>'stride_bars')::int)*CASE i.body->>'interval' WHEN '1m' THEN interval '1 minute' WHEN '5m' THEN interval '5 minutes' WHEN '15m' THEN interval '15 minutes' WHEN '1h' THEN interval '1 hour' WHEN '4h' THEN interval '4 hours' WHEN '1d' THEN interval '1 day' END) FROM history_indexes i JOIN jobs x ON x.id=i.id WHERE i.owner_id=$1 AND x.kind='history.index' AND x.dedupe_key LIKE $3 AND x.status='succeeded' GROUP BY i.body->>'symbol',i.body->>'interval',(i.body->>'window_bars')::int ON CONFLICT(owner_id,subscription_id,symbol,timeframe,window_bars) DO UPDATE SET next_start=greatest(history_subscription_cursors.next_start,EXCLUDED.next_start),updated_at=now()")
-            .bind(j.owner).bind(id).bind(format!("{child}:%")).execute(&mut *tx).await?;
+        // 步长不再写成 SQL 里的 CASE：周期表只有 domain::interval 一份，这里把
+        // (周期名, PostgreSQL interval 字面量) 当参数传进去做 JOIN。月线的
+        // `1 month` 由 PostgreSQL 自己按日历减，长度可变也算得对。
+        let (names, steps) = super::super::history::pg_interval_steps();
+        sqlx::query("INSERT INTO history_subscription_cursors(owner_id,subscription_id,symbol,timeframe,window_bars,next_start) SELECT $1,$2,i.body->>'symbol',i.body->>'interval',(i.body->>'window_bars')::int,max((i.body->>'end_at')::timestamptz-((i.body->>'window_bars')::int-(i.body->>'stride_bars')::int)*(s.step)::interval) FROM history_indexes i JOIN jobs x ON x.id=i.id JOIN unnest($4::text[],$5::text[]) AS s(name,step) ON s.name=i.body->>'interval' WHERE i.owner_id=$1 AND x.kind='history.index' AND x.dedupe_key LIKE $3 AND x.status='succeeded' GROUP BY i.body->>'symbol',i.body->>'interval',(i.body->>'window_bars')::int ON CONFLICT(owner_id,subscription_id,symbol,timeframe,window_bars) DO UPDATE SET next_start=greatest(history_subscription_cursors.next_start,EXCLUDED.next_start),updated_at=now()")
+            .bind(j.owner).bind(id).bind(format!("{child}:%")).bind(&names).bind(&steps).execute(&mut *tx).await?;
         tx.commit().await?;
         plan_no += 1;
     }
@@ -151,7 +155,7 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
     let tf = input.intervals[(plan_no / 3) % input.intervals.len()].clone();
     let window = [64usize, 128, 256][plan_no % 3];
     let stride = window / 4;
-    let seconds = super::super::history::interval_seconds(&tf)?;
+    let iv = super::super::history::interval_of(&tf)?;
     let batch_symbols = &symbols[batch * 200..((batch + 1) * 200).min(symbols.len())];
     let cursors: Vec<(String,DateTime<Utc>)> = sqlx::query_as("SELECT symbol,next_start FROM history_subscription_cursors WHERE owner_id=$1 AND subscription_id=$2 AND timeframe=$3 AND window_bars=$4 AND symbol=ANY($5)")
         .bind(j.owner).bind(id).bind(&tf).bind(window as i32).bind(batch_symbols).fetch_all(&s.db.pool).await?;
@@ -160,8 +164,7 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
         .iter()
         .filter_map(|symbol| {
             let start = cursors.get(symbol).copied().unwrap_or(input.start_at);
-            ((end - start).num_seconds() >= window as i64 * seconds)
-                .then(|| (symbol.clone(), start))
+            (iv.bars_between(start, end) >= window as i64).then(|| (symbol.clone(), start))
         })
         .collect();
     let Some(start) = symbol_start_at.values().min().copied() else {

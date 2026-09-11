@@ -8,16 +8,14 @@ pub async fn data(s: &super::Services, input: &ChartRequest) -> Result<Value> {
     if !matches!(input.market.as_str(), "usd_m" | "coin_m") {
         return Err(Error::bad("contract_market_required"));
     }
-    let seconds = super::history::interval_seconds(&input.interval)?;
+    let iv = super::history::interval_of(&input.interval)?;
     if input
         .match_end_at
         .is_some_and(|at| at <= input.start_at || at > input.end_at)
     {
         return Err(Error::bad("invalid_match_boundary"));
     }
-    if input.start_at >= input.end_at
-        || (input.end_at - input.start_at).num_seconds() / seconds > 2000
-    {
+    if input.start_at >= input.end_at || iv.bars_between(input.start_at, input.end_at) > 2000 {
         return Err(Error::bad("interactive_market_limit_2000_bars"));
     }
     let mut result = if input.source == scorebook_core::market::HistorySource::MonthlyArchive {

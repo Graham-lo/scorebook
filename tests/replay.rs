@@ -60,20 +60,16 @@ impl MarketDataProvider for Recorder {
     ) -> scorebook::application::ports::ProviderFuture<'a> {
         self.klines.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
-            let seconds = match tf {
-                "1d" => 86400,
-                "4h" => 14400,
-                "1h" => 3600,
-                "15m" => 900,
-                _ => 60,
-            };
+            // 周期表只有 domain::interval 一份，测试替身也走它，月线才会按日历走。
+            let iv = scorebook_core::domain::interval::Interval::exact(tf).unwrap();
             let mut at = start;
             let mut bars = vec![];
-            while at + Duration::seconds(seconds) <= end {
+            while iv.add_bars(at, 1) <= end {
+                let to = iv.add_bars(at, 1);
                 bars.push(
-                    json!({"start":at,"end":at+Duration::seconds(seconds),"open":"100","high":"101","low":"99","close":"100"}),
+                    json!({"start":at,"end":to,"open":"100","high":"101","low":"99","close":"100"}),
                 );
-                at += Duration::seconds(seconds);
+                at = to;
             }
             Ok(json!({"bars":bars,"coverage_complete":true}))
         })
@@ -435,6 +431,39 @@ async fn levels_are_the_numbers_settlement_judges_against() {
     let _: scorebook_core::domain::criteria::Criteria = c;
     assert!(touch("102"));
     assert!(!touch("101.999"));
+}
+
+/// 判断时刻前 120 根 / 2000 根封顶的窗口算术，对新周期同样成立：30m 是用户的真实
+/// 场景，1w 必须开在周一，1M 必须按日历月。
+#[tokio::test]
+async fn the_stage_window_is_counted_in_bars_for_every_interval() {
+    let (s, o, _, _tmp) = setup().await;
+    let s = s.with_market(Recorder::new());
+    for iv in scorebook_core::domain::interval::ALL {
+        let mut body = call_body(json!([]));
+        body.timeframe = Some(iv.as_str().into());
+        let saved = calls::create(&s, o, &format!("tf-{}", iv.as_str()), body)
+            .await
+            .unwrap();
+        let id: Uuid = serde_json::from_value(saved["id"].clone()).unwrap();
+        let v = replay::get(&s, o, id).await.unwrap();
+        assert_eq!(v["interval"], iv.as_str());
+        let start: DateTime<Utc> = serde_json::from_value(v["window"]["start_at"].clone()).unwrap();
+        let end: DateTime<Utc> = serde_json::from_value(v["window"]["end_at"].clone()).unwrap();
+        // 起点终点都落在本周期的开盘时刻上。
+        assert_eq!(iv.floor(start), start, "{} start", iv.as_str());
+        assert_eq!(iv.floor(end), end, "{} end", iv.as_str());
+        if iv == scorebook_core::domain::interval::Interval::W1 {
+            assert_eq!(start.format("%u").to_string(), "1", "周线必须开在周一 UTC");
+        }
+        if iv == scorebook_core::domain::interval::Interval::Mo1 {
+            assert_eq!(start.format("%d %H:%M").to_string(), "01 00:00");
+        }
+        // 判断时刻前 120 根，未来的部分按 min(now, ...) 截断，所以只断言不超过。
+        let before = v["window"]["bars_before"].as_i64().unwrap();
+        assert_eq!(before, 120, "{} bars_before", iv.as_str());
+        assert!(iv.bars_between(start, end) <= 2000, "{}", iv.as_str());
+    }
 }
 
 #[tokio::test]

@@ -191,20 +191,15 @@ pub async fn advance(
                 .interval_seconds
                 .unwrap_or(60),
         );
-        let interval = match period {
-            60 => "1m",
-            300 => "5m",
-            900 => "15m",
-            3600 => "1h",
-            14400 => "4h",
-            86400 => "1d",
-            _ => {
-                return Err(Error::deferred(
-                    "trigger_interval_not_supported",
-                    RetryDirective::AwaitInput,
-                ));
-            }
-        };
+        // `trigger.interval_seconds` 只有秒数，所以这条路径只支持固定长度周期：
+        // 3m/30m/2h/6h/8h/12h/3d/1w 现在都能触发，月线（1M）没有固定秒数，永远查不
+        // 到，按原错误码 `trigger_interval_not_supported` 拒绝。周期表仍只有
+        // domain::interval 一份。
+        let interval = scorebook_core::domain::interval::Interval::from_fixed_seconds(period)
+            .ok_or_else(|| {
+                Error::deferred("trigger_interval_not_supported", RetryDirective::AwaitInput)
+            })?
+            .as_str();
         let start = second(w.through, period);
         let end = second(target, period).min(start + Duration::seconds(period * 500));
         if end > start {

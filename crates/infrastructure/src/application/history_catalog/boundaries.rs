@@ -91,13 +91,9 @@ pub async fn resolve(
             json!({"identity":"declared_range_without_catalog_boundaries","closed_bar_coverage":"verified_by_each_range"})
         }
     };
-    let seconds = super::super::history::interval_seconds(tf)?;
-    start = DateTime::from_timestamp(
-        (start.timestamp() + seconds - 1).div_euclid(seconds) * seconds,
-        0,
-    )
-    .unwrap();
-    end = DateTime::from_timestamp(end.timestamp().div_euclid(seconds) * seconds, 0).unwrap();
+    let iv = super::super::history::interval_of(tf)?;
+    start = iv.ceil(start);
+    end = iv.floor(end);
     let scope = Scope {
         start_at: start,
         end_at: end,

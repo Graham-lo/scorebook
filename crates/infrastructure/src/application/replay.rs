@@ -17,6 +17,7 @@ use crate::{
     error::{Error, Result},
 };
 use chrono::{DateTime, Duration, Utc};
+use scorebook_core::domain::interval::Interval;
 use scorebook_core::{
     api::replay::{AttachmentLocation, ChartSetup},
     market::HistorySource,
@@ -75,25 +76,20 @@ fn source_name(source: &HistorySource) -> &'static str {
 
 /// Binance interval for a record's timeframe. Nothing is invented: an unknown
 /// timeframe is refused instead of silently redrawn at another scale.
+///
+/// 别名解析在 `Interval::parse` 里（唯一真相源），这里只把它归一化成币安官方写法，
+/// 并保留本接口原有的错误码。
 pub fn interval_for(timeframe: Option<&str>) -> Result<String> {
-    let tf = timeframe
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| Error::bad("replay_interval_unsupported"))?;
-    let mapped = match tf.to_ascii_lowercase().as_str() {
-        "1m" | "m1" | "60s" => "1m",
-        "5m" | "m5" => "5m",
-        "15m" | "m15" => "15m",
-        "1h" | "h1" | "60m" => "1h",
-        "4h" | "h4" | "240m" => "4h",
-        "1d" | "d1" | "d" | "1day" => "1d",
-        _ => return Err(Error::bad("replay_interval_unsupported")),
-    };
-    Ok(mapped.into())
+    Ok(interval_of(timeframe)?.as_str().into())
 }
 
-pub fn floor_at(t: DateTime<Utc>, seconds: i64) -> DateTime<Utc> {
-    DateTime::from_timestamp(t.timestamp().div_euclid(seconds) * seconds, 0).unwrap_or(t)
+/// 同上，但直接给出周期本身，供窗口算术使用。
+pub fn interval_of(timeframe: Option<&str>) -> Result<Interval> {
+    timeframe
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .and_then(|v| Interval::parse(v).ok())
+        .ok_or_else(|| Error::bad("replay_interval_unsupported"))
 }
 
 pub async fn put_location(
@@ -109,7 +105,7 @@ pub async fn put_location(
     if !valid_symbol(&input.symbol) {
         return Err(Error::bad("invalid_symbol"));
     }
-    super::history::interval_seconds(&input.interval)?;
+    super::history::interval_of(&input.interval)?;
     if input.start_at >= input.end_at {
         return Err(Error::bad("invalid_location_window"));
     }
@@ -250,8 +246,7 @@ struct Plan {
     call: Uuid,
     symbol: String,
     market: String,
-    interval: String,
-    seconds: i64,
+    iv: Interval,
     source: HistorySource,
     judgment: DateTime<Utc>,
     start: DateTime<Utc>,
@@ -289,8 +284,8 @@ async fn plan(s: &Services, owner: Uuid, call: Uuid) -> Result<Plan> {
         return Err(Error::conflict("replay_needs_instrument"));
     }
     let timeframe: Option<String> = row.get("timeframe");
-    let interval = interval_for(timeframe.as_deref())?;
-    let seconds = super::history::interval_seconds(&interval)?;
+    let iv = interval_of(timeframe.as_deref())?;
+    let interval = iv.as_str();
     let judgment: DateTime<Utc> = body["original_claimed_at"]
         .as_str()
         .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
@@ -356,14 +351,14 @@ async fn plan(s: &Services, owner: Uuid, call: Uuid) -> Result<Plan> {
     .fetch_optional(&s.db.pool)
     .await?;
     let located =
-        located.filter(|(sy, mk, iv, _, _)| *sy == symbol && *mk == market && *iv == interval);
+        located.filter(|(sy, mk, tf, _, _)| *sy == symbol && *mk == market && *tf == interval);
     let source = match located.as_ref().map(|(_, _, _, _, src)| src.as_str()) {
         Some("monthly_archive") => HistorySource::MonthlyArchive,
         _ => HistorySource::Rest,
     };
     let start = match located.as_ref() {
-        Some((_, _, _, at, _)) => floor_at(*at, seconds),
-        None => floor_at(judgment, seconds) - Duration::seconds(DEFAULT_BARS_BEFORE * seconds),
+        Some((_, _, _, at, _)) => iv.floor(*at),
+        None => iv.add_bars(iv.floor(judgment), -DEFAULT_BARS_BEFORE),
     };
     let marks_end = marks
         .as_ref()
@@ -375,22 +370,21 @@ async fn plan(s: &Services, owner: Uuid, call: Uuid) -> Result<Plan> {
         .or_else(|| l.trigger.as_ref().map(|t| t.window_end_at));
     let wanted = marks_end
         .or(horizon)
-        .unwrap_or(judgment + Duration::seconds(DEFAULT_BARS_AFTER * seconds));
-    let mut end = floor_at(wanted.min(Utc::now()), seconds);
+        .unwrap_or(iv.add_bars(judgment, DEFAULT_BARS_AFTER));
+    let mut end = iv.floor(wanted.min(Utc::now()));
     if end <= start {
-        end = start + Duration::seconds(seconds);
+        end = iv.add_bars(start, 1);
     }
     let mut truncated = false;
-    if (end - start).num_seconds() / seconds > MAX_BARS {
-        end = start + Duration::seconds(MAX_BARS * seconds);
+    if iv.bars_between(start, end) > MAX_BARS {
+        end = iv.add_bars(start, MAX_BARS);
         truncated = true;
     }
     Ok(Plan {
         call,
         symbol,
         market,
-        interval,
-        seconds,
+        iv,
         source,
         judgment,
         start,
@@ -412,7 +406,7 @@ struct Cached {
 
 async fn cached(s: &Services, p: &Plan) -> Result<Vec<Cached>> {
     let rows = sqlx::query("SELECT bar_start,bar_end,open,high,low,close,source FROM replay_bars WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5 AND expires_at>now() ORDER BY bar_start")
-        .bind(&p.market).bind(&p.symbol).bind(&p.interval).bind(p.start).bind(p.end).fetch_all(&s.db.pool).await?;
+        .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(p.start).bind(p.end).fetch_all(&s.db.pool).await?;
     Ok(rows
         .iter()
         .map(|r| Cached {
@@ -439,7 +433,7 @@ async fn fetch(
         source,
         symbol: p.symbol.clone(),
         market: p.market.clone(),
-        interval: p.interval.clone(),
+        interval: p.iv.as_str().into(),
         start_at: from,
         end_at: to,
         match_end_at: None,
@@ -475,7 +469,7 @@ async fn store(s: &Services, p: &Plan, bars: &[Bar], source: &str) -> Result<()>
         FROM UNNEST($5::timestamptz[],$6::timestamptz[],$7::text[],$8::text[],$9::text[],$10::text[]) AS t(s,e,o,h,l,c)
         ON CONFLICT(market,symbol,interval,bar_start) DO UPDATE SET bar_end=EXCLUDED.bar_end,open=EXCLUDED.open,high=EXCLUDED.high,
         low=EXCLUDED.low,close=EXCLUDED.close,source=EXCLUDED.source,fetched_at=now(),expires_at=EXCLUDED.expires_at"#)
-        .bind(&p.market).bind(&p.symbol).bind(&p.interval).bind(source)
+        .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(source)
         .bind(&starts).bind(&ends).bind(&open).bind(&high).bind(&low).bind(&close)
         .bind(CACHE_HOURS as i32)
         .execute(&s.db.pool).await?;
@@ -506,7 +500,7 @@ fn extreme_at(bars: &[Bar], from: DateTime<Utc>, to: DateTime<Utc>, high: bool) 
 
 pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
     let p = plan(s, owner, call).await?;
-    let expected = ((p.end - p.start).num_seconds() / p.seconds).max(0);
+    let expected = p.iv.bars_between(p.start, p.end).max(0);
     let mut have = cached(s, &p).await?;
     let mut source = have
         .first()
@@ -516,13 +510,14 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
         // One merged range covers every hole; the window is at most 2000 bars.
         let present: std::collections::HashSet<i64> =
             have.iter().map(|c| c.bar.start.timestamp()).collect();
-        let missing: Vec<i64> = (0..expected)
-            .map(|k| p.start.timestamp() + k * p.seconds)
-            .filter(|t| !present.contains(t))
+        // 每根的开盘时刻按周期自己走，月线是日历月，不能用等差秒数铺。
+        let missing: Vec<DateTime<Utc>> = (0..expected)
+            .map(|k| p.iv.add_bars(p.start, k))
+            .filter(|t| !present.contains(&t.timestamp()))
             .collect();
         if let (Some(first), Some(last)) = (missing.first(), missing.last()) {
-            let from = DateTime::from_timestamp(*first, 0).unwrap_or(p.start);
-            let to = DateTime::from_timestamp(last + p.seconds, 0).unwrap_or(p.end);
+            let from = *first;
+            let to = p.iv.add_bars(*last, 1);
             let (bars, used) = fetch(s, &p, from, to).await?;
             source = source_name(&used).into();
             store(s, &p, &bars, &source).await?;
@@ -543,15 +538,14 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
     }
     // A cache hit still keeps the window alive for the rest of the session.
     sqlx::query("UPDATE replay_bars SET expires_at=now()+make_interval(hours=>$6::int) WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5")
-        .bind(&p.market).bind(&p.symbol).bind(&p.interval).bind(p.start).bind(p.end).bind(CACHE_HOURS as i32)
+        .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(p.start).bind(p.end).bind(CACHE_HOURS as i32)
         .execute(&s.db.pool).await?;
     let bars: Vec<Bar> = have.into_iter().map(|c| c.bar).collect();
     let coverage_complete = (bars.len() as i64) == expected
         && bars.first().is_some_and(|b| b.start == p.start)
         && bars.last().is_some_and(|b| b.end == p.end)
         && bars.windows(2).all(|w| w[0].end == w[1].start);
-    let bars_before =
-        ((floor_at(p.judgment, p.seconds) - p.start).num_seconds() / p.seconds).max(0);
+    let bars_before = p.iv.bars_between(p.start, p.iv.floor(p.judgment)).max(0);
 
     let short = p.criteria.direction.as_deref() == Some("S")
         && matches!(
@@ -595,7 +589,7 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
         "call_id":p.call,
         "symbol":p.symbol,
         "market":p.market,
-        "interval":p.interval,
+        "interval":p.iv.as_str(),
         "source":source,
         "window":{"start_at":p.start,"end_at":p.end,"bars_before":bars_before,"truncated":p.truncated,"coverage_complete":coverage_complete},
         "judgment":{"at":p.judgment,"base_price":p.base,"atr0":p.atr0},
@@ -612,7 +606,7 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
 pub async fn clear(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
     let p = plan(s, owner, call).await?;
     let removed = sqlx::query("DELETE FROM replay_bars WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5")
-        .bind(&p.market).bind(&p.symbol).bind(&p.interval).bind(p.start).bind(p.end)
+        .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(p.start).bind(p.end)
         .execute(&s.db.pool).await?.rows_affected();
     Ok(json!({"call_id":call,"deleted":removed}))
 }

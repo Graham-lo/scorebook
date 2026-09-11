@@ -52,15 +52,14 @@ fn groups(items: Vec<Value>) -> Result<Vec<Group>> {
     rows.sort_by_key(|(r, _)| key(r));
     let mut groups: Vec<Group> = Vec::new();
     for (r, item) in rows {
-        let seconds = super::super::history::interval_seconds(&r.interval)?;
+        let iv = super::super::history::interval_of(&r.interval)?;
         if let Some(last) = groups.last_mut().filter(|g| {
             g.request.source == r.source
                 && g.request.market == r.market
                 && g.request.symbol == r.symbol
                 && g.request.interval == r.interval
                 && r.start_at <= g.request.end_at
-                && (r.end_at.max(g.request.end_at) - g.request.start_at).num_seconds() / seconds
-                    <= 2000
+                && iv.bars_between(g.request.start_at, r.end_at.max(g.request.end_at)) <= 2000
         }) {
             last.request.end_at = last.request.end_at.max(r.end_at);
             last.items.push(item);

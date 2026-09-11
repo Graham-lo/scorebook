@@ -1764,7 +1764,8 @@ async fn screenshot_search_requires_period_before_creating_any_job() {
             Some(json!(null)),
             Some(json!("")),
             Some(json!(" ")),
-            Some(json!("2h")),
+            // 2h 现在是受支持的周期了；这里要的是一个币安根本没有的周期。
+            Some(json!("3h")),
         ] {
             let mut body = json!({"attachment_id":attachment,"scope":scope});
             if let Some(value) = period {
@@ -1780,7 +1781,7 @@ async fn screenshot_search_requires_period_before_creating_any_job() {
             .unwrap_err();
             assert_eq!(
                 error.code,
-                if body["interval"] == "2h" {
+                if body["interval"] == "3h" {
                     "unsupported_interval"
                 } else {
                     "chart_interval_required"

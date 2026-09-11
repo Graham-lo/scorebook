@@ -56,9 +56,16 @@ pub async fn evidence(
         for word in obs.text.split(|c: char| {
             !c.is_ascii_alphanumeric() && !scorebook_core::domain::instrument::symbol_character(c)
         }) {
-            let tf = word.to_lowercase();
-            if ["1m", "5m", "15m", "1h", "4h", "1d"].contains(&tf.as_str()) {
-                intervals.insert(tf);
+            // 周期白名单只有 domain::interval 一份。先按原样精确匹配，`1M`（月线）
+            // 才不会被当成 `1m`（分钟线）；匹配不上再退一步做大小写不敏感匹配，
+            // 这样截图上的 `1D`/`30M` 也能认出来。别名不在这里放行：OCR 噪声里
+            // 单个 `d`、`w` 太容易误判成周期。
+            let canonical =
+                scorebook_core::domain::interval::Interval::from_binance(word).or_else(|| {
+                    scorebook_core::domain::interval::Interval::from_binance(&word.to_lowercase())
+                });
+            if let Some(iv) = canonical {
+                intervals.insert(iv.as_str().to_string());
             }
             if word.chars().count() >= 5 && scorebook_core::domain::instrument::valid_symbol(word) {
                 symbols.insert(word.to_string());
