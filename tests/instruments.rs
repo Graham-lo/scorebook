@@ -11,10 +11,14 @@ impl ports::MarketDataProvider for Catalog {
     fn tickers_24h<'a>(&'a self, _: &'a str) -> ports::ProviderFuture<'a> {
         Box::pin(async {
             Ok(json!([
-                {"symbol":"DELISTEDUSDT","quoteVolume":"9999999999"},
-                {"symbol":"BTCUSDT","quoteVolume":"100000000"},
-                {"symbol":"MUUSDT","quoteVolume":"20000000"},
-                {"symbol":"ARKMUSDT","quoteVolume":"1000"}
+                // 热度（`count`，24h 成交笔数）与成交额同向，名单顺序只由这里的
+                // 大小决定：这个用例要看的是简称怎么排、分页接不接得上，不是排序
+                // 本身——两项各自的名次怎么合成，在 instrument_popularity 的单元
+                // 测试里验。
+                {"symbol":"DELISTEDUSDT","quoteVolume":"9999999999","count":9999999},
+                {"symbol":"BTCUSDT","quoteVolume":"100000000","count":500000},
+                {"symbol":"MUUSDT","quoteVolume":"20000000","count":200000},
+                {"symbol":"ARKMUSDT","quoteVolume":"1000","count":10}
             ]))
         })
     }
@@ -227,7 +231,7 @@ async fn an_unreachable_exchange_still_lets_the_trader_pick_an_instrument() {
         .await
         .unwrap();
     assert_eq!(live["source"], "binance_contract_exchange_info");
-    assert_eq!(live["ordering"], "trading_then_24h_quote_turnover");
+    assert_eq!(live["ordering"], "trading_then_24h_turnover_and_trade_count");
     assert!(live["refreshed_at"].is_string());
 
     // 刷新失败不清空目录：上一次成功的那份原样留着。

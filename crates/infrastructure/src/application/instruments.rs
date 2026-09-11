@@ -105,7 +105,7 @@ pub async fn list(s: &Services, f: InstrumentFilter) -> Result<Value> {
         None
     };
     let ordering = match (popular, degraded) {
-        (true, false) => "trading_then_24h_quote_turnover",
+        (true, false) => "trading_then_24h_turnover_and_trade_count",
         (true, true) => "trading_then_symbol",
         (false, _) => "exact_symbol_then_base_asset_then_prefix_then_contains",
     };
