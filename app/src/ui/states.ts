@@ -88,6 +88,26 @@ export function unavailable(title: string, why: string): HTMLElement {
  * 注意它收的只是「解释」，不收数据缺口和检索范围——那两样任何时候都摆在外面。
  */
 export function foldout(title: string, ...children: Child[]): HTMLElement {
+  return fold(null, title, children)
+}
+
+/** 记过名的那几段，开着还是收着。只在这一次会话里有效，不落盘。 */
+const KEPT = new Map<string, boolean>()
+
+/**
+ * 记名字的折叠区：同一个 key 的那一段被重画之后，还是原来的开合状态。
+ *
+ * 「按图找」那一页改一个筛选就要把整个查询栏重画一遍（上一次的结果得跟着作废），
+ * 重画出来的折叠区是新的，默认收着。于是连着调两个筛选，中间要再把这一段点开
+ * 一次。开合是人刚刚做的动作，不是从数据算出来的，重画不该把它抹掉。
+ *
+ * 只有点名要记的地方才记——不记名的 foldout 一律照旧收着进场。
+ */
+export function keptFoldout(key: string, title: string, ...children: Child[]): HTMLElement {
+  return fold(key, title, children)
+}
+
+function fold(key: string | null, title: string, children: Child[]): HTMLElement {
   const body = h('div.fold-b')
   append(body, children)
   const wrap = h('div.fold-w', { hidden: true }, body)
@@ -96,6 +116,7 @@ export function foldout(title: string, ...children: Child[]): HTMLElement {
   let open = false
   head.addEventListener('click', () => {
     open = !open
+    if (key) KEPT.set(key, open)
     head.setAttribute('aria-expanded', String(open))
     head.classList.toggle('on', open)
     // hidden 要先撤掉才能量到高度；收起来时等动画结束再挂回去，免得读屏在中途
@@ -121,5 +142,16 @@ export function foldout(title: string, ...children: Child[]): HTMLElement {
       window.setTimeout(() => { if (!open) wrap.hidden = true }, 240)
     }
   })
+  // 重画之前它是开着的：直接以开着的样子进场，不补一遍展开动画——那不是人刚
+  // 按下去的动作，只是同一段东西又画了一次。done 要一起挂上，否则里面的下拉
+  // 菜单会被 overflow 齐腰切掉。
+  if (key && KEPT.get(key)) {
+    open = true
+    head.setAttribute('aria-expanded', 'true')
+    head.classList.add('on')
+    wrap.hidden = false
+    wrap.style.height = 'auto'
+    wrap.classList.add('done')
+  }
   return h('div.fold', {}, head, wrap)
 }

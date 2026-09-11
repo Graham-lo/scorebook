@@ -7,7 +7,7 @@
 import type { Market } from '../../api/types'
 import { INTERVALS, MARKET_LABELS, capabilityState, findInstruments, qualityAccepted } from '../../data/session'
 import { h } from '../../ui/dom'
-import { foldout, note } from '../../ui/states'
+import { keptFoldout, note } from '../../ui/states'
 import { popChip, type PopItem } from '../../ui/pop'
 import { analysisSection } from './analysis'
 import { HIT_CHOICES, MAX_HITS, forgetAnalysis, period, state, moving, type SearchCtx } from './state'
@@ -47,8 +47,10 @@ export function controls(ctx: SearchCtx): HTMLElement {
   // 能力没配好、质量没验收，这些是限制不是解释，任何时候都摆在外面。
   for (const line of missingCapabilities()) box.appendChild(note('warn', line))
 
+  // 这一段要记住开合：改一个筛选就要重画整个查询栏（上一次的结果得跟着作废），
+  // 重画出来的折叠区默认收着，连着调两个筛选中间就得再点开一次。
   box.appendChild(
-    foldout('认图、筛选品种、上下翻转', analysisSection(ctx), filterRow(ctx), directionRow(ctx)),
+    keptFoldout('search-more', '认图、筛选品种、上下翻转', analysisSection(ctx), filterRow(ctx), directionRow(ctx)),
   )
   return box
 }
