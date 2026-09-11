@@ -14,6 +14,7 @@ use uuid::Uuid;
 pub mod archives;
 pub mod boundaries;
 pub mod subscriptions;
+pub mod universe;
 pub fn validate_symbol(symbol: &str) -> Result<()> {
     if !scorebook_core::domain::instrument::valid_symbol(symbol) {
         return Err(Error::bad("invalid_contract"));

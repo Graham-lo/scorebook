@@ -18,6 +18,7 @@ pub async fn enqueue_tx(
         "history.index"
         | "history.plan"
         | "history.subscription"
+        | "history.universe"
         | "trade.project"
         | "trade.sync"
         | "trade.export"
@@ -309,6 +310,7 @@ async fn execute(s: &Services, j: &Job) -> Result<Value> {
         "history.index" => super::history::build(s, j).await,
         "history.plan" => super::history_plans::step(s, j).await,
         "history.subscription" => super::history_catalog::subscriptions::step(s, j).await,
+        "history.universe" => super::history_catalog::universe::step(s, j).await,
         "history.catalog" => super::history_catalog::refresh(s).await,
         "statistics.build" => super::statistics::snapshot::build(s, j).await,
         "baseline.build" => super::statistics::baseline::build(s, j).await,

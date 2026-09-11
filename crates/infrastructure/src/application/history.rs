@@ -159,6 +159,35 @@ pub async fn covered(
     Ok(found as usize == LOCATE_WINDOWS.len())
 }
 
+/// 这一段在哪几档窗口上已经打过永久标记。`covered` 问的是「三档齐不齐」，归档扇出
+/// 还需要知道缺的是**哪一档**：一段太短放不下 256 根时，那一档是永远补不上的，不该
+/// 因为它缺着就把整段月档重下一遍。
+pub async fn covered_windows(
+    s: &Services,
+    market: &str,
+    symbol: &str,
+    interval: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<i32>> {
+    let sizes: Vec<i32> = LOCATE_WINDOWS.iter().map(|v| *v as i32).collect();
+    Ok(sqlx::query_scalar("SELECT DISTINCT (g.body->>'window_bars')::int FROM public_market.coverage_segments c JOIN public_market.generations g ON g.id=c.generation_id WHERE c.market=$1 AND c.symbol=$2 AND c.timeframe=$3 AND c.status='complete' AND c.start_at<=$4 AND c.end_at>=$5 AND (g.body->>'window_bars')::int=ANY($6)")
+        .bind(market).bind(symbol).bind(interval).bind(start).bind(end).bind(&sizes)
+        .fetch_all(&s.db.pool).await?)
+}
+
+/// 解析一个请求体对应的世代，不下载、不索引。归档扇出一次下载的 bars 要同时喂给三档
+/// 窗口，走不了 `index_range` 那条「每个请求自己再拉一次行情」的路（同一个月档会被下
+/// 三遍以上），只能先拿到世代再直接调 `index_generation`。世代键仍然是请求体本身，与
+/// `POST /v1/history/indexes` 完全一致，所以同一段范围两边算出来是同一个世代。
+pub async fn generation_of(s: &Services, input: &HistoryIndexRequest) -> Result<Uuid> {
+    validate(input)?;
+    Ok(sqlx::query_scalar(GENERATION)
+        .bind(json!(input))
+        .fetch_one(&s.db.pool)
+        .await?)
+}
+
 /// Index one bounded range from inside a job that is not a `history.index` job,
 /// so there is no `history_indexes` row to hang it on. Everything else is the
 /// path `POST /v1/history/indexes` takes: the same generation key, the same
