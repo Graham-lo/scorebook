@@ -1,5 +1,5 @@
 import type { Market, Region } from '../../api/types'
-import { SEARCH_PERIODS, type SearchPeriod } from './query-period'
+import { ANY_PERIOD, SEARCH_PERIODS, type PeriodChoice } from './query-period'
 
 /** Only query references and settings. Never screenshots, answers, or market bytes. */
 export interface SearchCheckpoint {
@@ -7,7 +7,8 @@ export interface SearchCheckpoint {
   queryName: string
   scope: 'private' | 'binance_history'
   region: Region | null
-  interval: SearchPeriod | null
+  /** 具体周期、「不限周期」，或者还没选。 */
+  interval: PeriodChoice | null
   symbol: string | null
   market: Market | null
   redUp: boolean
@@ -22,7 +23,7 @@ export function readCheckpoint(raw: string | null): SearchCheckpoint | null {
     const uuid = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)
     if (!v || !uuid(v.queryId) || (v.runId !== null && !uuid(v.runId))) return null
     if (!['private', 'binance_history'].includes(v.scope) || typeof v.queryName !== 'string') return null
-    if (v.interval !== null && !SEARCH_PERIODS.includes(v.interval)) return null
+    if (v.interval !== null && v.interval !== ANY_PERIOD && !SEARCH_PERIODS.includes(v.interval)) return null
     if (v.runId && !v.interval) return null
     if (v.market !== null && !['usd_m', 'coin_m'].includes(v.market)) return null
     if (v.symbol !== null && (typeof v.symbol !== 'string' || v.symbol.length > 100)) return null

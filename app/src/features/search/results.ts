@@ -93,6 +93,17 @@ export function paintResults(ctx: SearchCtx): void {
   paintFinal(ctx, result, run)
 }
 
+/** 这次到底按不按周期筛。`interval` 为 null 有两种可能，得看策略才分得清。 */
+function anyInterval(result: FinalResult): boolean {
+  return result.interval_policy === 'any_interval'
+}
+
+/** 结果头上那一句里的周期：不限、某个周期，或者旧检索根本没记。 */
+function periodLabel(result: FinalResult): string {
+  if (anyInterval(result)) return '不限周期'
+  return result.interval ?? '旧检索未限定周期'
+}
+
 function paintFinal(ctx: SearchCtx, result: FinalResult, run: ChartSearchRun): void {
   const pane = ctx.resultPane
   const items = result.items ?? []
@@ -101,9 +112,11 @@ function paintFinal(ctx: SearchCtx, result: FinalResult, run: ChartSearchRun): v
       empty({
         title: '没有找到结构接近的片段',
         tip:
-          result.scope === 'private'
-            ? '只有已经算过特征的现场截图才会被搜到。可放宽品种范围，或补全记录周期并等待截图索引；不会改用其他周期。'
-            : '只在已经准备好并发布的范围里找。换个条件，或者先把更多时间段准备出来。',
+          result.scope !== 'private'
+            ? '只在已经准备好并发布的范围里找。换个条件，或者先把更多时间段准备出来。'
+            : anyInterval(result)
+              ? '只有已经算过特征的现场截图才会被搜到。这次已经不按周期筛了，还是没有形状接近的；放宽品种范围，或者等更多截图索引出来。'
+              : '只有已经算过特征的现场截图才会被搜到。可放宽品种范围，或补全记录周期并等待截图索引；不会改用其他周期。'
       }),
     )
   } else {
@@ -115,7 +128,7 @@ function paintFinal(ctx: SearchCtx, result: FinalResult, run: ChartSearchRun): v
           text: result.scope === 'private' ? '画面接近的记录' : '历史上结构接近的片段',
         }),
         h('span.faint', {
-          text: `${result.interval ?? '旧检索未限定周期'} · ${items.length} 条 · ${dateTime(run.completed_at ?? run.created_at)} 完成`,
+          text: `${periodLabel(result)} · ${items.length} 条 · ${dateTime(run.completed_at ?? run.created_at)} 完成`,
         }),
       ),
       hitList(ctx, items, true),
@@ -123,9 +136,13 @@ function paintFinal(ctx: SearchCtx, result: FinalResult, run: ChartSearchRun): v
     pane.appendChild(
       note(
         'info',
-        result.scope === 'binance_history'
-          ? '只比较同周期，每个品种保留最接近的一个片段。结构接近程度不是胜率。'
-          : '只比较同周期的记录，同一张截图和同一组记录只留最接近的那一条。结构接近程度不是胜率。',
+        anyInterval(result)
+          ? result.scope === 'binance_history'
+            ? '这次不按周期筛，只比形状：命中的片段各自是什么周期，看每一条自己写的。每个品种保留最接近的一个片段。结构接近程度不是胜率。'
+            : '这次不按周期筛，只比形状：命中的记录各自是什么周期，看每一条自己写的，没注明周期的记录也在里面。同一张截图和同一组记录只留最接近的那一条。结构接近程度不是胜率。'
+          : result.scope === 'binance_history'
+            ? '只比较同周期，每个品种保留最接近的一个片段。结构接近程度不是胜率。'
+            : '只比较同周期的记录，同一张截图和同一组记录只留最接近的那一条。结构接近程度不是胜率。',
       ),
     )
   }
@@ -180,7 +197,14 @@ function excludeReason(reason: string): string {
 function metaPane(result: FinalResult): HTMLElement {
   const kv = h('div.kv', { style: 'padding:6px 18px 14px' })
   kv.appendChild(kvRow('跟谁比的', result.scope === 'private' ? '我自己的现场截图' : '币安公开历史'))
-  kv.appendChild(kvRow('匹配周期', result.interval ?? '旧检索未限定周期，请重新选择周期搜索'))
+  kv.appendChild(
+    kvRow(
+      '匹配周期',
+      anyInterval(result)
+        ? '不限周期：只比形状，命中的周期看每一条自己写的'
+        : (result.interval ?? '旧检索未限定周期，请重新选择周期搜索'),
+    ),
+  )
   kv.appendChild(
     kvRow(
       '只看这个时刻之前',

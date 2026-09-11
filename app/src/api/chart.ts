@@ -86,7 +86,10 @@ export interface ChartSearchInput {
   /** 只对公开历史有意义；私库按记录自己的品种筛。 */
   symbol?: string
   market?: Market
-  interval: string
+  /** 选了具体周期就写它；`any_interval` 时必须是 null。 */
+  interval: string | null
+  /** 缺省 `same_interval`：不写就是老的同周期口径。 */
+  interval_policy?: 'same_interval' | 'any_interval'
   /** 只看这个时刻之前的历史。不填就是现在。 */
   cutoff_at?: Instant
   /** 反向匹配（把走势上下翻过来比）。默认关闭，要人自己选。 */
@@ -152,6 +155,8 @@ export interface PrivateCandidate extends CandidateCommon {
   call_id: Uuid
   group_id: string
   source_uri: string
+  /** 这条记录自己写的周期；记录上没写就是 null。 */
+  interval?: string | null
   ann_distance?: number
 }
 
@@ -178,8 +183,9 @@ export interface ProvisionalResult {
 
 /** 最终结果。到这一步才做完来源哈希核验和几何精排。 */
 export interface FinalResult {
-  interval?: string
-  interval_policy?: 'same_interval_only'
+  /** 不限周期时是 null；旧检索也可能没有这个字段。 */
+  interval?: string | null
+  interval_policy?: 'same_interval_only' | 'any_interval'
   search_run_id: Uuid
   protocol: string
   status: 'final'

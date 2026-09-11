@@ -18,8 +18,8 @@ let pollingVersion = 0
 
 export async function runSearch(ctx: SearchCtx): Promise<void> {
   if (!state.queryId || state.submitting || (state.runId && (!state.run || moving(state.run.status)))) return
-  if (!period.value) {
-    problem('请先选择截图的 K 线周期；搜索只比较同周期。')
+  if (!period.chosen) {
+    problem('请先说清楚截图的 K 线周期，或者明说不限周期。')
     return
   }
   const input: ChartSearchInput = {
@@ -28,7 +28,10 @@ export async function runSearch(ctx: SearchCtx): Promise<void> {
     ...(state.region ? { region: state.region } : {}),
     ...(state.symbol ? { symbol: state.symbol } : {}),
     ...(state.market ? { market: state.market } : {}),
-    interval: period.value,
+    // 「不限」必须显式写出来：后端分不清「人选了不限」和「前端漏传周期」就
+    // 会把一次 422 变成一次全库检索。
+    interval: period.interval,
+    interval_policy: period.anyInterval ? 'any_interval' : 'same_interval',
     ...(state.reverse ? { reverse: true } : {}),
     ...(state.redUp ? { red_up: true } : {}),
     limit: Math.min(MAX_HITS, Math.max(1, state.limit)),

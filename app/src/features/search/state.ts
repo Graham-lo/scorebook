@@ -18,7 +18,7 @@ import type { ChartAnalysis, ChartSearchRun, SearchScope } from '../../api/chart
 import { Latest, WriteAction } from '../../api/http'
 import type { Market, Region, Uuid } from '../../api/types'
 import type { ChartView } from '../../ui/media'
-import { QueryPeriod } from './query-period'
+import { ANY_PERIOD, QueryPeriod } from './query-period'
 import { CHECKPOINT_KEY, readCheckpoint } from './checkpoint'
 
 /** 后端只收 1…30 条。 */
@@ -105,7 +105,9 @@ export function restoreSearch(): void {
     if (!saved) return
     const { interval, ...settings } = saved
     Object.assign(state, settings)
-    if (interval) period.select(interval)
+    if (interval === ANY_PERIOD) period.selectAny()
+    else if (interval) period.select(interval)
+    else period.reset()
     runFingerprint = state.runId ? queryFingerprint() : ''
   } catch { /* No stored session. */ }
 }

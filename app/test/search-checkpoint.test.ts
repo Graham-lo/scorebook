@@ -8,3 +8,7 @@ test('refresh restores the same task, period, source and ROI without market byte
 test('unscoped, malformed or unsupported saved tasks are not resumed', () => {
   for (const value of [null, { ...saved, interval: null }, { ...saved, interval: '7h' }, { ...saved, region: { x: -1, y: 0, width: 10, height: 10 } }]) assert.equal(readCheckpoint(JSON.stringify(value)), null)
 })
+test('an explicit any-interval choice survives the refresh too', () => {
+  const any = { ...saved, interval: 'any' }
+  assert.deepEqual(readCheckpoint(JSON.stringify(any)), any)
+})

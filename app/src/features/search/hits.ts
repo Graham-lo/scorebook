@@ -163,6 +163,8 @@ function privateHit(_ctx: SearchCtx, item: PrivateCandidate, index: number, rank
       {},
       ranked ? h('span.rank', { text: `#${index + 1}` }) : h('span.badge.wait', { text: '候选' }),
       h('span.faint', { text: '我写过的一条记录' }),
+      // 不限周期时命中的可能是别的周期，这条自己是哪个周期得写在脸上。
+      h('span', { text: item.interval ?? '未注明周期' }),
     ),
     matchLine(item),
     h(

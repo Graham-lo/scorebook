@@ -10,6 +10,7 @@ import { h } from '../../ui/dom'
 import { keptFoldout, note } from '../../ui/states'
 import { popChip, type PopItem } from '../../ui/pop'
 import { analysisSection } from './analysis'
+import { ANY_PERIOD } from './query-period'
 import { HIT_CHOICES, MAX_HITS, forgetAnalysis, period, state, moving, type SearchCtx } from './state'
 
 export function controls(ctx: SearchCtx): HTMLElement {
@@ -21,7 +22,7 @@ export function controls(ctx: SearchCtx): HTMLElement {
   const ocr = capabilityState('screenshot_ocr')
   const visual = capabilityState('image_visual_search')
   const blocked =
-    ocr !== 'ready' || (state.scope === 'private' && visual !== 'ready') || !state.queryId || !period.value || state.submitting || Boolean(state.runId && (!state.run || moving(state.run.status)))
+    ocr !== 'ready' || (state.scope === 'private' && visual !== 'ready') || !state.queryId || !period.chosen || state.submitting || Boolean(state.runId && (!state.run || moving(state.run.status)))
 
   const run = h('button.btn.primary.lg', {
     text: state.scope === 'private' ? '在我的记录里找' : '在公开历史里找',
@@ -34,7 +35,11 @@ export function controls(ctx: SearchCtx): HTMLElement {
       {},
       run,
       h('span.faint', {
-        text: period.value ? `只比较 ${period.value} K 线，不跨周期。` : '先确认截图的 K 线周期，再开始搜索。',
+        text: period.anyInterval
+          ? '不限周期：只比形状。1h 的截图可能配上 4h 的走势，也会带上没注明周期的记录。'
+          : period.interval
+            ? `只比较 ${period.interval} K 线，不跨周期。`
+            : '先确认截图的 K 线周期，再开始搜索。',
       }),
     ),
   )
@@ -118,11 +123,16 @@ function periodRow(ctx: SearchCtx): HTMLElement {
     ctx.repaintResults()
   }
   const chip = popChip({
-    label: () => period.value ?? '请选择周期',
-    active: () => Boolean(period.value),
-    items: () => INTERVALS.map((value) => ({ label: value, value, on: period.value === value })),
+    label: () => (period.anyInterval ? '不限周期' : (period.interval ?? '请选择周期')),
+    active: () => period.chosen,
+    items: () => [
+      ...INTERVALS.map((value) => ({ label: value, value, on: period.interval === value })),
+      // 它不是第 16 个周期，是「别按周期筛」，所以摆在周期们后面单列一项。
+      { label: '不限周期', value: ANY_PERIOD, hint: '只比形状', on: period.anyInterval },
+    ],
     onPick: (value) => {
-      period.select(value)
+      if (value === ANY_PERIOD) period.selectAny()
+      else period.select(value)
       repaint()
     },
     onClear: () => {
@@ -131,20 +141,22 @@ function periodRow(ctx: SearchCtx): HTMLElement {
     },
   })
   const suggested = period.suggestion(state.analysis?.recognized.interval)
-  const line = period.value
-    ? `本次只查找 ${period.value} 的走势。${state.scope === 'private' ? '未注明周期的记录不参与匹配。' : ''}`
-    : suggested
-      ? `图上识别到 ${suggested}，请确认后再搜索。`
-      : '截图周期尚未确定，请按图上显示的周期选择。不会从走势形状猜周期。'
+  const line = period.anyInterval
+    ? `不按周期筛，只比走势的形状：命中的可能是别的周期。${state.scope === 'private' ? '没注明周期的记录也会参与匹配。' : ''}`
+    : period.interval
+      ? `本次只查找 ${period.interval} 的走势。${state.scope === 'private' ? '未注明周期的记录不参与匹配。' : ''}`
+      : suggested
+        ? `图上识别到 ${suggested}，请确认后再搜索。`
+        : '截图周期尚未确定，请按图上显示的周期选择，或者明说不限周期。不会从走势形状猜周期。'
   return h(
     'div',
     {},
-    h('div.sh', { style: 'margin-bottom:9px' }, h('span.eyebrow.noline', { text: '截图周期 · 必选' })),
+    h('div.sh', { style: 'margin-bottom:9px' }, h('span.eyebrow.noline', { text: '截图周期 · 要选一个' })),
     h(
       'div.acts',
       {},
       chip.node,
-      suggested && !period.value
+      suggested && !period.chosen
         ? h('button.btn.sm', {
             text: `使用识别的 ${suggested}`,
             on: {
