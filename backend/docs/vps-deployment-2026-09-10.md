@@ -4,7 +4,7 @@
 
 ## 直接打开
 
-双击桌面的 [打开Scorebook_VPS.command](/Users/mdd/Desktop/打开Scorebook_VPS.command)，脚本会建立 SSH 隧道并打开浏览器。
+双击桌面的 [打开Scorebook_VPS.command](~/Desktop/打开Scorebook_VPS.command)，脚本会建立 SSH 隧道并打开浏览器。
 
 访问地址：[VPS 版 Scorebook](http://127.0.0.1:5179/#/home)。5179 是 VPS 版，5178 仍是 Mac 本地版。后端凭证不进入浏览器；当前使用 SSH 身份验证，没有公开到互联网的免登录入口。
 
@@ -38,7 +38,7 @@
 - 前端：7 项针对本轮修复的回归测试通过；TypeScript 与 Vite 构建通过。
 - BFF：同源代理、资产读取、凭证不暴露等测试通过。
 - VPS 真数据验收：明确使用币安官方月档，BTC / ETH、2026-08、4h。完成校验和与完整覆盖检查、Linux OCR、DINOv2 384 维与 BGE-M3 1024 维实际推理、周期必选、16 条几何特征建立、同周期匹配和两个不同品种结果的 SVG 重绘。
-- 验收结束立即删除临时库、截图和 16 条特征。回执只保留元数据：[VPS 验收回执](/Users/mdd/zhk/scorebook-backend/docs/vps-acceptance-2026-09-10.json)。这项测试不等同于真实用户截图盲测质量验收。
+- 验收结束立即删除临时库、截图和 16 条特征。回执只保留元数据：[VPS 验收回执](docs/vps-acceptance-2026-09-10.json)。这项测试不等同于真实用户截图盲测质量验收。
 
 ## 仍然受限的能力
 
@@ -51,4 +51,4 @@ Chat 生成模型、交易所账户密钥和加密备份尚未配置。Linux OCR
 - 后端 Linux 二进制 SHA-256：`c70ef4e8953f66cfd3b847156b61851d02d8c04f2f6b24f26e0339060bacf51f`
 - 前端 `index-DK4NJd43.js` SHA-256：`8bf92c2bbd248f580783eac7c95e3e7b4f6ca607ed0a9b2523a4892ea8f7af92`
 - 前端最终部署包 SHA-256：`439dff34c9f186b3812eb928366c1689d973894690bae34e969e5f02dec7c6fe`
-- 运维与重装说明：[deployment-vps.md](/Users/mdd/zhk/scorebook-backend/docs/deployment-vps.md)。部署来自现有工作树，保留 Claude 与此前后端改动，未清理或重置本地 Git 工作树。
+- 运维与重装说明：[deployment-vps.md](docs/deployment-vps.md)。部署来自现有工作树，保留 Claude 与此前后端改动，未清理或重置本地 Git 工作树。
