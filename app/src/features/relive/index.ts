@@ -39,7 +39,7 @@ import { STANCES, TEMPLATES } from '../../data/criteria'
 import { percent, price as decimalPrice } from '../../data/decimal'
 import { figures, head as headOutcome } from '../../data/outcome'
 import { INTERVAL_SECONDS, MARKET_LABELS, type Interval } from '../../data/session'
-import { detail } from '../../data/store'
+import { detail, invalidate } from '../../data/store'
 import { DASH, dateTime, utcRange } from '../../data/time'
 import { go, route } from '../../router'
 import { stamp, stanceBadge } from '../../ui/bits'
@@ -406,7 +406,8 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       pending: running,
       asked: searched,
       onChange: () => {
-        // 钉的位置变了、或者哪张图换了身份：这一段窗口重新取。
+        // 钉的位置变了、或者哪张图换了身份：记录详情的缓存也旧了，一起重新取。
+        invalidate(id)
         holdReplay = null
         holdCall = null
         void load()
