@@ -73,7 +73,7 @@ cargo clippy --workspace --all-targets --features vision-tests -- -D warnings
 
 `1m` `3m` `5m` `15m` `30m` `1h` `2h` `4h` `6h` `8h` `12h` `1d` `3d` `1w` `1M`
 
-周期字符串沿用币安写法并且**区分大小写**：`1m` 是一分钟，`1M` 是一个月。唯一真相源是 `scorebook_core::domain::interval::Interval`（`crates/core/src/domain/interval.rs`），解析、对齐、根数算术、归档目录段、PostgreSQL 步长都从这里出，代码库里不再有第二份周期白名单。对齐与币安一致：分钟/小时/`1d`/`3d` 按 Unix 纪元整除，`1w` 开在周一 00:00 UTC，`1M` 按日历月开在每月 1 日 00:00 UTC。
+周期字符串沿用币安写法并且**区分大小写**：`1m` 是一分钟，`1M` 是一个月。唯一真相源是 `scorebook_core::domain::interval::Interval`（`crates/core/src/domain/interval.rs`），解析、对齐、根数算术、归档目录段、PostgreSQL 步长都从这里出，代码库里不再有第二份周期白名单。对齐与币安一致：分钟/小时/`1d` 按 Unix 纪元整除，`1w` 开在周一 00:00 UTC，`1M` 按日历月开在每月 1 日 00:00 UTC。`3d` **不是**纪元整除，走的是平移过的三日网格：2023-08-16 起全部 USDⓈ-M 合约共用 `epoch_days % 3 == 1`，之前 BTCUSDT 走 `% 3 == 2`（2023-08-14 那根是 2 天的短棒）。
 
 `migrations/0044_all_binance_kline_intervals.sql` 为 `public_market.features` 的两个 market 各补齐 9 个新周期子分区；月线的物理表名叫 `features_<market>_1mo`（未加引号的 `1M` 会折叠成 `1m` 撞名），分区键与 `timeframe` 列存的仍是币安原文 `1M`。
 

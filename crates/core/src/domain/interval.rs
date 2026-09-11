@@ -7,10 +7,11 @@
 //! 对外字符串一律沿用币安写法，区分大小写：`1m` 是一分钟，`1M` 是一个月。
 //!
 //! 对齐规则与币安一致：
-//! * 分钟 / 小时 / `1d` / `3d`：按 Unix 纪元整除对齐（`3d` 币安就是纪元整除，不是
-//!   自然月或自然周的三天）。
+//! * 分钟 / 小时 / `1d`：按 Unix 纪元整除对齐。
 //! * `1w`：K 线开在**周一 00:00 UTC**。纪元起点 1970-01-01 是周四，纯整除会错 3 天，
 //!   所以整除前先把时间轴平移 3 天。
+//! * `3d`：**不是**纪元整除。币安的三日线落在一条平移过的三日网格上，见
+//!   [`D3_ANCHOR_DAY`] / [`D3_LEGACY_ANCHOR_DAY`] 的实测依据。
 //! * `1M`：按日历月，开在每月 1 日 00:00 UTC，长度不固定（28~31 天），用日历加减。
 use crate::error::{Error, Result};
 use chrono::{DateTime, Datelike, Duration, Months, TimeZone, Utc};
@@ -20,6 +21,27 @@ const WEEK: i64 = 7 * 86400;
 /// 1970-01-01 是周四；它之前最近的周一是 1969-12-29，即 -3 天。周线对齐先加上这个
 /// 偏移再整除，整除完再减回去。
 const WEEK_ANCHOR: i64 = 3 * 86400;
+
+/// 三日线的一天秒数与网格步长。
+const DAY: i64 = 86400;
+const THREE_DAYS: i64 = 3 * DAY;
+
+/// 三日线**不按纪元整除**。拉 fapi / dapi / spot 的真实 3d K 线可以看到，纪元整除
+/// （`epoch_days % 3 == 0`）在任何时期都不是币安的开盘日。
+///
+/// 2023-08-16T00:00Z 起，全部 USDⓈ-M 合约共用同一条网格，开盘日满足
+/// `epoch_days % 3 == 1`。实测开盘日（BTCUSDT / SOLUSDT / 1000PEPEUSDT 一致）：
+/// 2023-08-16、2023-08-19、2025-12-30、2026-01-02、2026-09-05、2026-09-08、2026-09-11。
+/// 2023-08-16 的纪元日序是 19585，19585 % 3 == 1，所以偏移取 `2 * DAY`
+/// （`(ts + 2 天) / 3 天` 整除后再减回去，就落在 ≡ 1 的那条网格上）。
+const D3_ANCHOR: i64 = 2 * DAY;
+
+/// 切换点：2023-08-16T00:00Z。在它之前，BTCUSDT 的三日线开在 `epoch_days % 3 == 2`
+/// 上（实测 2019-12-30、2020-01-02、2022-12-29、2023-01-01、2023-08-11、2023-08-14），
+/// 2023-08-14 那根只活到 08-16 就被下一根接上，是一根 2 天的短棒，锚点从此前移一天。
+const D3_SWITCH: i64 = 1_692_144_000; // 2023-08-16T00:00:00Z
+/// 切换点之前用的偏移，对应 `epoch_days % 3 == 2` 的那条网格。
+const D3_LEGACY_ANCHOR: i64 = DAY;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Interval {
@@ -199,8 +221,21 @@ impl Interval {
                 let floored = (ts + WEEK_ANCHOR).div_euclid(WEEK) * WEEK - WEEK_ANCHOR;
                 DateTime::from_timestamp(floored, 0).unwrap_or(t)
             }
+            D3 => {
+                // 三日线不是纪元整除，做法和 W1 一样：先平移到网格原点再整除。
+                // 2023-08-16T00:00Z 起用 D3_ANCHOR（≡ 1 mod 3），之前用
+                // D3_LEGACY_ANCHOR（≡ 2 mod 3）。
+                let ts = t.timestamp();
+                let anchor = if ts >= D3_SWITCH {
+                    D3_ANCHOR
+                } else {
+                    D3_LEGACY_ANCHOR
+                };
+                let floored = (ts + anchor).div_euclid(THREE_DAYS) * THREE_DAYS - anchor;
+                DateTime::from_timestamp(floored, 0).unwrap_or(t)
+            }
             other => {
-                // 纪元整除，币安对分钟/小时/1d/3d 就是这么对齐的。
+                // 纪元整除，币安对分钟 / 小时 / 1d 就是这么对齐的。
                 let step = other.fixed_seconds().unwrap_or(60);
                 DateTime::from_timestamp(t.timestamp().div_euclid(step) * step, 0).unwrap_or(t)
             }
@@ -218,6 +253,10 @@ impl Interval {
     }
 
     /// 时刻前进 / 后退 `n` 根 K 线。月线按日历月加减，其余按固定秒数。
+    ///
+    /// `3d` 的注意事项：这里按固定的 3 天步进，因此**跨越 2023-08-14 那根 2 天短棒
+    /// 时会差 1 根**（`bars_between` 同理）。这是刻意接受的：短棒只有一根、只在
+    /// 2023-08 出现一次，而两侧各自的网格都是等距的，`floor` 仍然精确。
     pub fn add_bars(self, t: DateTime<Utc>, n: i64) -> DateTime<Utc> {
         match self {
             Mo1 => {
@@ -410,34 +449,52 @@ mod tests {
     }
 
     #[test]
-    fn three_day_bars_are_floored_by_epoch_division_not_by_month() {
-        // 币安 3d 就是纪元整除：1970-01-01 起每 3 天一根，与自然月无关。
+    fn three_day_bars_follow_binance_shifted_grid_not_epoch_division() {
+        // 下面每个开盘时刻都来自真实的币安 3d K 线（fapi BTCUSDT / SOLUSDT /
+        // 1000PEPEUSDT，spot 与 dapi 另行核对），不是推算出来的。
+        // 纪元整除（epoch_days % 3 == 0）在任何时期都不是币安的开盘日。
+
+        // 2023-08-16 之后：epoch_days % 3 == 1。
         assert_eq!(
-            D3.floor(at("1970-01-01T00:00:00Z")),
-            at("1970-01-01T00:00:00Z")
+            D3.floor(at("2026-09-11T10:00:00Z")),
+            at("2026-09-11T00:00:00Z")
         );
-        assert_eq!(
-            D3.floor(at("1970-01-03T23:59:59Z")),
-            at("1970-01-01T00:00:00Z")
-        );
-        assert_eq!(
-            D3.floor(at("1970-01-04T00:00:00Z")),
-            at("1970-01-04T00:00:00Z")
-        );
-        let t = at("2026-09-11T11:14:37Z");
-        let floored = D3.floor(t);
-        assert_eq!(floored, at("2026-09-10T00:00:00Z"));
-        assert_eq!(floored.timestamp() % (3 * 86400), 0);
-        // 跨月不重置：2026-10-01 恰好是一根 3d 的开盘，2026-11-01 就不是，
-        // 它落在 2026-10-31 开的那根里。
+        // 2026-10-01 不是开盘日，它落在 2026-09-29 开的那根里；下一根开在 10-02。
         assert_eq!(
             D3.floor(at("2026-10-01T05:00:00Z")),
-            at("2026-10-01T00:00:00Z")
+            at("2026-09-29T00:00:00Z")
         );
         assert_eq!(
-            D3.floor(at("2026-11-01T05:00:00Z")),
-            at("2026-10-31T00:00:00Z")
+            D3.floor(at("2026-10-02T00:00:00Z")),
+            at("2026-10-02T00:00:00Z")
         );
+
+        // 2023-08-16 之前：epoch_days % 3 == 2。
+        assert_eq!(
+            D3.floor(at("2023-01-02T00:00:00Z")),
+            at("2023-01-01T00:00:00Z")
+        );
+        // 切换点两侧：2023-08-14 那根只活到 08-16（2 天的短棒）。
+        assert_eq!(
+            D3.floor(at("2023-08-15T12:00:00Z")),
+            at("2023-08-14T00:00:00Z")
+        );
+        assert_eq!(
+            D3.floor(at("2023-08-16T00:00:00Z")),
+            at("2023-08-16T00:00:00Z")
+        );
+
+        // 往前扫 40 根，开盘日一律 ≡ 1 (mod 3)，而且都是真正的开盘（幂等）。
+        let mut open = at("2026-09-11T00:00:00Z");
+        for _ in 0..40 {
+            assert_eq!(
+                open.timestamp().div_euclid(86400).rem_euclid(3),
+                1,
+                "{open}"
+            );
+            assert_eq!(D3.floor(open), open, "{open}");
+            open = D3.add_bars(open, -1);
+        }
     }
 
     #[test]
