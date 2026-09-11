@@ -323,6 +323,16 @@ impl Facade {
             Action::AttachmentLink => {
                 app::record_changes::supplement(s, owner, id()?, key()?, parse(payload)?).await
             }
+            Action::CallScenePut => {
+                app::record_changes::set_scene(
+                    s,
+                    owner,
+                    id()?,
+                    optional_key.as_deref(),
+                    parse(payload)?,
+                )
+                .await
+            }
             Action::Correction => {
                 app::record_changes::correction(s, owner, id()?, key()?, parse(payload)?).await
             }

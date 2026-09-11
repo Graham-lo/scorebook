@@ -15,7 +15,7 @@
 | image_embeddings | 私有、按 owner 和模型空间检索的派生图像特征 |
 | similarity_sessions / search_result_refs | 查询/结果快照和引用；未保存默认 7 天，saved 的引用继续保护原图 |
 | history_indexes / history_plans | 用户的构建意图、子范围、检查点及公共代引用；没有 OHLC |
-| public_market.generations/features/generation_features | 公共合约派生数据；可重建、按代发布；未引用的未发布特征 7 天后有限批清理 |
+| public_market.generations/features/generation_features | 公共合约派生数据；可重建、按代发布；未引用的未发布特征 7 天后有限批清理。不变量：一行 `features.published=true` 必须至少有一个 `status='ready'` 的世代经 `generation_features` 认领它——检索靠这条链接证明这段行情的来源（`rest`/`monthly_archive`），撤链接和撤 `published` 是一件事的两面（0049） |
 | export_artifacts / export_pins / export_refs / export_runs | 导出状态、精确保护对象、分块校验和暂存目录登记；默认 7 天到期 |
 | restore_receipts | 同一已校验归档的恢复完成身份，不允许覆盖无该回执的已有用户 |
 | storage_objects | 原图发布 pending/ready/expired/purged 登记，异常遗留可有限批回收 |

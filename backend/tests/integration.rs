@@ -592,6 +592,212 @@ async fn historical_index_keeps_only_vectors_and_positions() {
     assert!(columns.contains(&"embedding".into()));
 }
 
+/// 一个来路证不出来的窗口只该带走它自己，不该带走整次检索；而且带走了必须报数。
+#[tokio::test]
+async fn search_drops_the_window_it_cannot_prove_and_says_how_many() {
+    use chrono::{Duration, Utc};
+    use scorebook::application::history::*;
+    use scorebook::domain::criteria::Bar;
+    let (s, o, _, _tmp) = setup().await;
+    let end = chrono::DateTime::from_timestamp(Utc::now().timestamp() / 3600 * 3600, 0).unwrap();
+    let start = end - Duration::hours(192);
+    let symbol = format!("TEST{}", Uuid::new_v4().simple().to_string().to_uppercase());
+    // 步长取满一个窗口，三个窗口彼此隔得够开，不会被检索里那条「半个窗口内算同一段」
+    // 的去重规则合并——这个用例要数的是「丢了几条」，不能让去重把数字搅浑。
+    let input = HistoryIndexRequest {
+        source: Default::default(),
+        symbol: symbol.clone(),
+        market: "usd_m".into(),
+        interval: "1h".into(),
+        start_at: start,
+        end_at: end,
+        window_bars: 64,
+        stride_bars: 64,
+        models: vec!["candle-geometry-v2".into()],
+    };
+    request(&s, o, "history", input.clone()).await.unwrap();
+    let j = jobs::claim_for(&s, Some(o)).await.unwrap().unwrap();
+    let bars: Vec<Bar> = (0..192)
+        .map(|n| {
+            let p = 100.0 + n as f64 * 0.5;
+            Bar {
+                start: start + Duration::hours(n),
+                end: start + Duration::hours(n + 1),
+                open: format!("{p}"),
+                high: format!("{}", p + 1.0),
+                low: format!("{}", p - 1.0),
+                close: format!("{}", p + 0.4),
+                volume: None,
+            }
+        })
+        .collect();
+    let coverage = index_bars(&s, &j, &input, &bars, true).await.unwrap();
+    assert_eq!(coverage["feature_rows"], 3);
+    let raster = scorebook::domain::chart::raster(&bars[..64]).unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    raster
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let a = calls::upload(&s, o, "query", bytes.into_inner(), "query".into(), None)
+        .await
+        .unwrap();
+    let query = |key: &'static str| {
+        let symbol = symbol.clone();
+        let attachment = a["id"].clone();
+        let s = s.clone();
+        async move {
+            search(
+                &s,
+                o,
+                key,
+                HistorySearch {
+                    attachment_id: serde_json::from_value(attachment).unwrap(),
+                    region: None,
+                    model_id: "candle-geometry-v2".into(),
+                    symbol: Some(symbol),
+                    market: Some("usd_m".into()),
+                    interval: Some("1h".into()),
+                    cutoff_at: None,
+                    limit: Some(5),
+                },
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let before = query("proven").await;
+    assert_eq!(before["items"].as_array().unwrap().len(), 3);
+    assert_eq!(before["windows_dropped_for_unproven_source"], 0);
+    // 线上那 2470 行就长这样：行还公布着，能证明它来路的那一行链接没了。
+    let orphan:Uuid=sqlx::query_scalar("DELETE FROM public_market.generation_features l USING public_market.features f WHERE f.id=l.feature_id AND f.symbol=$1 AND f.start_at=(SELECT min(start_at) FROM public_market.features WHERE symbol=$1) RETURNING l.feature_id").bind(&symbol).fetch_one(&s.db.pool).await.unwrap();
+    let still_published: bool =
+        sqlx::query_scalar("SELECT published FROM public_market.features WHERE id=$1")
+            .bind(orphan)
+            .fetch_one(&s.db.pool)
+            .await
+            .unwrap();
+    assert!(still_published);
+    let after = query("unproven").await;
+    let items = after["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(after["windows_dropped_for_unproven_source"], 1);
+    assert!(!items.iter().any(|v| v["id"] == json!(orphan)));
+    assert!(items.iter().all(|v| v["market_source"] == "rest"));
+}
+
+/// 补跑换了窗口网格时，上一趟公布过、这一趟不再产出的窗口必须当场下架：链接和
+/// `published` 是一件事的两面，撤一个就得撤另一个，否则又是一行证不出来路的公开证据。
+#[tokio::test]
+async fn a_rerun_that_abandons_windows_unpublishes_them_with_their_links() {
+    use chrono::{Duration, Utc};
+    use scorebook::application::history::*;
+    use scorebook::domain::criteria::Bar;
+    let (s, o, _, _tmp) = setup().await;
+    let end = chrono::DateTime::from_timestamp(Utc::now().timestamp() / 3600 * 3600, 0).unwrap();
+    let start = end - Duration::hours(96);
+    let symbol = format!("TEST{}", Uuid::new_v4().simple().to_string().to_uppercase());
+    let input = HistoryIndexRequest {
+        source: Default::default(),
+        symbol: symbol.clone(),
+        market: "usd_m".into(),
+        interval: "1h".into(),
+        start_at: start,
+        end_at: end,
+        window_bars: 64,
+        stride_bars: 16,
+        models: vec!["candle-geometry-v2".into()],
+    };
+    request(&s, o, "history", input.clone()).await.unwrap();
+    let j = jobs::claim_for(&s, Some(o)).await.unwrap().unwrap();
+    let bar = |n: i64| {
+        let p = 100.0 + n as f64 * 0.5;
+        Bar {
+            start: start + Duration::hours(n),
+            end: start + Duration::hours(n + 1),
+            open: format!("{p}"),
+            high: format!("{}", p + 1.0),
+            low: format!("{}", p - 1.0),
+            close: format!("{}", p + 0.4),
+            volume: None,
+        }
+    };
+    // 第一趟：源范围不完整，所以这个世代之后还能被重新抢占补跑。
+    let first: Vec<Bar> = (0..96).map(bar).collect();
+    assert_eq!(
+        index_bars(&s, &j, &input, &first, false).await.unwrap()["feature_rows"],
+        3
+    );
+    let published = |s: Services, symbol: String| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM public_market.features WHERE symbol=$1 AND published",
+        )
+        .bind(symbol)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(published(s.clone(), symbol.clone()).await, 3);
+    // 补跑少拿到了第一根 K 线，窗口网格整体错位：上一趟那三个窗口一个都不再产出。
+    let second: Vec<Bar> = (1..96).map(bar).collect();
+    assert_eq!(
+        index_bars(&s, &j, &input, &second, false).await.unwrap()["feature_rows"],
+        2
+    );
+    assert_eq!(published(s.clone(), symbol.clone()).await, 2);
+    let orphans:i64=sqlx::query_scalar("SELECT count(*) FROM public_market.features f WHERE f.published AND NOT EXISTS(SELECT 1 FROM public_market.generation_features l WHERE l.feature_id=f.id)").fetch_one(&s.db.pool).await.unwrap();
+    assert_eq!(orphans, 0);
+}
+
+/// 租约一时不在手上，不等于这份活办不成。跑了几小时的批作业不能被一次误读判死刑：
+/// `complete` 收到 `lease_lost` 必须排回去重试，而且这个重试是有上界的。
+#[tokio::test]
+async fn a_lost_lease_reschedules_the_job_instead_of_failing_it() {
+    use chrono::{Duration, Utc};
+    use scorebook::application::history::*;
+    let (s, o, _, _tmp) = setup().await;
+    let end = chrono::DateTime::from_timestamp(Utc::now().timestamp() / 3600 * 3600, 0).unwrap();
+    let input = HistoryIndexRequest {
+        source: Default::default(),
+        symbol: format!("TEST{}", Uuid::new_v4().simple().to_string().to_uppercase()),
+        market: "usd_m".into(),
+        interval: "1h".into(),
+        start_at: end - Duration::hours(96),
+        end_at: end,
+        window_bars: 64,
+        stride_bars: 16,
+        models: vec!["candle-geometry-v2".into()],
+    };
+    request(&s, o, "history", input).await.unwrap();
+    let j = jobs::claim_for(&s, Some(o)).await.unwrap().unwrap();
+    jobs::complete(&s, &j, Err(jobs::lease_lost()))
+        .await
+        .unwrap();
+    let (status, code): (String, Option<String>) =
+        sqlx::query_as("SELECT status,error_code FROM jobs WHERE id=$1")
+            .bind(j.id)
+            .fetch_one(&s.db.pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "retry_wait");
+    assert_eq!(code.as_deref(), Some("lease_lost"));
+    // 有上界：同一轮里重排够了次数，自己转 `needs_attention`，不会无限打转。
+    sqlx::query("UPDATE jobs SET run_after=now(),cycle_attempt=8 WHERE id=$1")
+        .bind(j.id)
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    let again = jobs::claim_for(&s, Some(o)).await.unwrap().unwrap();
+    jobs::complete(&s, &again, Err(jobs::lease_lost()))
+        .await
+        .unwrap();
+    let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id=$1")
+        .bind(j.id)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "needs_attention");
+}
+
 #[tokio::test]
 async fn export_restores_in_an_isolated_database() {
     let (s, o, _, _tmp) = setup().await;

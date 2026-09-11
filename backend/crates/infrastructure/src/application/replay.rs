@@ -279,6 +279,8 @@ struct Plan {
     outcome_id: Option<Uuid>,
     base: Option<String>,
     atr0: Option<String>,
+    /// 生效的那一张场景图，以及它是不是记录提交之后才上传的。
+    scene: Option<(Uuid, bool)>,
 }
 
 async fn plan(s: &Services, owner: Uuid, call: Uuid) -> Result<Plan> {
@@ -364,8 +366,10 @@ async fn plan(s: &Services, owner: Uuid, call: Uuid) -> Result<Plan> {
     );
 
     // A screenshot already pinned to real bars decides where the stage opens.
+    // 用的是**生效的**那一张场景图（定义见 `record_changes` 模块头）：图贴错了
+    // 换过一张，重温就得跟着换，被接替的那一张钉在哪儿都不算数。
     let located: Option<(String, String, String, DateTime<Utc>, String)> = sqlx::query_as(
-        "SELECT l.symbol,l.market,l.interval,l.start_at,l.source FROM attachment_locations l JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id JOIN call_attachments ca ON ca.owner_id=a.owner_id AND ca.attachment_id=a.id WHERE l.owner_id=$1 AND ca.call_id=$2 AND a.kind='scene' ORDER BY a.uploaded_at,a.id LIMIT 1",
+        "SELECT l.symbol,l.market,l.interval,l.start_at,l.source FROM attachment_locations l JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id JOIN call_attachments ca ON ca.owner_id=a.owner_id AND ca.attachment_id=a.id WHERE l.owner_id=$1 AND ca.call_id=$2 AND a.kind='scene' AND ca.superseded_at IS NULL ORDER BY ca.attached_at,ca.attachment_id LIMIT 1",
     )
     .bind(owner)
     .bind(call)
@@ -373,6 +377,16 @@ async fn plan(s: &Services, owner: Uuid, call: Uuid) -> Result<Plan> {
     .await?;
     let located =
         located.filter(|(sy, mk, tf, _, _)| *sy == symbol && *mk == market && *tf == interval);
+    // 事后换图要在重温结果里看得见：这一张是记录提交之后才上传的，那么窗口是照
+    // 着一张当时还不存在的图开的。证据池那一侧不认它（见 `similarity`），但重温
+    // 认，所以得说出来。被接替的那几张仍在 `GET /v1/calls/{id}` 里取得回来。
+    let scene: Option<(Uuid, bool)> = sqlx::query_as(
+        "SELECT a.id,a.uploaded_at>c.submitted_at FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id JOIN calls c ON c.owner_id=l.owner_id AND c.id=l.call_id WHERE l.owner_id=$1 AND l.call_id=$2 AND a.kind='scene' AND l.superseded_at IS NULL ORDER BY l.attached_at,l.attachment_id LIMIT 1",
+    )
+    .bind(owner)
+    .bind(call)
+    .fetch_optional(&s.db.pool)
+    .await?;
     let source = match located.as_ref().map(|(_, _, _, _, src)| src.as_str()) {
         Some("monthly_archive") => HistorySource::MonthlyArchive,
         _ => HistorySource::Rest,
@@ -417,6 +431,7 @@ async fn plan(s: &Services, owner: Uuid, call: Uuid) -> Result<Plan> {
         outcome_id,
         base,
         atr0,
+        scene,
     })
 }
 
@@ -632,6 +647,8 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> R
         "judgment":{"at":p.judgment,"base_price":p.base,"atr0":p.atr0},
         "levels":p.levels,
         "marks":marks,
+        "scene":p.scene.map(|(id,after)|json!({"attachment_id":id,"replaced_after_submission":after})),
+        "scene_replaced_after_submission":p.scene.is_some_and(|(_,after)|after),
         "locating":super::locate::locating_for_call(s,owner,p.call).await?,
         "bars":if included{json!(bars)}else{json!([])},
         "bars_included":included,

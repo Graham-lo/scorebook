@@ -173,7 +173,7 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
     let mut tx = s.db.pool.begin().await?;
     let active:Option<Uuid>=sqlx::query_scalar("SELECT id FROM jobs WHERE id=$1 AND lease_owner=$2 AND generation=$3 AND status='running' AND lease_until>now() FOR UPDATE").bind(j.id).bind(j.lease).bind(j.generation).fetch_optional(&mut *tx).await?;
     if active.is_none() {
-        return Err(Error::conflict("lease_lost"));
+        return Err(crate::application::jobs::lease_lost());
     }
     let running: bool = sqlx::query_scalar(
         "SELECT status='running' FROM history_plans WHERE owner_id=$1 AND id=$2 FOR UPDATE",

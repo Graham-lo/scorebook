@@ -70,7 +70,11 @@ pub async fn create(s: &Services, owner: Uuid, key: &str, input: CreateCall) -> 
         .execute(&mut *tx)
         .await?;
     for a in &input.attachments {
-        sqlx::query("INSERT INTO call_attachments VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
+        // 建记录时挂上的图，`attached_at` 取图自己的 uploaded_at，不取此刻：一次提交
+        // 里的几张图同属一个事务，`now()` 对它们是同一个值，排序就只剩 uuid 可比，
+        // 那跟 0050 之前「按 uploaded_at 升序取第一张」不是一回事了。0050 的回填也是
+        // 这么填的，两边一致。
+        sqlx::query("INSERT INTO call_attachments(owner_id,call_id,attachment_id,attached_at) SELECT $1,$2,$3,uploaded_at FROM attachments WHERE owner_id=$1 AND id=$3 ON CONFLICT DO NOTHING")
             .bind(owner)
             .bind(id)
             .bind(a)
@@ -226,7 +230,9 @@ pub async fn bump(
 pub async fn get(s: &Services, owner: Uuid, id: Uuid) -> Result<Value> {
     let mut v:Value=sqlx::query_scalar(r#"SELECT (to_jsonb(c)-'owner_id') || jsonb_build_object(
         'revision',st.revision,'voided',st.voided,
-        'attachments',(SELECT COALESCE(jsonb_agg((to_jsonb(a)-'owner_id')||jsonb_build_object('location',(SELECT (to_jsonb(al)-'owner_id'-'score')||jsonb_build_object('score',al.score::text) FROM attachment_locations al WHERE al.owner_id=a.owner_id AND al.attachment_id=a.id)) ORDER BY a.uploaded_at,a.id),'[]') FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=c.owner_id AND l.call_id=c.id),
+        'attachments',(SELECT COALESCE(jsonb_agg((to_jsonb(a)-'owner_id')||jsonb_build_object('location',(SELECT (to_jsonb(al)-'owner_id'-'score')||jsonb_build_object('score',al.score::text) FROM attachment_locations al WHERE al.owner_id=a.owner_id AND al.attachment_id=a.id),'attached_at',l.attached_at,'superseded_at',l.superseded_at,'superseded_by',l.superseded_by) ORDER BY a.uploaded_at,a.id),'[]') FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=c.owner_id AND l.call_id=c.id),
+        'scene_in_effect',(SELECT jsonb_build_object('attachment_id',a.id,'attached_at',l.attached_at,'uploaded_at',a.uploaded_at,'replaced_after_submission',a.uploaded_at>c.submitted_at) FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=c.owner_id AND l.call_id=c.id AND a.kind='scene' AND l.superseded_at IS NULL ORDER BY l.attached_at,l.attachment_id LIMIT 1),
+        'superseded_scenes',(SELECT COALESCE(jsonb_agg(jsonb_build_object('attachment_id',a.id,'sha256',a.sha256,'uploaded_at',a.uploaded_at,'attached_at',l.attached_at,'superseded_at',l.superseded_at,'superseded_by',l.superseded_by) ORDER BY l.superseded_at,l.attachment_id),'[]') FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=c.owner_id AND l.call_id=c.id AND a.kind='scene' AND l.superseded_at IS NOT NULL),
         'chart_setup',(SELECT body FROM chart_setups WHERE owner_id=c.owner_id AND call_id=c.id),
         'events',(SELECT COALESCE(jsonb_agg(to_jsonb(e)-'owner_id' ORDER BY sequence),'[]') FROM (SELECT * FROM events WHERE owner_id=c.owner_id AND call_id=c.id ORDER BY sequence DESC LIMIT 21) e),
         'reviews',(SELECT COALESCE(jsonb_agg((to_jsonb(r)-'owner_id')||jsonb_build_object('outcome_ids',(SELECT COALESCE(jsonb_agg(outcome_id ORDER BY outcome_id),'[]') FROM review_outcome_refs rr WHERE rr.owner_id=r.owner_id AND rr.review_id=r.id)) ORDER BY created_at,id),'[]') FROM (SELECT * FROM reviews WHERE owner_id=c.owner_id AND call_id=c.id ORDER BY created_at DESC,id DESC LIMIT 21) r),
@@ -253,6 +259,10 @@ pub async fn get(s: &Services, owner: Uuid, id: Uuid) -> Result<Value> {
         pages[kind] = json!({"next_cursor":next,"order":"oldest_to_newest_within_latest_page","url":format!("/v1/calls/{id}/history?kind={kind}")});
     }
     v["history_pages"] = pages;
+    // 事后换图的那个看得见的标记。顶层放一个布尔量，端出这条记录的地方一眼就能
+    // 看见；换掉的那几张连同 sha256 留在 `superseded_scenes` 里，随时取得回来。
+    v["scene_replaced_after_submission"] =
+        json!(v["scene_in_effect"]["replaced_after_submission"] == json!(true));
     v["source_uri"] = json!(format!("scorebook://calls/{id}"));
     Ok(v)
 }

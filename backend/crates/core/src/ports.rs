@@ -77,6 +77,7 @@ pub enum Action {
     AttachmentUpload,
     AttachmentIndex,
     AttachmentLink,
+    CallScenePut,
     Correction,
     CallRevision,
     ReviewCreate,

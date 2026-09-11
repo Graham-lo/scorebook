@@ -454,13 +454,45 @@ pub async fn enqueue_after_review(
     owner: Uuid,
     call: Uuid,
 ) -> Result<()> {
+    enqueue_unpinned_scene(tx, owner, call, "review_published").await
+}
+
+/// 换过场景图之后补的那一次：新的那一张还没钉到真实 K 线上时，重温就没有锚点
+/// 可用了。只有已经写过复盘的记录才补——「自动定位发生在复盘发布那一刻」这条
+/// 规矩不放宽，换的只是同一条规矩下的那一张图。作业键仍然是附件 id，所以一张
+/// 图至多还是一次自动尝试。
+pub(crate) async fn enqueue_after_scene_change(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: Uuid,
+    call: Uuid,
+) -> Result<()> {
+    let reviewed: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM reviews WHERE owner_id=$1 AND call_id=$2)")
+            .bind(owner)
+            .bind(call)
+            .fetch_one(&mut **tx)
+            .await?;
+    if !reviewed {
+        return Ok(());
+    }
+    enqueue_unpinned_scene(tx, owner, call, "scene_replaced").await
+}
+
+/// 只排生效的那一张（定义见 `record_changes` 模块头）：被接替的图不必再钉，
+/// 钉了也没人读。
+async fn enqueue_unpinned_scene(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: Uuid,
+    call: Uuid,
+    trigger: &str,
+) -> Result<()> {
     // Without an instrument and a timeframe there is nothing to match against.
     let matchable:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM calls WHERE owner_id=$1 AND id=$2 AND instrument IS NOT NULL AND timeframe IS NOT NULL)")
         .bind(owner).bind(call).fetch_one(&mut **tx).await?;
     if !matchable {
         return Ok(());
     }
-    let pending: Vec<Uuid> = sqlx::query_scalar("SELECT a.id FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=$1 AND l.call_id=$2 AND a.kind='scene' AND NOT EXISTS(SELECT 1 FROM attachment_locations al WHERE al.owner_id=a.owner_id AND al.attachment_id=a.id) ORDER BY a.uploaded_at,a.id")
+    let pending: Vec<Uuid> = sqlx::query_scalar("SELECT a.id FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=$1 AND l.call_id=$2 AND a.kind='scene' AND l.superseded_at IS NULL AND NOT EXISTS(SELECT 1 FROM attachment_locations al WHERE al.owner_id=a.owner_id AND al.attachment_id=a.id) ORDER BY l.attached_at,l.attachment_id LIMIT 1")
         .bind(owner).bind(call).fetch_all(&mut **tx).await?;
     for attachment in pending {
         match jobs::enqueue_tx(
@@ -468,7 +500,7 @@ pub async fn enqueue_after_review(
             owner,
             KIND,
             &attachment.to_string(),
-            json!({"call_id":call,"attachment_id":attachment,"trigger":"review_published"}),
+            json!({"call_id":call,"attachment_id":attachment,"trigger":trigger}),
         )
         .await
         {
@@ -485,7 +517,9 @@ pub async fn enqueue_after_review(
 /// What the replay stage shows while a match is still running: the record has
 /// no pinned screenshot yet, but an attempt is in flight.
 pub async fn locating_for_call(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
-    let pinned:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM attachment_locations al JOIN call_attachments l ON l.owner_id=al.owner_id AND l.attachment_id=al.attachment_id WHERE al.owner_id=$1 AND l.call_id=$2)")
+    // 被接替的那一张钉没钉过都不算数：重温读的是生效的那一张，它没钉住就是
+    // 「还在找」。（生效的定义见 `record_changes` 模块头。）
+    let pinned:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM attachment_locations al JOIN call_attachments l ON l.owner_id=al.owner_id AND l.attachment_id=al.attachment_id WHERE al.owner_id=$1 AND l.call_id=$2 AND l.superseded_at IS NULL)")
         .bind(owner).bind(call).fetch_one(&s.db.pool).await?;
     if pinned {
         return Ok(Value::Null);

@@ -160,7 +160,7 @@ async fn create(s: &Services, owner: Uuid, id: Uuid, job: Option<&Job>) -> Resul
     if let Some(j) = job {
         let active:Option<Uuid>=sqlx::query_scalar("SELECT id FROM jobs WHERE id=$1 AND owner_id=$2 AND lease_owner=$3 AND generation=$4 AND status='running' AND lease_until>now() FOR UPDATE").bind(j.id).bind(owner).bind(j.lease).bind(j.generation).fetch_optional(&mut *admission).await?;
         if active.is_none() {
-            return Err(Error::conflict("lease_lost"));
+            return Err(crate::application::jobs::lease_lost());
         }
     }
     let reserved:Option<Uuid>=sqlx::query_scalar("INSERT INTO export_artifacts(id,owner_id,lease_token) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET state='writing',lease_token=$3,lease_until=now()+interval '5 minutes' WHERE export_artifacts.owner_id=$2 AND export_artifacts.state<>'ready' AND (export_artifacts.lease_until<now() OR $4) RETURNING id").bind(id).bind(owner).bind(token).bind(job.is_some()).fetch_optional(&mut *admission).await?;
@@ -344,7 +344,7 @@ async fn create(s: &Services, owner: Uuid, id: Uuid, job: Option<&Job>) -> Resul
     if let Some(j) = job {
         let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND lease_owner=$2 AND generation=$3 AND status='running' AND lease_until>now())").bind(j.id).bind(j.lease).bind(j.generation).fetch_one(&mut *tx).await?;
         if !active {
-            return Err(Error::conflict("lease_lost"));
+            return Err(crate::application::jobs::lease_lost());
         }
     }
     let destination = directory(s, owner, id);

@@ -5,7 +5,9 @@ assert sys.platform=='darwin','macOS only'
 assert (root/'target/release/scorebook').exists() and (root/'.env').exists()
 parser=argparse.ArgumentParser()
 parser.add_argument('--services',nargs='+',choices=['api','worker','vision','text','frontend'],default=['api','worker','vision','text','frontend'])
-parser.add_argument('--frontend-dir',type=pathlib.Path,default=root.parent/'scorebook-frontend/app')
+# 两种摆法：开发机上前后端是并排的两棵树，公开仓里是同一棵树下的 backend/ 和 frontend/。
+frontend_candidates=[root.parent/'scorebook-frontend/app',root.parent/'frontend/app']
+parser.add_argument('--frontend-dir',type=pathlib.Path,default=next((p for p in frontend_candidates if p.is_dir()),frontend_candidates[0]))
 parser.add_argument('--lan',action='store_true',help='Share the frontend and its owner account with private LAN devices')
 args=parser.parse_args()
 uid=os.getuid();agents=pathlib.Path.home()/'Library/LaunchAgents';agents.mkdir(parents=True,exist_ok=True)

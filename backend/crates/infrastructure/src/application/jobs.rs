@@ -1,6 +1,6 @@
 use crate::{
     application::Services,
-    error::{Error, Result, RetryDirective},
+    error::{Error, ErrorKind, Result, RetryDirective},
 };
 use chrono::{Duration, Utc};
 pub use scorebook_core::api::jobs::*;
@@ -165,6 +165,41 @@ pub async fn claim_filtered(
     tx.commit().await?;
     Ok(Some(j))
 }
+/// 租约看起来不在手上了。真丢了只意味着这份活被别人接走了，不是这份活本身办不成；
+/// 何况真丢了的话连 `complete` 那一关都过不去——它要求这一行还在我名下才肯写状态，
+/// 所以**能被记下来的 `lease_lost` 恰恰是没真丢的那种**。按 `Never` 判死刑，等于让
+/// 一次误读弄死一个已经跑了一小时的批作业（`history.universe` 今早就是这么死的）。
+/// 改成 `Backoff`：有退避、有上界（`cycle_attempt` 满 8 次自己转 `needs_attention`），
+/// 别人真接走了这份活，重排的那一次也会在 `claim` 那里让位。错误种类仍是 `Conflict`，
+/// HTTP 语义一格不动。
+pub fn lease_lost() -> Error {
+    Error::new(ErrorKind::Conflict, "lease_lost", RetryDirective::Backoff)
+}
+/// 心跳的节拍，和续租的 120 秒是一对：一拍 30 秒，容得下连丢三拍。
+const HEARTBEAT_SECONDS: u64 = 30;
+/// 连着够不着数据库多少拍才放手。3 拍 = 90 秒，仍在 120 秒租约之内，放手时还剩 30 秒
+/// 够 `complete` 把状态写回去。
+const HEARTBEAT_TOLERANCE: u32 = 3;
+/// 一次心跳该怎么判。分清两件本来就不是一回事的事：
+/// * `Some(1)` —— 续上了。
+/// * `Some(0)` —— 这一行已经不在我名下了，租约是真丢了。
+/// * `None` —— 这一拍没够着数据库。连接抖一下、连接池等超时、锁卡了一瞬，说的都是
+///   「我没问到」，不是「租约没了」。原来的 `_ =>` 把这两件事压成同一件，一次抖动就
+///   能把作业打成 `failed`。租约还有 120 秒余量，容得下连丢几拍再说。
+fn heartbeat_verdict(rows: Option<u64>, missed: &mut u32) -> Option<Error> {
+    match rows {
+        Some(1) => {
+            *missed = 0;
+            None
+        }
+        Some(_) => Some(lease_lost()),
+        None => {
+            *missed += 1;
+            (*missed >= HEARTBEAT_TOLERANCE)
+                .then(|| Error::transient("lease_heartbeat_unreachable"))
+        }
+    }
+}
 pub async fn run_one(s: &Services) -> Result<bool> {
     run_filtered(s, None, None).await
 }
@@ -175,15 +210,22 @@ pub async fn run_filtered(s: &Services, owner: Option<Uuid>, queue: Option<&str>
     let result = {
         let work = execute(s, &job);
         tokio::pin!(work);
-        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut heartbeat =
+            tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_SECONDS));
         heartbeat.tick().await;
+        let mut missed = 0u32;
         loop {
             tokio::select! {
               result=&mut work=>break result,
               _=heartbeat.tick()=>{
                 let alive=sqlx::query("UPDATE jobs SET lease_until=now()+interval '120 seconds' WHERE id=$1 AND lease_owner=$2 AND generation=$3 AND status='running' AND lease_until>now()")
                   .bind(job.id).bind(job.lease).bind(job.generation).execute(&s.db.pool).await;
-                match alive {Ok(r) if r.rows_affected()==1=>{},_=>break Err(Error::conflict("lease_lost"))}
+                if let Err(e)=&alive {
+                    tracing::warn!(job=%job.id,kind=%job.kind,missed=missed+1,error=%e,"job lease heartbeat could not reach the database");
+                }
+                if let Some(e)=heartbeat_verdict(alive.map(|r|r.rows_affected()).ok(),&mut missed){
+                    break Err(e);
+                }
               }
             }
         }
@@ -196,7 +238,7 @@ pub async fn complete(s: &Services, job: &Job, result: Result<Value>) -> Result<
     let owned:Option<Uuid>=sqlx::query_scalar("SELECT id FROM jobs WHERE id=$1 AND lease_owner=$2 AND generation=$3 AND status='running' AND lease_until>now() FOR UPDATE")
       .bind(job.id).bind(job.lease).bind(job.generation).fetch_optional(&mut *tx).await?;
     if owned.is_none() {
-        return Err(Error::conflict("lease_lost"));
+        return Err(lease_lost());
     }
     let (status, assessment, code, retry, run_after, output) = match result {
         Ok(v) => ("succeeded", "completed", None, None, Utc::now(), Some(v)),
@@ -388,7 +430,39 @@ pub async fn fence<'a>(s: &'a Services, j: &Job) -> Result<Transaction<'a, Postg
         .await?;
     let active:Option<Uuid>=sqlx::query_scalar("SELECT id FROM jobs WHERE id=$1 AND owner_id=$2 AND lease_owner=$3 AND generation=$4 AND status='running' AND lease_until>now() FOR UPDATE").bind(j.id).bind(j.owner).bind(j.lease).bind(j.generation).fetch_optional(&mut *tx).await?;
     if active.is_none() {
-        return Err(Error::conflict("lease_lost"));
+        return Err(lease_lost());
     }
     Ok(tx)
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    #[test]
+    fn a_database_blip_is_not_a_lost_lease() {
+        let mut missed = 0;
+        // 够不着数据库：容忍到上限之前一声不吭，中间续上一次就重新归零。
+        for _ in 1..HEARTBEAT_TOLERANCE {
+            assert!(heartbeat_verdict(None, &mut missed).is_none());
+        }
+        assert!(heartbeat_verdict(Some(1), &mut missed).is_none());
+        assert_eq!(missed, 0);
+        for _ in 1..HEARTBEAT_TOLERANCE {
+            assert!(heartbeat_verdict(None, &mut missed).is_none());
+        }
+        // 连丢满 HEARTBEAT_TOLERANCE 拍（90 秒，仍在 120 秒租约内）才放手，而且放手
+        // 的理由是「够不着」，不是「租约没了」——它必须是可重试的。
+        let e = heartbeat_verdict(None, &mut missed).unwrap();
+        assert_eq!(e.code, "lease_heartbeat_unreachable");
+        assert!(e.retry.retryable());
+    }
+    #[test]
+    fn a_row_owned_by_someone_else_is_a_lost_lease_but_not_a_dead_job() {
+        let mut missed = 0;
+        let e = heartbeat_verdict(Some(0), &mut missed).unwrap();
+        assert_eq!(e.code, "lease_lost");
+        // 别人接走了这份活不是这份活办不成：有退避地重排，不是判死刑。
+        assert!(e.retry.retryable());
+        assert!(matches!(lease_lost().retry, RetryDirective::Backoff));
+    }
 }

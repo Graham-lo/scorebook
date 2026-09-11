@@ -50,6 +50,25 @@ pub(super) async fn attachment_link(
     )
     .await
 }
+/// 换一张场景图，或把先前那一张重新指回来生效。写的是链接上的判断，不是证据本
+/// 身，所以是幂等的 PUT：Idempotency-Key 送了就认，不像 POST 那样强求。
+pub(super) async fn scene_put(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+    h: HeaderMap,
+    Json(v): Json<api::record_changes::SceneSelection>,
+) -> Result<Json<Value>> {
+    invoke(
+        &s,
+        o,
+        Action::CallScenePut,
+        Some(id),
+        h.get("Idempotency-Key").and_then(|v| v.to_str().ok()),
+        json!(v),
+    )
+    .await
+}
 pub(super) async fn correction_create(
     State(s): State<Services>,
     Extension(o): Extension<Uuid>,

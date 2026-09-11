@@ -156,6 +156,17 @@ pub fn data(path: &str, method: &str) -> Value {
             json!({"id":uuid(),"kind":text(),"digest":text(),"uploaded_at":{"type":"string","format":"date-time"},"location":{"type":["object","null"],"additionalProperties":true}}),
             &["id", "kind"],
         ),
+        ("/v1/calls/{id}/scene", _) => object(
+            json!({"call_id":uuid(),"attachment_id":uuid(),"revision":{"type":"integer"},"superseded":{"type":"array","items":uuid()},"scene_replaced_after_submission":{"type":"boolean"},"original_evidence_unchanged":{"const":true}}),
+            &[
+                "call_id",
+                "attachment_id",
+                "revision",
+                "superseded",
+                "scene_replaced_after_submission",
+                "original_evidence_unchanged",
+            ],
+        ),
         ("/v1/calls/{id}/chart-setup", _) => object(
             json!({"call_id":uuid(),"body":any_object(),"updated_at":{"type":"string","format":"date-time"}}),
             &["call_id", "body", "updated_at"],
@@ -166,6 +177,8 @@ pub fn data(path: &str, method: &str) -> Value {
                 "judgment":object(json!({"at":{"type":"string","format":"date-time"},"base_price":{"type":["string","null"]},"atr0":{"type":["string","null"]}}),&["at"]),
                 "levels":{"$ref":"#/components/schemas/Levels"},
                 "marks":{"type":["object","null"],"additionalProperties":true},
+                "scene":{"type":["object","null"],"properties":{"attachment_id":uuid(),"replaced_after_submission":{"type":"boolean"}}},
+                "scene_replaced_after_submission":{"type":"boolean","description":"true when the scene in effect was uploaded after the record was submitted; the superseded originals stay retrievable from GET /v1/calls/{id}"},
                 "locating":{"type":["object","null"],"properties":{"job_id":uuid(),"status":text()}},
                 "bars":{"type":"array","items":object(json!({"start":{"type":"string","format":"date-time"},"end":{"type":"string","format":"date-time"},"open":text(),"high":text(),"low":text(),"close":text(),"volume":{"type":["string","null"]}}),&["start","end","open","high","low","close"])},
                 "bars_included":{"type":"boolean","description":"false when bars=none: metadata only, the caller fetches the klines itself"},
