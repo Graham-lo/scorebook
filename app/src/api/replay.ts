@@ -137,7 +137,9 @@ export interface LocationInput {
   end_at: Instant
   bars_count?: number | null
   source: 'rest' | 'monthly_archive'
-  score?: number | string | null
+  // 分数走字符串。库里那一列是 numeric，后端读出来一律按 score::text 渲染，
+  // 中间不经过 float——写回去也得照这个口径来，不然来回一趟就飘了位。
+  score?: string | null
   search_run_id?: Uuid | null
 }
 

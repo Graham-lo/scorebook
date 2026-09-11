@@ -326,7 +326,7 @@ export function locatePanel(options: LocateOptions): LocatePanel {
       end_at: item.end_at,
       bars_count: item.bars_count,
       source: item.market_source,
-      ...(item.match ? { score: item.match.score } : {}),
+      ...(item.match ? { score: String(item.match.score) } : {}),
       ...(runId ? { search_run_id: runId } : {}),
     }
     button.disabled = true
