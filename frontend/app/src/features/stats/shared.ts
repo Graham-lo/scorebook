@@ -61,19 +61,19 @@ export const STATE_COLORS: Record<OutcomeState, string> = {
   insufficient_data: 'var(--rule3)',
 }
 
-/** 一条记录为什么不算数。这些原因是后端定的，这里只负责说人话。 */
+/** 一条记录为什么不算数。后端定的原因，这里只负责说人话，一句不超过十个字。 */
 export const EXCLUSIONS: Record<string, string> = {
-  voided: '这条已经作废。',
-  historical_unverified: '这是事后补录的判断，当时没有留下时间戳，没法当证据。',
-  episode_unconfirmed: '这条还没确认属于哪一段行情，按「同一段只算一次」的分法就先不算。',
-  formation_not_subsequent_validation: '这条是当初总结出这个做法时用到的例子，不能再拿它来验证这个做法。',
-  no_criteria: '这条记录时没写算对的标准。',
-  criteria_unconfirmed: '这条的标准还等着你确认。',
+  voided: '已作废',
+  historical_unverified: '事后补记',
+  episode_unconfirmed: '还没确认属于哪一段',
+  formation_not_subsequent_validation: '当初立这个打法用的例子',
+  no_criteria: '没写怎么算对',
+  criteria_unconfirmed: '标准还没确认',
 }
 
 export function exclusionText(reason: string | null): string {
   if (!reason) return ''
-  return EXCLUSIONS[reason] ?? `后端把它排除在外，给的说法是「${reason}」。`
+  return EXCLUSIONS[reason] ?? '不算数'
 }
 
 /** 一个小键值行，样式和别处的 .kv 一致。 */

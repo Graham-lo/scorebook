@@ -50,6 +50,8 @@ pub fn route_permission(method: &str, path: &str) -> &'static str {
         } else {
             "search.save"
         }
+    } else if path == "/v1/market/bounds" {
+        "search.compute"
     } else if method == "GET" || path == "/v1/knowledge/tools/call" {
         "knowledge.read"
     } else if path.starts_with("/v1/history/plans")
@@ -61,7 +63,10 @@ pub fn route_permission(method: &str, path: &str) -> &'static str {
         "history.build"
     } else if path.starts_with("/v1/similarity/") || path == "/v1/history/search" {
         "search.save"
-    } else if path.starts_with("/v1/market/") || path.ends_with("/preview") {
+    } else if path.starts_with("/v1/market/")
+        || path.ends_with("/preview")
+        || path == "/v1/chart-analyses/outline"
+    {
         "search.compute"
     } else {
         "records.write"

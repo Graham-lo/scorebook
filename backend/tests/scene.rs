@@ -196,6 +196,26 @@ async fn visual(s: &Services, o: Uuid, attachment: Uuid) {
     sqlx::query("INSERT INTO image_embeddings(id,owner_id,attachment_id,model_id,region,region_hash,embedding,quality) VALUES($1,$2,$3,'dinov2-small-v1','null',$4,$5::vector,'{}') ON CONFLICT DO NOTHING")
         .bind(Uuid::new_v4()).bind(o).bind(attachment).bind(WHOLE).bind(&vector)
         .execute(&s.db.pool).await.unwrap();
+    // The encoder is stubbed, but its region identity follows the real chart pipeline.
+    let read = chart_search::anchored(
+        s,
+        o,
+        &serde_json::from_value(json!({"attachment_id":attachment})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let region = Some(read.geometry.quality.region);
+    let selected = scorebook::adapters::db::digest(&region);
+    let profile = similarity::CHART_VISUAL_CROP;
+    let cropped = scorebook::adapters::db::digest(&json!({"crop_profile":profile,"region":region}));
+    for (hash, quality) in [
+        (selected, json!({})),
+        (cropped, json!({"crop_profile":profile})),
+    ] {
+        sqlx::query("INSERT INTO image_embeddings(id,owner_id,attachment_id,model_id,region,region_hash,embedding,quality) VALUES($1,$2,$3,'dinov2-small-v1',$4,$5,$6::vector,$7) ON CONFLICT DO NOTHING")
+            .bind(Uuid::new_v4()).bind(o).bind(attachment).bind(json!(region)).bind(hash).bind(&vector).bind(quality)
+            .execute(&s.db.pool).await.unwrap();
+    }
 }
 
 /// 跑完一次私有按图检索，返回最终结果。
@@ -314,8 +334,8 @@ async fn a_swap_moves_replay_and_the_automatic_match_to_the_new_image() {
     let body: Value = sqlx::query_scalar("SELECT body FROM jobs WHERE owner_id=$1 AND kind='attachment.locate' ORDER BY created_at DESC,id DESC LIMIT 1")
         .bind(o).fetch_one(&s.db.pool).await.unwrap();
     assert_eq!(body["attachment_id"], json!(new));
-    assert_eq!(body["call_id"], json!(id));
-    assert_eq!(body["trigger"], "scene_replaced");
+    assert!(body["call_id"].is_null());
+    assert_eq!(body["trigger"], "upload");
 }
 
 /// 被接替的那一张一行没删、一个字节没改，而且随时指得回来。
@@ -450,4 +470,29 @@ async fn a_replacement_uploaded_before_submission_carries_no_marker() {
     assert_eq!(found["items"][0]["attachment_id"], json!(new));
     let searched = private_search(&s, o, query, "before").await;
     assert_eq!(searched["items"][0]["attachment_id"], json!(new));
+}
+
+#[tokio::test]
+async fn private_chart_queries_do_not_compare_crops_with_legacy_whole_images() {
+    let (s, owner, _tmp) = setup().await;
+    let original = upload(&s, owner, "old-image", chart(false), "scene").await;
+    record(&s, owner, "old-record", vec![original]).await;
+    visual(&s, owner, original).await;
+    // Keep only the old whole-image vector: a perfect synthetic cosine match is
+    // still ineligible until this original has been rebuilt with the crop profile.
+    sqlx::query(
+        "DELETE FROM image_embeddings WHERE owner_id=$1 AND attachment_id=$2 AND region_hash<>$3",
+    )
+    .bind(owner)
+    .bind(original)
+    .bind(WHOLE)
+    .execute(&s.db.pool)
+    .await
+    .unwrap();
+    let query = upload(&s, owner, "query", chart(false), "query").await;
+    visual(&s, owner, query).await;
+    assert_eq!(
+        private_search(&s, owner, query, "crop-only").await["items"],
+        json!([])
+    );
 }

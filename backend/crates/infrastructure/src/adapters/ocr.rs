@@ -2,14 +2,14 @@
 use crate::error::{Error, Result, RetryDirective};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Observation {
     pub text: String,
     pub confidence: f32,
     pub r#box: [f64; 4],
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OcrResult {
     pub model_id: String,

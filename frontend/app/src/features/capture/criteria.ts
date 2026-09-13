@@ -49,15 +49,6 @@ export function emptyCriteriaDraft(): CriteriaDraft {
   }
 }
 
-export const TEMPLATE_HELP: Record<Template, string> = {
-  T0: '只留下这句话和这张图，不判对错。',
-  T1: '在期限内朝一个方向走满阈值就算兑现。',
-  T2: '在 T1 之上加一条失效价：期间触及就算没走成。',
-  T3: '先等一个价格条件成立，成立之后再开始计时。',
-  T4: '一个边界，期限内没被打破就算守住。',
-  T5: '只看波动幅度，不分方向。',
-}
-
 /** Templates that need a direction, and that read a threshold. */
 const DIRECTIONAL: Template[] = ['T1', 'T2', 'T3']
 
@@ -81,30 +72,33 @@ export function problems(d: CriteriaDraft): string[] {
   const out: string[] = []
   if (d.template === 'T0') return out
   if (!(d.horizonHours > 0 && d.horizonHours <= MAX_HORIZON)) {
-    out.push('期限要在 1 小时到 10 年之间。')
+    out.push('期限要在 1 小时到 10 年之间')
   }
   if (DIRECTIONAL.includes(d.template) && d.direction === null) {
-    out.push('这个标准要有方向：先选看涨还是看跌。')
+    out.push('先选看多还是看空')
   }
-  if (d.thresholdKind === 'percent' && !decimal(d.thresholdPercent)) {
-    out.push('阈值百分比要填一个大于 0 的数。')
+  if (DIRECTIONAL.includes(d.template) && d.thresholdKind === 'percent' && !decimal(d.thresholdPercent)) {
+    out.push('阈值要填一个大于 0 的数')
   }
-  if (d.thresholdKind === 'atr' && !decimal(d.atrMultiple)) {
-    out.push('ATR 倍数要填一个大于 0 的数。')
+  if (DIRECTIONAL.includes(d.template) && d.thresholdKind === 'atr' && !decimal(d.atrMultiple)) {
+    out.push('ATR 倍数要填一个大于 0 的数')
   }
   if (d.template === 'T2' && !decimal(d.invalidation)) {
-    out.push('这个标准必须写失效价。')
+    out.push('要写失效价')
   }
-  if (d.template !== 'T2' && d.invalidation.trim() && !decimal(d.invalidation)) {
-    out.push('失效价填得不对，留空表示不设失效价。')
+  if ((d.template === 'T1' || d.template === 'T3') && d.invalidation.trim() && !decimal(d.invalidation)) {
+    out.push('失效价填得不对')
+  }
+  if (d.template === 'T5' && d.atrMultiple.trim() && !decimal(d.atrMultiple)) {
+    out.push('振幅要填一个大于 0 的数，或留空用默认值')
   }
   if (d.template === 'T4' && !decimal(d.boundary)) {
-    out.push('守边界要写出那条边界的价格。')
+    out.push('要写边界价格')
   }
   if (d.template === 'T3') {
-    if (!decimal(d.triggerPrice)) out.push('触发条件要写出价格。')
+    if (!decimal(d.triggerPrice)) out.push('要写触发价')
     if (!(d.triggerWindowHours > 0 && d.triggerWindowHours <= MAX_HORIZON)) {
-      out.push('等待条件成立的窗口要在 1 小时到 10 年之间。')
+      out.push('等待窗口要在 1 小时到 10 年之间')
     }
   }
   return out
@@ -125,10 +119,10 @@ export function build(d: CriteriaDraft): Criteria | null {
   if (DIRECTIONAL.includes(d.template) && d.direction) c.direction = d.direction
   // threshold_ratio and atr_multiple are mutually exclusive; leaving both out
   // lets the backend apply the documented 1×ATR14 (T5: 1.5×ATR14) default.
-  if (d.thresholdKind === 'percent') {
+  if (DIRECTIONAL.includes(d.template) && d.thresholdKind === 'percent') {
     const ratio = ratioFromPercent(d.thresholdPercent)
     if (ratio) c.threshold_ratio = ratio
-  } else if (d.thresholdKind === 'atr') {
+  } else if (DIRECTIONAL.includes(d.template) && d.thresholdKind === 'atr') {
     const multiple = decimal(d.atrMultiple)
     if (multiple) c.atr_multiple = multiple
   }

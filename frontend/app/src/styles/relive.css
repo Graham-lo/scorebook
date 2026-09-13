@@ -111,12 +111,6 @@
   gap: 16px;
   min-width: 0;
 }
-.rlv-flat {
-  padding: 26px 22px;
-  background: var(--sheet);
-  border-radius: var(--r2);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
-}
 .rlv-say {
   font-family: var(--serif);
   font-size: 16px;
@@ -158,8 +152,47 @@
   position: relative;
   height: var(--rlv-h);
   min-height: 240px;
-  touch-action: pan-y;
+  touch-action: none;
   cursor: crosshair;
+}
+.rlv-shot[hidden] { display: none }
+.fhistory { --rlv-h: clamp(300px, 52vh, 520px) }
+.fhistory .rlv-tools { flex-wrap: wrap; margin-top: 10px }
+.market-dialog{width:min(1380px,100%);max-height:94dvh}
+.market-dialog .sheet-b{padding:12px;overscroll-behavior:contain}
+.market-dialog .sheet-x{min-width:40px;min-height:40px}
+.market-comparison{min-width:0}
+.market-candidates,.market-controls,.market-stats{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.market-candidates:empty{display:none}
+.market-controls{margin:10px 0}
+.market-comparison .chip{min-height:36px;font-size:12px}
+.market-comparison .chip[aria-pressed=true]{color:var(--blue-text);background:var(--blue-soft);border-color:var(--blue-line)}
+.market-counter{font-size:12px;color:var(--ink3)}
+/* 工具条最右那一句：完整历史在全屏里 */
+.market-hint{margin-left:auto;font-size:12px;color:var(--ink3)}
+.market-outline-status{color:#dc8610}
+.market-controls .market-outline-status:empty{display:none}
+.market-loading{display:grid;place-items:center;min-height:300px;color:var(--ink3)}
+.tv-chart{height:clamp(360px,58dvh,740px);display:flex;flex-direction:column;background:#161A3F;border:0;border-radius:8px;overflow:hidden}
+.tv-canvas{position:relative;flex:1;min-height:220px;min-width:0;touch-action:none}
+.market-stats{margin-top:10px;font-size:13px}
+.market-note,.market-credit{font-size:11px;color:var(--ink3);line-height:1.6}
+.market-note{margin:10px 0 4px}
+.market-credit{display:block;width:fit-content}
+.market-fullscreen-box{padding:0!important}
+.market-dialog.market-fullscreen,.market-dialog:fullscreen{width:100%;height:100dvh;max-height:100dvh;max-width:none;border-radius:0}
+.market-fullscreen .tv-chart,.market-dialog:fullscreen .tv-chart{height:calc(100dvh - 290px);min-height:280px}
+@media(max-width:720px){
+  .sheet-box:has(.market-dialog){padding:8px}
+  .market-dialog .sheet-h{padding:8px 12px}
+  .market-dialog .sheet-t{font-size:16px}
+  .market-candidates{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}
+  .market-candidates>*{flex-shrink:0}
+  .market-dialog .sheet-b{padding:8px}
+  .market-comparison .chip{min-height:40px}
+  .market-periods{width:100%;gap:5px}
+  .tv-chart{height:56dvh;min-height:340px}
+  .market-fullscreen .tv-chart,.market-dialog:fullscreen .tv-chart{height:calc(100dvh - 320px);min-height:280px}
 }
 .rlv-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100% }
 
@@ -436,19 +469,6 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
   gap: 10px;
   flex-wrap: wrap;
 }
-.rlv-count { font-size: 12px; color: var(--ink3) }
-.rlv-status {
-  font-family: var(--serif);
-  font-size: 14px;
-  color: var(--ink2);
-  margin-left: auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rlv-result { animation: rise 0.4s var(--e-out) both }
-
 /* ---------- 事实 ---------- */
 
 .rlv-facts {
@@ -594,25 +614,6 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
   border-radius: var(--r2);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
 }
-.rlv-fig { display: inline-flex; flex-direction: column; gap: 3px }
-.rlv-fig i { font-style: normal; font-size: 11px; letter-spacing: 0.08em; color: var(--ink3) }
-.rlv-fig b { font-size: 15px; font-weight: 500; color: var(--ink) }
-
-/* 只有一张图的时候不让它摊满一行，图会被拉得很小、两边全是空白。 */
-.rlv-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 460px)); justify-content: start; gap: 14px }
-.rlv-card {
-  margin: 0;
-  padding: 10px;
-  background: var(--sheet);
-  border-radius: var(--r2);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rule) 72%, transparent), var(--shadow);
-  min-width: 0;
-}
-.rlv-card .shot-slot { height: 240px; aspect-ratio: auto !important; background: none }
-.rlv-card img { width: 100%; height: 240px; object-fit: contain; display: block; cursor: zoom-in }
-.rlv-card figcaption { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; font-size: 12px }
-.rlv-card figcaption b { font-size: 13px; color: var(--ink2) }
-
 /* ---------- 画哪几条线 ---------- */
 
 /* ---------- 图下面那一条：指标、回到判断点、行情是哪来的 ---------- */
@@ -620,192 +621,6 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
 .rlv-toolbox { display: flex; flex-direction: column; gap: 10px; margin-top: -4px }
 .rlv-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
 .rlv-tools .btn.on { box-shadow: inset 0 0 0 1px var(--blue-line); color: var(--blue-text) }
-.rlv-src {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--ink3);
-  white-space: nowrap;
-}
-
-.rlv-setup {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  background: var(--sheet2);
-  border-radius: var(--r2);
-  box-shadow: inset 0 0 0 1px var(--rule);
-}
-.rlv-slabel { font-size: 12.5px; color: var(--ink3) }
-.rlv-srow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 26px }
-.rlv-sname {
-  flex: 0 0 52px;
-  font-style: normal;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: 0.02em;
-  color: var(--ink3);
-}
-.rlv-sub { font-size: 12px; color: var(--ink3) }
-.rlv-snote { font-size: 11.5px; color: var(--ink4, var(--ink3)); opacity: 0.8 }
-
-/* 开关：按下去就是开着，颜色说明它现在画在图上。 */
-.rlv-sw {
-  flex: 0 0 52px;
-  height: 24px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--rule);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--ink3);
-  cursor: pointer;
-  transition: background var(--t1), color var(--t1), box-shadow var(--t1);
-}
-.rlv-sw:hover { background: var(--sheet3, var(--sheet)) }
-.rlv-sw.on {
-  background: var(--blue-soft);
-  color: var(--blue-text);
-  box-shadow: inset 0 0 0 1px var(--blue-line);
-}
-
-/* 一条均线一个小牌子，点一下就去掉。 */
-.rlv-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap }
-.rlv-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 99px;
-  background: var(--blue-soft);
-  box-shadow: inset 0 0 0 1px var(--blue-line);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--blue-text);
-  cursor: pointer;
-}
-.rlv-chip u { text-decoration: none; opacity: 0.55 }
-.rlv-chip:hover u { opacity: 1 }
-.rlv-num {
-  height: 24px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--sheet);
-  box-shadow: inset 0 0 0 1px var(--rule);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--ink);
-}
-.rlv-num:focus { outline: none; box-shadow: inset 0 0 0 1px var(--blue-line) }
-.rlv-num.add { opacity: 0.7 }
-.rlv-num.add:focus { opacity: 1 }
-
-/* ---------- 钉到真实行情 ---------- */
-
-/* 一条记录上所有图片的定位板：分堆，每堆一张一张摆。 */
-.rlv-board { display: flex; flex-direction: column; gap: 16px }
-.rlv-bgroup { display: flex; flex-direction: column; gap: 10px }
-.rlv-bhead {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  font-size: 12.5px;
-  color: var(--ink2);
-}
-.rlv-bhead b { font-size: 13px; font-weight: 600 }
-.rlv-bcard { display: flex; align-items: flex-start; gap: 14px }
-.rlv-bcard > .rlv-locate { flex: 1 1 auto; min-width: 0 }
-.rlv-bthumb {
-  flex: 0 0 auto;
-  width: 132px;
-  border-radius: var(--r3, 8px);
-  overflow: hidden;
-  box-shadow: inset 0 0 0 1px var(--rule);
-}
-.rlv-bthumb img { display: block; width: 100% }
-.rlv-ltarget { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px }
-
-@media (max-width: 720px) {
-  .rlv-bcard { flex-direction: column }
-  .rlv-bthumb { width: 100% }
-}
-
-.rlv-locate {
-  padding: 14px 18px;
-  background: var(--sheet2);
-  border-radius: var(--r2);
-  box-shadow: inset 0 0 0 1px var(--rule);
-}
-.rlv-lrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; color: var(--ink2) }
-.rlv-lrow .mono { font-size: 12.5px }
-.rlv-lok {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 9px;
-  border-radius: 99px;
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--blue-soft);
-  color: var(--blue-text);
-  box-shadow: inset 0 0 0 1px var(--blue-line);
-}
-.rlv-lauto {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 99px;
-  font-size: 11px;
-  letter-spacing: .04em;
-  color: var(--ink3);
-  box-shadow: inset 0 0 0 1px var(--rule2);
-}
-.rlv-lbad { color: var(--unrealized) }
-.rlv-lmeta { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink3) }
-.rlv-spin {
-  width: 13px;
-  height: 13px;
-  flex: none;
-  border-radius: 50%;
-  border: 2px solid var(--blue-line);
-  border-top-color: var(--blue);
-  animation: rlvSpin 0.8s linear infinite;
-}
-@keyframes rlvSpin { to { transform: rotate(360deg) } }
-
-.rlv-cands { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 12px; margin-top: 12px; width: 100% }
-.rlv-cand {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  background: var(--sheet);
-  border-radius: var(--r);
-  box-shadow: 0 0 0 1px var(--rule), var(--shadow);
-  min-width: 0;
-  animation: rise 0.4s var(--e-out) both;
-  animation-delay: calc(var(--i, 0) * 70ms);
-  transition: box-shadow var(--t2), transform var(--t2) var(--e);
-}
-.rlv-cand:hover { transform: translateY(-2px); box-shadow: 0 0 0 1px var(--blue-line), var(--shadow-lift) }
-.rlv-chead { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; font-size: 12.5px }
-.rlv-chead .rank { font-family: var(--mono); font-size: 11px; color: var(--gold) }
-.rlv-cchart {
-  height: 62px;
-  border-radius: 6px;
-  background: linear-gradient(180deg, var(--board2), var(--board));
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-}
-.rlv-cwhen { font-size: 11px; color: var(--ink3); overflow-wrap: anywhere }
-.rlv-cfail { font-size: 11.5px; color: var(--board-ink2) }
 .rlv-mini { width: 100%; height: 100% ; display: block }
 .rlv-mini .up .w, .rlv-mini .up .b { stroke: var(--up) }
 .rlv-mini .up .b { fill: color-mix(in srgb, var(--up) 60%, transparent) }
@@ -831,22 +646,19 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
   .rlv-words { font-size: 15.5px; padding: 15px 17px }
   .rlv-facts { grid-template-columns: repeat(2, 1fr) }
   .rlv-facts .f b { font-size: 13.5px }
-  .rlv-status { margin-left: 0; width: 100% }
   .rlv-shot { width: 96px; left: 8px }
   .rlv-shot:hover { width: 96px }
   .rlv-shot .shot-slot, .rlv-shot img,
   .rlv-shot:hover .shot-slot, .rlv-shot:hover img { max-height: min(108px, calc(var(--rlv-main-bottom, 300px) - 56px)) }
   .rlv-pin .t { max-width: min(150px, var(--room, 150px)) }
   .rlv-pin .t b { font-size: 11px }
-  .rlv-card .shot-slot, .rlv-card img { height: 180px }
   .rlv-later { padding: 14px 16px }
 }
 
 @media (max-width: 520px) {
-  .rlv-steps a .t { display: none }
-  .rlv-steps a { padding: 0 7px }
+  .rlv-steps a .n { display: none }
+  .rlv-steps a { padding: 0 10px; height: 34px }
   .rlv-facts { grid-template-columns: 1fr 1fr }
-  .rlv-locate { padding: 12px 14px }
 }
 
 /* 手机横过来：屏幕只有一点点高，把图撑满、别的收窄 */
@@ -861,38 +673,151 @@ button.rlv-band { pointer-events: auto; cursor: pointer }
 /* 触屏上没有 hover，标注和候选都得自己站住 */
 @media (pointer: coarse) {
   .rlv-stage { cursor: default }
-  .rlv-cand:hover { transform: none }
+  .loc-cand:hover { transform: none }
 }
 
 /* ============================================================
-   三个入口：详情页的图、复盘队列的一行
+   对上行情（弹出层）
    ============================================================ */
 
-/* 看图台工具条上的「钉到真实行情」，钉的过程就摊在图和脚注之间。 */
-.viewer-pin {
-  padding: 13px 15px;
-  border-top: 1px solid var(--rule);
-  background: color-mix(in srgb, var(--sheet2) 66%, transparent);
-  animation: rise 0.3s var(--e-out) both;
-}
-.viewer-pin .rlv-locate { padding: 0; background: none; box-shadow: none }
+.loc { display: flex; flex-direction: column; gap: 14px; min-width: 0 }
 
-/* 复盘队列：写之前可以先把那一段行情走一遍。 */
-.qcell { position: relative }
-.qcell .qitem { padding-right: 104px }
-.qrelive {
-  position: absolute;
-  right: 12px;
-  bottom: 11px;
-  padding: 3px 9px;
-  border-radius: 99px;
-  font-size: 11.5px;
+/* 图上认出来的那几样，和已经对上的那一段。 */
+.loc-read {
+  font-family: var(--mono);
+  font-size: 12.5px;
   color: var(--ink3);
-  white-space: nowrap;
-  transition: color var(--t1), background var(--t2) var(--e), box-shadow var(--t2);
+  overflow-wrap: anywhere;
 }
-.qrelive:hover { color: var(--blue-text); background: var(--blue-soft); box-shadow: inset 0 0 0 1px var(--blue-line) }
+.loc-on {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: var(--r);
+  font-size: 13.5px;
+  color: var(--blue-text);
+  background: var(--blue-soft);
+  box-shadow: inset 0 0 0 1px var(--blue-line);
+}
+.loc-on > span { min-width: 0; overflow-wrap: anywhere }
+.loc-wait { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--ink2) }
+.loc-bad { display: flex; flex-direction: column; gap: 4px }
+.loc-bad b { font-size: 15px; color: var(--ink) }
+.loc-bad span { font-size: 13px; color: var(--ink3) }
+.rlv-spin {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--blue-line);
+  border-top-color: var(--blue);
+  animation: rlvSpin 0.8s linear infinite;
+}
+@keyframes rlvSpin { to { transform: rotate(360deg) } }
 
-@media (max-width: 760px) {
-  .qcell .qitem { padding-right: 92px }
+/* 像这几段：一张小图、一行身份、一颗确认。 */
+.loc-cands { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 12px; width: 100% }
+.loc-cand {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  background: var(--sheet);
+  border-radius: var(--r);
+  box-shadow: 0 0 0 1px var(--rule), var(--shadow);
+  min-width: 0;
+  animation: rise 0.4s var(--e-out) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+  transition: box-shadow var(--t2), transform var(--t2) var(--e);
 }
+.loc-cand:hover { transform: translateY(-2px); box-shadow: 0 0 0 1px var(--blue-line), var(--shadow-lift) }
+.loc-cand .btn { align-self: flex-start }
+.loc-cchart {
+  height: 62px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, var(--board2), var(--board));
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.loc-cbody { display: flex; flex-direction: column; gap: 3px; min-width: 0 }
+.loc-cbody b { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere }
+.loc-word { font-size: 11.5px; color: var(--ink3) }
+
+/* 手填的四格，和左右对照。 */
+.loc-manual { display: flex; flex-direction: column; gap: 14px }
+.loc-fields { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap }
+.loc-field { display: flex; flex-direction: column; gap: 5px; min-width: 0 }
+.loc-field > span { font-size: 11.5px; letter-spacing: 0.04em; color: var(--ink3) }
+.loc-when { height: 30px; padding: 0 8px; font-family: var(--mono); font-size: 12.5px }
+.loc-check { display: flex; flex-direction: column; gap: 8px }
+.loc-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: center }
+.loc-half {
+  min-width: 0;
+  min-height: 132px;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  border-radius: var(--r);
+  background: linear-gradient(180deg, var(--board2), var(--board));
+  overflow: hidden;
+}
+.loc-half img { max-width: 100%; max-height: 200px; object-fit: contain; display: block }
+.loc-half .shot-slot { width: 100%; background: none }
+
+@media (max-width: 560px) {
+  .loc-pair { grid-template-columns: 1fr }
+  .loc-fields { gap: 10px }
+}
+
+/* ============================================================
+   重温：对比图 tab、事实行、答案、打法
+   ============================================================ */
+
+/* 每张已经对上行情的图各占一个 tab，点谁播谁。 */
+.rlv-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-bottom: -6px;
+}
+.rlv-tabs::-webkit-scrollbar { display: none }
+.rlv-tab {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--rule);
+  font-size: 12.5px;
+  color: var(--ink3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--t1), color var(--t1), box-shadow var(--t1);
+}
+.rlv-tab:hover { color: var(--ink2) }
+.rlv-tab.on {
+  background: var(--blue-soft);
+  color: var(--blue-text);
+  box-shadow: inset 0 0 0 1px var(--blue-line);
+}
+
+/* 舞台上面那一行事实，跟着播放头走。 */
+.rlv-factline {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink2);
+  overflow-wrap: anywhere;
+  margin-bottom: -8px;
+}
+
+.rlv-answer { display: flex; flex-direction: column; gap: 12px }
+.rlv-play { display: flex; flex-direction: column; align-items: flex-start; gap: 10px }
+.loc-chead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap }
+.loc-chead .loc-word { font-size: 12.5px; color: var(--ink2) }

@@ -2,10 +2,13 @@
 // keyframes. Everything here is skipped outright when the reader has asked
 // for reduced motion.
 
+import { motionOff } from '../data/prefs'
+
 const reduced = window.matchMedia('(prefers-reduced-motion: reduce)')
 
+/** 系统说减弱动态效果，或者设置里把「动效」关掉了，都按不动来。 */
 export function prefersReducedMotion(): boolean {
-  return reduced.matches
+  return reduced.matches || motionOff()
 }
 
 /**
@@ -26,7 +29,18 @@ export function stagger(items: Iterable<Element>, max = 16): void {
 /** The page's own blocks rise in order, top to bottom. */
 export function orderPage(host: HTMLElement, max = 14): void {
   if (prefersReducedMotion()) return
-  Array.from(host.children).forEach((child, index) => {
+  number(host.children, max)
+  // 宽屏那几层排版壳子（两栏、详情三栏、向导）本身不入场，
+  // 编号要落到它们里面那些真正的块上。
+  for (const shell of Array.from(host.querySelectorAll(':scope > .spread, :scope > .detailwrap, :scope > .wiz'))) {
+    const columns = shell.querySelectorAll(':scope > .lead, :scope > .bulk, :scope > .wizside, :scope > .wizmain')
+    if (columns.length) for (const column of Array.from(columns)) number(column.children, max)
+    else number(shell.children, max)
+  }
+}
+
+function number(nodes: HTMLCollection, max: number): void {
+  Array.from(nodes).forEach((child, index) => {
     ;(child as HTMLElement).style.setProperty('--i', String(Math.min(index, max)))
   })
 }
@@ -36,7 +50,7 @@ export function pressFeedback(): void {
   document.addEventListener('pointerdown', (e) => {
     if (prefersReducedMotion()) return
     const target = (e.target as HTMLElement | null)?.closest(
-      '.lrow,.qitem,.tagrow,.opt,.big,.weekstrip a,.vcard,.pbrow,.hcard,.hrec,.hnum',
+      '.lrow,.tkrow,.crow,.rrow,.tagrow,.opt,.big,.weekstrip a,.vcard,.pbrow',
     ) as HTMLElement | null
     if (!target) return
     target.style.transition = 'transform .09s var(--e)'

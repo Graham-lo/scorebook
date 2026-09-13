@@ -18,16 +18,19 @@
 
 import type { CallDetail, Outcome, Uuid } from '../../api/types'
 import { PATHS, STANCES, sentence } from '../../data/criteria'
-import { stateLook } from '../../data/outcome'
 import { detail, invalidate } from '../../data/store'
-import { dateTime, elapsed, horizon, relative } from '../../data/time'
+import { dateTime } from '../../data/time'
 import { go, reload, route } from '../../router'
 import { clear, h } from '../../ui/dom'
 import { icon } from '../../ui/icons'
 import { reviewImages } from '../../ui/image-picker'
+import { stanceBadge } from '../../ui/bits'
+import { stile } from '../../ui/stile'
 import { stagger } from '../../ui/motion'
 import { empty, note, spinner } from '../../ui/states'
+import { problem } from '../../ui/toast'
 import { draftEditor, outcomeLine, type DraftEditor } from './draft'
+import { inMainViewer } from '../call/scene'
 
 interface Step {
   n: number
@@ -38,44 +41,39 @@ interface Step {
 }
 
 const STEPS: Step[] = [
-  {
-    n: 1,
-    title: '回到当时',
-    lead: '先把当时那句话和那张图重新看一遍。不先看当时，复盘就变成了事后诸葛——现在你已经知道答案了，很容易把「我早就觉得」当成当时真的想过。',
-    next: '看看市场怎么答的',
-  },
-  {
-    n: 2,
-    title: '市场的答案',
-    lead: '行情后来怎么走的。这一格由市场填，你能做的是把后续走势的截图补上，和当时那张放在一起看。',
-    next: '写下我现在怎么看',
-  },
-  {
-    n: 3,
-    title: '你现在怎么看',
-    lead: '当时那句话，哪一半站住了，哪一半是错觉。这是整件事里唯一只有你能写的部分。',
-    next: '再想想下次怎么做',
-  },
-  {
-    n: 4,
-    title: '下次怎么做',
-    lead: '同样的局面再来一次，改哪儿。写完发布，这条复盘就不能再改了——要补充只能再写一条。',
-    next: '发布这条复盘',
-  },
+  { n: 1, title: '当时', lead: '先看当时的图和话，再往下写', next: '下一步' },
+  { n: 2, title: '市场的答案', lead: '补一张之后的图，和当时那张放一起', next: '下一步' },
+  { n: 3, title: '现在怎么看', lead: '', next: '下一步' },
+  { n: 4, title: '下次怎么做', lead: '', next: '发布' },
 ]
 
 /** 这四步的名字。清单页和记录页上先给人看一眼要走几步，再让人按。 */
 export const STEP_NAMES = STEPS.map((s) => s.title)
 
 /** 翻页时接住编辑区，免得每一步都重读一次草稿。 */
-let held: { id: Uuid; editor: DraftEditor } | null = null
+interface HeldReview { id: Uuid; editor: DraftEditor; active: boolean; version: number }
+let held: HeldReview | null = null
+// 保存失败时保留整份编辑器（包括尚未传上的图片），返回同一条复盘继续重试。
+const retained = new Map<Uuid, HeldReview>()
 
 function releaseHeld(): void {
   if (!held) return
-  const editor = held.editor
+  const entry = held
   held = null
-  void editor.flush().catch(() => undefined)
-  editor.dispose()
+  entry.active = false
+  const version = ++entry.version
+  if (entry.editor.dispose()) {
+    retained.delete(entry.id)
+    return
+  }
+  void entry.editor.flush().then(() => {
+    // 离开后的保存尚未完成就返回了，不能拆掉重新接上的编辑器。
+    if (entry.active || entry.version !== version) return
+    if (entry.editor.dispose()) retained.delete(entry.id)
+    else problem('复盘还没保存，已保留在当前标签页。返回这条复盘可以重试，请勿刷新或关闭。')
+  }).catch(() => {
+    if (!entry.active && entry.version === version) problem('复盘还没保存，请返回这条复盘重试。内容仍在当前标签页。')
+  })
 }
 
 export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): () => void {
@@ -88,11 +86,11 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
     {},
     h('a', { href: '#/review', text: '复盘' }),
     h('span.sep', { text: '›' }),
-    h('span', { text: done ? '写完了' : `第 ${at.n} 步 · ${at.title}` }),
+    h('span', { text: done ? '这一轮走完了' : at.title }),
   )
   const shell = h('div.wiz')
   host.append(crumb, shell)
-  shell.appendChild(spinner('正在读这条记录…'))
+  shell.appendChild(spinner('正在加载'))
 
   void start()
 
@@ -103,11 +101,11 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
     } catch (error) {
       if (!alive) return
       clear(shell)
+      shell.classList.remove('wide')
       shell.appendChild(
         empty({
-          title: '这条记录读不出来',
-          tip: error instanceof Error ? error.message : '稍后再试一次。',
-          action: h('a.btn.sm', { href: '#/review', text: '回到复盘清单' }),
+          title: '没读出来',
+          action: h('a.btn.sm', { href: '#/review', text: '回复盘' }),
         }),
       )
       return
@@ -116,8 +114,10 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
 
     if (held && held.id !== callId) releaseHeld()
     if (!held) {
-      held = {
+      held = retained.get(callId) ?? {
         id: callId,
+        active: true,
+        version: 0,
         editor: draftEditor({
           callId,
           instrument: record.body.instrument,
@@ -133,12 +133,16 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
           },
         }),
       }
+      held.active = true
+      held.version += 1
+      retained.set(callId, held)
     }
     const editor = held.editor
 
     if (record.voided) {
       clear(shell)
-      shell.appendChild(note('warn', '这条记录已经作废，不再接受新的复盘。'))
+      shell.classList.remove('wide')
+      shell.appendChild(note('warn', '作废后不再复盘，内容保留'))
       return
     }
     if (done && !record.reviews.length) {
@@ -148,6 +152,7 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
     }
     if (done) {
       clear(shell)
+      shell.classList.remove('wide')
       shell.appendChild(finished(record))
       stagger([...shell.children])
       return
@@ -161,8 +166,9 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
       } catch (error) {
         if (!alive) return
         clear(shell)
+        shell.classList.remove('wide')
         shell.appendChild(
-          note('warn', error instanceof Error ? error.message : '这条的草稿读不出来。'),
+          note('warn', '没读出来'),
         )
         shell.appendChild(
           h('div.wizfoot', {}, h('button.btn.sm', {
@@ -177,7 +183,13 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
     }
 
     clear(shell)
-    shell.append(rail(), heading(record), stepBody(record, editor), foot(editor))
+    // 宽屏上左柱放这一条的摘要，向导本身一步不改地住在右边；窄屏 .wizmain 是
+    // display:contents，页面结构和以前完全一样。
+    shell.classList.add('wide')
+    shell.append(
+      aside(record),
+      h('div.wizmain', {}, rail(), heading(record), editor.parts.banner, editor.parts.status, stepBody(record, editor), foot(editor)),
+    )
     stagger([...shell.querySelectorAll('.wizbody > *')])
   }
 
@@ -204,6 +216,20 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
     return bar
   }
 
+  /** 左柱：这一条的摘要。全是记录页上已经有的东西，只是搬过来陪着写。 */
+  function aside(record: CallDetail): HTMLElement {
+    const scene = record.attachments.find((a) => a.kind === 'scene' && inMainViewer(a))
+    return h(
+      'aside.wizside',
+      {},
+      h('div.wsym', { text: record.body.instrument ?? '没写' }),
+      stanceBadge(record.body.stance),
+      record.original_text ? h('p.quote', { text: record.original_text }) : null,
+      h('div.wmeta', { text: dateTime(record.submitted_at) }),
+      scene ? stile({ id: scene.id, compact: true, label: '当时', alt: '当时' }) : null,
+    )
+  }
+
   function heading(record: CallDetail): HTMLElement {
     return h(
       'header.wizhead',
@@ -211,28 +237,28 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
       h(
         'div.wizwho',
         {},
-        h('span.sym', { text: record.body.instrument ?? '未标品种' }),
+        h('span.sym', { text: record.body.instrument ?? '没写' }),
         record.body.timeframe ? h('span', { text: record.body.timeframe }) : null,
-        h('span.faint', { text: `${dateTime(record.submitted_at)} 记下 · ${relative(record.submitted_at)}` }),
-        h('a.btn.sm.ghost', { href: `#/call/${record.id}`, text: '打开完整记录' }),
+        h('span.faint', { text: dateTime(record.submitted_at) }),
+        h('a.btn.sm.ghost', { href: `#/call/${record.id}`, text: '看这条记录' }),
       ),
       h('h1.wizt', {}, h('span.k', { text: `第 ${at.n} 步` }), at.title),
-      h('p.wizl', { text: at.lead }),
+      at.lead ? h('p.wizl', { text: at.lead }) : null,
     )
   }
 
   function stepBody(record: CallDetail, editor: DraftEditor): HTMLElement {
     const box = h('div.wizbody')
     if (at.n === 1) {
-      const scenes = record.attachments.filter((a) => a.kind === 'scene').map((a) => a.id)
-      const shots = reviewImages(scenes, '当时那张图')
+      const scenes = record.attachments.filter((a) => a.kind === 'scene' && inMainViewer(a)).map((a) => a.id)
+      const shots = reviewImages(scenes, '当时')
       if (shots) box.appendChild(shots)
       box.appendChild(
         h(
           'div.sec',
           {},
-          h('div.sh', {}, h('span.eyebrow.noline', { text: '当时说的那句话' })),
-          h('div.quote.lg', { text: record.body.original_text || '（这条没有文字，只有图。）' }),
+          h('div.sh', {}, h('span.eyebrow.noline', { text: '原话' })),
+          h('div.quote.lg', { text: record.body.original_text || '没写' }),
         ),
       )
       box.appendChild(momentFacts(record))
@@ -241,13 +267,8 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
         h(
           'div.sec',
           {},
-          h('div.sh', {}, h('span.eyebrow.noline', { text: '当时定下的标准' })),
+          h('div.sh', {}, h('span.eyebrow.noline', { text: '怎么算对' })),
           h('div.sentence', { text: sentence(claim) }),
-          h('div.tip', {
-            text: claim
-              ? `观察 ${horizon(claim.horizon_hours)}。这条标准在记下那一刻就定死了，不会因为行情走成什么样而改。`
-              : '这条当时没写算对错的标准，所以没有自动结果。用文字复盘一样算数。',
-          }),
         ),
       )
       return box
@@ -259,18 +280,17 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
         h(
           'div.sec',
           {},
-          h('div.sh', {}, h('span.eyebrow.noline', { text: '市场给的答案' })),
+          h('div.sh', {}, h('span.eyebrow.noline', { text: '市场的答案' })),
           ...(outs.length
             ? outs.map((o: Outcome) => outcomeLine(o))
-            : [h('div.tip', { text: '这条没有写算对的标准，所以没有自动结果。下面的话和图一样算数。' })]),
-          waitLine(record, outs),
+            : [h('div.tip', { text: '没写怎么算对' })]),
         ),
       )
       box.appendChild(
         h(
           'div.sec',
           {},
-          h('div.sh', {}, h('span.eyebrow.noline', { text: '补上后来的走势' })),
+          h('div.sh', {}, h('span.eyebrow.noline', { text: '走势' })),
           editor.parts.pictures,
         ),
       )
@@ -278,19 +298,17 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
     }
 
     if (at.n === 3) {
-      const scenes = record.attachments.filter((a) => a.kind === 'scene').map((a) => a.id)
+      const scenes = record.attachments.filter((a) => a.kind === 'scene' && inMainViewer(a)).map((a) => a.id)
       box.appendChild(
         h(
           'div.sec.recall',
           {},
-          h('div.sh', {}, h('span.eyebrow.noline', { text: '当时那句话' })),
-          h('div.quote', { text: record.body.original_text || '（这条没有文字，只有图。）' }),
-          reviewImages(scenes, '当时那张图'),
+          h('div.sh', {}, h('span.eyebrow.noline', { text: '原话' })),
+          h('div.quote', { text: record.body.original_text || '没写' }),
+          reviewImages(scenes, '当时'),
         ),
       )
-      box.appendChild(
-        h('div.sec', {}, h('div.sh', {}, h('span.eyebrow.noline', { text: '你现在怎么看' })), editor.parts.note),
-      )
+      box.appendChild(h('div.sec', {}, editor.parts.note))
       box.appendChild(h('div.sec', {}, editor.parts.vsLast))
       return box
     }
@@ -301,12 +319,10 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
       h(
         'div.sec',
         {},
-        h('div.sh', {}, h('span.eyebrow.noline', { text: '这次实际做了没有' })),
-        h('div.tip', { text: '想法和成交是两件事。对上之后才看得出差在执行还是差在判断。' }),
+        h('div.sh', {}, h('span.eyebrow.noline', { text: '实际成交' })),
         editor.parts.trades,
       ),
     )
-    box.appendChild(editor.parts.banner)
     return box
   }
 
@@ -317,11 +333,11 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
       bar.appendChild(
         h('a.btn.ghost', {
           href: `#/review/${callId}/step/${at.n - 1}`,
-          text: `上一步 · ${STEPS[at.n - 2]!.title}`,
+          text: '上一步',
         }),
       )
     } else {
-      bar.appendChild(h('a.btn.ghost', { href: '#/review', text: '回到清单' }))
+      bar.appendChild(h('a.btn.ghost', { href: '#/review', text: '回复盘' }))
     }
     if (at.n < 4) {
       bar.appendChild(
@@ -341,37 +357,22 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
   /* ---------------------------------------------------------- 写完了 */
 
   function finished(record: CallDetail): HTMLElement {
-    const latest = record.reviews.length ? record.reviews[record.reviews.length - 1]! : null
-    const now = record.current_outcomes?.[0] ?? null
     const box = h('div.wizdone')
     box.appendChild(
       h(
         'div.donetop',
         {},
         h('span.ic', {}, icon('check')),
-        h('h1.wizt', { text: '这一次，你走完了一整轮' }),
-        h('p.wizl', {
-          text: '从市场开口之前说出那句话，到市场给出答案，再到你回头给它打分。下面是这一整轮的样子——往后同样的局面再来，就有得比了。',
-        }),
-      ),
-    )
-    const line = (k: string, v: string) => h('div.dl', {}, h('span.k', { text: k }), h('span.v', { text: v }))
-    box.appendChild(
-      h(
-        'div.sec',
-        {},
-        line('当时说的', record.body.original_text || '（只有图）'),
-        line('市场答的', now ? stateLook(now.result.state).label : '这条不判对错'),
-        line('你写下的', latest?.body.note || '（这次没写文字）'),
-        latest?.body.better_play ? line('下次改法', latest.body.better_play) : null,
+        h('h1.wizt', { text: '这一轮走完了' }),
       ),
     )
     box.appendChild(
       h(
         'div.wizfoot',
         {},
-        h('a.btn.ghost', { href: '#/review', text: '回到复盘清单' }),
-        h('a.btn.primary', { href: `#/call/${record.id}`, text: '重看这一整条' }),
+        h('a.btn.primary', { href: `#/call/${record.id}`, text: '看这条记录' }),
+        h('a.btn', { href: `#/archive?call=${record.id}`, text: '归到一类局面' }),
+        h('a.btn.ghost', { href: '#/review', text: '回复盘' }),
       ),
     )
     return box
@@ -387,30 +388,20 @@ export function guidedReview(host: HTMLElement, callId: Uuid, stepArg: string): 
   }
 }
 
-function waitLine(record: CallDetail, outs: Outcome[]): HTMLElement | null {
-  const answered = outs[0]?.created_at ?? null
-  const gap = elapsed(record.body.original_claimed_at ?? record.submitted_at, answered)
-  if (!gap || gap === '几乎同时') return null
-  return h('div.tip', { text: `从你说出那句话到市场给出答案，中间隔了 ${gap}。` })
-}
-
-/** 当时凭什么这么想——记录那一刻真正被记下来的几件事。 */
+/** 当时那四格事实。 */
 function momentFacts(d: CallDetail): HTMLElement {
-  const rows: { k: string; v: string; w: string }[] = [
-    { k: '方向', v: STANCES[d.body.stance] ?? '没写', w: '方向来自你自己按下的那个按钮，系统不从中文里猜。' },
-    { k: '谁先触发谁', v: PATHS[d.body.path] ?? '没记顺序', w: '先看到结构才有想法，还是先有想法再去找证据。' },
+  const rows: { k: string; v: string }[] = [
+    { k: '方向', v: STANCES[d.body.stance] ?? '没写' },
+    { k: '触发', v: PATHS[d.body.path] ?? '没写' },
     {
-      k: '当时的把握',
-      v: d.body.confidence === null || d.body.confidence === undefined ? '没写' : `${d.body.confidence} 分`,
-      w: '当时自己给的分，事后不许改。',
+      k: '把握',
+      v: d.body.confidence === null || d.body.confidence === undefined ? '没写' : `${d.body.confidence}%`,
     },
-    { k: '周期', v: d.timeframe ?? '未标周期', w: '看的是哪一张图上的结构。' },
+    { k: '周期', v: d.timeframe ?? '没写' },
   ]
   const grid = h('div.momentgrid')
   for (const row of rows) {
-    grid.appendChild(
-      h('div.mf', { title: row.w }, h('span.k', { text: row.k }), h('span.v', { text: row.v }), h('span.w', { text: row.w })),
-    )
+    grid.appendChild(h('div.mf', {}, h('span.k', { text: row.k }), h('span.v', { text: row.v })))
   }
-  return h('div.sec', {}, h('div.sh', {}, h('span.eyebrow.noline', { text: '当时凭什么' })), grid)
+  return h('div.sec', {}, grid)
 }

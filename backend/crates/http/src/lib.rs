@@ -38,6 +38,7 @@ pub fn router(s: Services) -> Router {
         .route("/v1/sessions/{id}/revoke", post(session_revoke))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/market/data", post(market_data))
+        .route("/v1/market/bounds", get(market_bounds))
         .route("/v1/market/chart", post(market_chart))
         .route(
             "/v1/history/indexes",
@@ -202,6 +203,8 @@ async fn invoke(
     Ok(envelope(s.execute(command).await?))
 }
 async fn normalize_response(request: Request, next: Next) -> Response {
+    let bounds_read =
+        request.method() == axum::http::Method::GET && request.uri().path() == "/v1/market/bounds";
     let mut response = next.run(request).await;
     if response.status().is_client_error()
         && response
@@ -214,9 +217,14 @@ async fn normalize_response(request: Request, next: Next) -> Response {
         response = Error::bad("invalid_request").into_response();
         *response.status_mut() = status;
     }
+    let cache_control = if bounds_read && response.status().is_success() {
+        "private, max-age=60"
+    } else {
+        "private, no-store"
+    };
     response.headers_mut().insert(
         header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("private, no-store"),
+        axum::http::HeaderValue::from_static(cache_control),
     );
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,

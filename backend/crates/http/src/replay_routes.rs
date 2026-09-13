@@ -4,6 +4,10 @@ use scorebook_core::api::replay::*;
 pub fn routes() -> Router<Services> {
     Router::new()
         .route(
+            "/v1/attachments/{id}/location-preview",
+            post(location_preview),
+        )
+        .route(
             "/v1/attachments/{id}/location",
             put(location_put).delete(location_delete),
         )
@@ -22,6 +26,22 @@ pub fn routes() -> Router<Services> {
 /// not demanded the way it is on POST.
 fn optional_key(h: &HeaderMap) -> Option<&str> {
     h.get("Idempotency-Key").and_then(|v| v.to_str().ok())
+}
+async fn location_preview(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Path(id): Path<Uuid>,
+    Json(v): Json<AttachmentLocation>,
+) -> Result<Json<Value>> {
+    invoke(
+        &s,
+        o,
+        Action::AttachmentLocationPreview,
+        Some(id),
+        None,
+        json!(v),
+    )
+    .await
 }
 async fn location_put(
     State(s): State<Services>,

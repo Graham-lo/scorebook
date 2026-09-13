@@ -20,7 +20,8 @@ const pad = (n: number) => String(n).padStart(2, '0')
 export function dateTime(iso: string | null | undefined): string {
   const d = parse(iso)
   if (!d) return DASH
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const year = d.getFullYear() === new Date().getFullYear() ? '' : `${d.getFullYear()}年`
+  return `${year}${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 export function dateOnly(iso: string | null | undefined): string {
@@ -32,7 +33,8 @@ export function dateOnly(iso: string | null | undefined): string {
 export function shortDate(iso: string | null | undefined): string {
   const d = parse(iso)
   if (!d) return DASH
-  return `${d.getMonth() + 1}月${d.getDate()}日`
+  const year = d.getFullYear() === new Date().getFullYear() ? '' : `${d.getFullYear()}年`
+  return `${year}${d.getMonth() + 1}月${d.getDate()}日`
 }
 
 /** The three lines of the ledger's date column. */

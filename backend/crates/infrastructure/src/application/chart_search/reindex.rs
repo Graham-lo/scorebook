@@ -29,18 +29,21 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
     let ids:Vec<Uuid>=sqlx::query_scalar("SELECT id FROM attachments WHERE owner_id=$1 AND kind='scene' AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 8").bind(j.owner).bind(after).fetch_all(&s.db.pool).await?;
     for id in &ids {
         for model in [chart_match::MODEL, "dinov2-small-v1"] {
-            let result = super::super::similarity::embed(s, j.owner, *id, None, model).await;
+            let result = if model == "dinov2-small-v1" {
+                super::super::similarity::embed_chart_visual(s, j.owner, *id).await
+            } else {
+                super::super::similarity::embed(s, j.owner, *id, None, model).await
+            };
             let reason = match &result {
                 Ok(_) => None,
                 Err(e)
-                    if model == chart_match::MODEL
-                        && matches!(
-                            e.code.as_str(),
-                            "chart_too_complex_select_region"
-                                | "ordinary_candles_not_resolved"
-                                | "chart_obstructed_or_unsupported"
-                                | "flat_chart_geometry"
-                        ) =>
+                    if matches!(
+                        e.code.as_str(),
+                        "chart_too_complex_select_region"
+                            | "ordinary_candles_not_resolved"
+                            | "chart_obstructed_or_unsupported"
+                            | "flat_chart_geometry"
+                    ) =>
                 {
                     Some(e.code.clone())
                 }
@@ -78,9 +81,9 @@ pub async fn status(s: &Services, owner: Uuid) -> Result<Value> {
     let whole = digest(&None::<crate::application::dto::Region>);
     let models = sqlx::query(
         "WITH originals AS(SELECT id FROM attachments WHERE owner_id=$1 AND kind='scene'),
- recorded AS(SELECT i.attachment_id,i.model_id,i.status FROM image_index_status i JOIN originals o ON o.id=i.attachment_id WHERE i.owner_id=$1),
- inferred AS(SELECT e.attachment_id,e.model_id FROM image_embeddings e JOIN originals o ON o.id=e.attachment_id
-   WHERE e.owner_id=$1 AND e.region_hash=$2 AND e.model_id IN($3,$4)
+ recorded AS(SELECT i.attachment_id,i.model_id,i.status FROM image_index_status i JOIN originals o ON o.id=i.attachment_id WHERE i.owner_id=$1 AND (i.status='unsupported' OR i.model_id<>$4 OR EXISTS(SELECT 1 FROM image_embeddings e WHERE e.owner_id=$1 AND e.attachment_id=i.attachment_id AND e.model_id=$4 AND e.quality->>'crop_profile'=$5))),
+ inferred AS(SELECT DISTINCT e.attachment_id,e.model_id FROM image_embeddings e JOIN originals o ON o.id=e.attachment_id
+   WHERE e.owner_id=$1 AND ((e.model_id=$3 AND e.region_hash=$2) OR (e.model_id=$4 AND e.quality->>'crop_profile'=$5))
    AND NOT EXISTS(SELECT 1 FROM recorded r WHERE r.attachment_id=e.attachment_id AND r.model_id=e.model_id))
  SELECT model_id,status,count(*) AS count FROM(
    SELECT model_id,status FROM recorded UNION ALL SELECT model_id,'ready' AS status FROM inferred) x
@@ -90,6 +93,7 @@ pub async fn status(s: &Services, owner: Uuid) -> Result<Value> {
     .bind(&whole)
     .bind(chart_match::MODEL)
     .bind("dinov2-small-v1")
+    .bind(super::super::similarity::CHART_VISUAL_CROP)
     .fetch_all(&s.db.pool)
     .await?;
     let total: i64 =

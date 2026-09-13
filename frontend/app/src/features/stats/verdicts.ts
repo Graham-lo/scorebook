@@ -1,4 +1,4 @@
-// 待裁决 —— 某一组攒够 20 条新的明确结论时，后端提醒一句：该回头看一眼了。
+// 待你定 —— 某一组攒够 20 条新的明确结论时，后端提醒一句：该回头看一眼了。
 //
 // 它只是一个计数到点的提醒，不带任何倾向，也不会自己决定什么。认不认这一组算得
 // 上证据，是人按下去的事：后端把这次裁决记成 `explicit_user_decision`，理由是必
@@ -8,7 +8,7 @@
 // 个打法的状态。
 
 import { ApiError } from '../../api/errors'
-import { WriteAction } from '../../api/http'
+import { Pager, WriteAction } from '../../api/http'
 import {
   decideVerdict,
   members,
@@ -42,43 +42,60 @@ export function verdictSheet(live: Live): HTMLElement {
   const node = h(
     'div.sheet',
     { style: 'margin-top:18px' },
-    h('div.sh', {}, h('span.eyebrow.noline', { text: '等你裁决' }), right),
+    h('div.sh', {}, h('span.eyebrow.noline', { text: '待你定' }), right),
     rows,
   )
 
+  const pager = new Pager<VerdictRequest>((cursor, signal) =>
+    verdictRequests({ status: 'pending', cursor: cursor ?? undefined }, { signal }),
+  )
+  const footer = h('div.acts', { style: 'margin-top:10px' })
+  const seen = new Set<string>()
+  let busy = false
+  let generation = 0
+  node.appendChild(footer)
+
+  function pagination(): void {
+    clear(footer)
+    right.textContent = seen.size ? `已读 ${seen.size} 条` : ''
+    if (pager.more) footer.appendChild(h('button.btn.sm', {
+      text: busy ? '正在加载' : '加载更多', disabled: busy, on: { click: () => void load() },
+    }))
+  }
+  function remove(id: string): void {
+    seen.delete(id)
+    pagination()
+    if (!seen.size && pager.exhausted) rows.appendChild(empty({ title: '没有待你定的' }))
+  }
   async function load(): Promise<void> {
-    clear(rows)
-    rows.appendChild(spinner('正在看有没有攒够的组…'))
+    if (busy || !live.alive()) return
+    busy = true
+    const round = generation
+    if (!pager.loaded) rows.replaceChildren(spinner('正在加载'))
+    pagination()
     try {
-      const page = await verdictRequests({ status: 'pending' })
-      if (!live.alive()) return
-      clear(rows)
-      right.textContent = page.items.length ? `${page.items.length} 条` : ''
-      if (!page.items.length) {
-        rows.appendChild(
-          empty({
-            title: '现在没有等你裁决的',
-            tip: '某一组比上次裁决时多出 20 条明确结论，后端才会在这里提醒一句。它不会替你决定什么。',
-          }),
-        )
-        return
+      const page = await pager.next()
+      if (!live.alive() || round !== generation) return
+      if (!seen.size) clear(rows)
+      const added: HTMLElement[] = []
+      for (const request of page) {
+        if (seen.has(request.id)) continue
+        seen.add(request.id)
+        const refresh = () => { generation += 1; pager.reset(); seen.clear(); busy = false; void load() }
+        added.push(rows.appendChild(card(request, live, refresh, () => remove(request.id))))
       }
-      rows.appendChild(
-        h('div.tip', {
-          style: 'margin-bottom:8px',
-          text: '下面每一条都只是「攒够了，该看一眼」。要不要认，认成什么，是你自己按下去的，理由会跟着这次裁决一起存下来。',
-        }),
-      )
-      stagger(page.items.map((request) => rows.appendChild(card(request, live, load))))
-      if (page.next_cursor) {
-        rows.appendChild(
-          h('div.tip', { style: 'margin-top:8px', text: '还有更多，处理完这一批会接着列。' }),
-        )
-      }
+      stagger(added)
+      if (!seen.size && pager.exhausted) rows.appendChild(empty({ title: '没有待你定的' }))
+      busy = false
+      pagination()
     } catch (error) {
-      if (!live.alive()) return
-      clear(rows)
-      rows.appendChild(note('warn', error instanceof Error ? error.message : '读不到待裁决。'))
+      if (!live.alive() || round !== generation) return
+      busy = false
+      if (!pager.loaded) clear(rows)
+      footer.replaceChildren(
+        note('warn', error instanceof Error ? error.message : '没读出来'),
+        h('button.btn.sm', { text: '重试', on: { click: () => void load() } }),
+      )
     }
   }
 
@@ -86,11 +103,11 @@ export function verdictSheet(live: Live): HTMLElement {
   return node
 }
 
-function card(request: VerdictRequest, live: Live, reload: () => void): HTMLElement {
+function card(request: VerdictRequest, live: Live, reload: () => void, decided: () => void): HTMLElement {
   const rule = h('div', { style: 'margin-top:6px' })
   const evidence = h('textarea.textarea', {
     rows: 3,
-    placeholder: '写下这次为什么这么判——过几个月要靠它复查。',
+    placeholder: '为什么这么判',
   }) as HTMLTextAreaElement
   const acts = h('div.acts', { style: 'margin-top:10px' })
   const box = h(
@@ -100,9 +117,7 @@ function card(request: VerdictRequest, live: Live, reload: () => void): HTMLElem
       'div',
       { style: 'display:flex;gap:9px;align-items:center;flex-wrap:wrap' },
       h('span.mono', { text: `规则 #${shortSignature(request.signature)}` }),
-      h('span.faint', {
-        text: `有结论的已经攒到 ${request.explicit_count} 条，比上次裁决时多了 ${request.explicit_count - request.threshold + 20} 条`,
-      }),
+      h('span.faint', { text: `有结论 ${request.explicit_count} 条` }),
       h('span.faint', { text: dateTime(request.created_at) }),
     ),
     rule,
@@ -119,7 +134,7 @@ function card(request: VerdictRequest, live: Live, reload: () => void): HTMLElem
       clear(rule)
       rule.appendChild(
         h('div.h3', {
-          text: `${first.body.instrument ?? '没写品种'} · ${what.main}${what.sub ? ` · ${what.sub}` : ''}`,
+          text: `${first.body.instrument ?? '没写'} · ${what.main}${what.sub ? ` · ${what.sub}` : ''}`,
         }),
       )
       rule.appendChild(
@@ -130,7 +145,7 @@ function card(request: VerdictRequest, live: Live, reload: () => void): HTMLElem
       if (!live.alive()) return
       clear(rule)
       rule.appendChild(
-        h('div.tip', { text: '这一组的规则读不出来，先按编号认。' }),
+        h('div.tip', { text: '没读出来' }),
       )
     })
 
@@ -143,7 +158,7 @@ function card(request: VerdictRequest, live: Live, reload: () => void): HTMLElem
         click: () => {
           const text = evidence.value.trim()
           if (!text) {
-            problem('先写下这次为什么这么判，理由是必填的。')
+            problem('先写为什么')
             evidence.focus()
             return
           }
@@ -159,17 +174,18 @@ function card(request: VerdictRequest, live: Live, reload: () => void): HTMLElem
               decideAction.reset()
               if (!live.alive()) return
               box.remove()
-              toast(`记下了：${choice.label}。这是你按下去的，来源写着「明确的人工决定」。`)
+              decided()
+              toast('记下了')
             })
             .catch((error: unknown) => {
               if (!live.alive()) return
               for (const node of acts.children) (node as HTMLButtonElement).disabled = false
               if (error instanceof ApiError && error.code === 'verdict_request_changed') {
-                problem('这条刚刚被改过或者已经裁过了，先读回最新的再决定。')
+                problem('这条刚在别处改过，再试一次')
                 reload()
                 return
               }
-              problem(error instanceof Error ? error.message : '这次裁决没有存上。')
+              problem(error instanceof Error ? error.message : '没保存上，再试一次')
             })
         },
       },

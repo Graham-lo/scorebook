@@ -37,6 +37,42 @@ pub fn data(path: &str, method: &str) -> Value {
         )
     };
     let schema = match (path, method) {
+        ("/v1/market/bounds", "get") => {
+            let nullable_time = json!({"type":["string","null"],"format":"date-time"});
+            let time = json!({"type":"string","format":"date-time"});
+            return object(
+                json!({
+                    "market":{"type":"string","enum":["usd_m","coin_m"]},"symbol":text(),"interval":text(),"status":text(),
+                    "onboard_at":nullable_time,"delivery_at":nullable_time,"first_bar_at":nullable_time,
+                    "last_bar_at":nullable_time,"verified_at":nullable_time,"server_now":time,
+                    "gaps":{"type":"array","items":object(json!({"start":time,"end":time,"seen_at":time}), &["start","end","seen_at"])}
+                }),
+                &[
+                    "market",
+                    "symbol",
+                    "interval",
+                    "status",
+                    "onboard_at",
+                    "delivery_at",
+                    "first_bar_at",
+                    "last_bar_at",
+                    "gaps",
+                    "verified_at",
+                    "server_now",
+                ],
+            );
+        }
+        ("/v1/chart-analyses/outline", "post") => object(
+            json!({"attachment_id":uuid(),"source":{"const":"screenshot_contour"},"symbol":{"type":["string","null"]},"interval":{"type":["string","null"]},"values":{"type":"array","minItems":16,"maxItems":2000,"items":{"type":"number","minimum":0,"maximum":1}},"storage_policy":{"const":"ephemeral"}}),
+            &[
+                "attachment_id",
+                "source",
+                "symbol",
+                "interval",
+                "values",
+                "storage_policy",
+            ],
+        ),
         ("/v1/chart-analyses", _) => object(
             json!({"id":uuid(),"attachment_id":uuid(),"geometry":{"$ref":"#/components/schemas/GeometryQuality"},"recognized":any_object(),"ocr":{"type":["object","array"]},"ocr_status":text(),"chart_type":text(),"quality_validated":{"const":false}}),
             &[
@@ -48,7 +84,18 @@ pub fn data(path: &str, method: &str) -> Value {
             ],
         ),
         ("/v1/chart-search/runs", "post") => job("search_run_id"),
-        ("/v1/chart-search/runs/{id}", "get") => entity(),
+        ("/v1/chart-search/runs/{id}", "get") => {
+            // §5.5-3/4：结果里每条都带 `match.level` 和 `match.rarity`（这一档校准样本
+            // 里低于此分的比例，没校准过就是 null），整轮的结论是 `verdict`。词在前端，
+            // 这里只给枚举值。
+            let mut shape = entity();
+            shape["properties"]["result"] = json!({"type":["object","null"],"additionalProperties":true,"properties":{
+                "verdict":{"type":"string","enum":["found","weak","none"]},
+                "status":text(),
+                "items":{"type":"array","items":object(json!({"symbol":text(),"market":text(),"interval":text(),"start_at":{"type":"string","format":"date-time"},"end_at":{"type":"string","format":"date-time"},"bars_count":{"type":"integer"},
+                    "match":{"type":"object","properties":{"score":{"type":"number"},"rarity":{"type":["number","null"]},"level":{"type":["string","null"],"enum":["sure","likely","weak",null]},"reverse":{"type":"boolean"},"direction_consistent":{"type":"boolean"}}}}),&["match"])}}});
+            shape
+        }
         ("/v1/chart-search/runs/{id}/cancel", _) => job("search_run_id"),
         ("/v1/history/plans", "post") => job("plan_id"),
         ("/v1/history/plans/{id}/control", _) => job("plan_id"),
@@ -123,8 +170,12 @@ pub fn data(path: &str, method: &str) -> Value {
             json!({"items":{"type":"array","items":object(json!({"sequence":{"type":"integer"},"type":text(),"data":any_object()}),&["sequence","type","data"])},"state":any_object()}),
             &["items", "state"],
         ),
-        ("/v1/attachments/{id}/location", _) => object(
-            json!({"attachment_id":uuid(),"symbol":text(),"market":text(),"interval":text(),"start_at":{"type":"string","format":"date-time"},"end_at":{"type":"string","format":"date-time"},"bars_count":{"type":["integer","null"]},"source":text(),"score":{"type":["string","null"]},"search_run_id":{"type":["string","null"],"format":"uuid"},"confirmed_at":{"type":"string","format":"date-time"}}),
+        ("/v1/attachments/{id}/location" | "/v1/attachments/{id}/location-preview", _) => object(
+            // 手填只给 `{symbol, market, interval, end_at, bars_count?}` 就够：起点按
+            // 周期倒推，回的 `preview` 是那一段真实行情加一句「像不像」，前端拿它直接
+            // 画对照图，不必再往 /v1/market/data 跑一趟（§5.2 第 6 步）。
+            json!({"attachment_id":uuid(),"symbol":text(),"market":text(),"interval":text(),"start_at":{"type":"string","format":"date-time"},"end_at":{"type":"string","format":"date-time"},"bars_count":{"type":["integer","null"]},"source":text(),"score":{"type":["string","null"]},"search_run_id":{"type":["string","null"],"format":"uuid"},"matched_by":{"type":["string","null"],"description":"auto | user"},"anchor":{"type":["object","null"],"additionalProperties":true},"confirmed_at":{"type":"string","format":"date-time"},
+                "preview":object(json!({"bars":{"type":"array","items":any_object()},"bars_count":{"type":"integer"},"start_at":{"type":["string","null"],"format":"date-time"},"end_at":{"type":["string","null"],"format":"date-time"},"match":{"type":["object","null"],"properties":{"score":{"type":"number"},"level":{"type":"string","enum":["sure","likely","weak"]},"reverse":{"type":"boolean"}}}}),&["bars","bars_count"])}),
             &[
                 "attachment_id",
                 "symbol",
@@ -137,7 +188,21 @@ pub fn data(path: &str, method: &str) -> Value {
         ),
         ("/v1/attachments/{id}/locate", method) => {
             let location = json!({"type":["object","null"],"additionalProperties":true});
-            let job = json!({"type":["object","null"],"properties":{"id":uuid(),"status":text(),"result":{"type":["object","null"],"additionalProperties":true},"created_at":{"type":"string","format":"date-time"}}});
+            // §5.2：定位作业的结果结构。`outcome` 是这一轮的结论，`anchors` 是图上读到
+            // 的证据（品种、周期、时区、价轴、极值），`method` 是最后靠哪一步对上的，
+            // `candidates` 里每条都自带窗口和 `match.level`——前端按这几个字段画，
+            // 词自己映。
+            let candidate = object(
+                json!({"symbol":text(),"market":text(),"interval":text(),"start_at":{"type":"string","format":"date-time"},"end_at":{"type":"string","format":"date-time"},"bars_count":{"type":"integer"},"match":{"type":"object","properties":{"score":{"type":"number"},"level":{"type":"string","enum":["sure","likely","weak"]},"reverse":{"type":"boolean"},"z":{"type":["number","null"]}}}}),
+                &[
+                    "symbol", "market", "interval", "start_at", "end_at", "match",
+                ],
+            );
+            let outcome = object(
+                json!({"outcome":{"type":"string","enum":["located","candidates","needs_manual","already_located","unreadable"]},"attachment_id":uuid(),"search_run_id":{"type":["string","null"],"format":"uuid"},"method":{"type":["string","null"],"enum":["extremes","time_axis","shape_sweep",null]},"anchors":{"type":["object","null"],"additionalProperties":true},"candidates":{"type":"array","items":candidate},"reason":{"type":["string","null"]},"min_score":{"type":["number","null"]},"min_margin":{"type":["number","null"]}}),
+                &["outcome", "attachment_id", "candidates"],
+            );
+            let job = json!({"type":["object","null"],"properties":{"id":uuid(),"status":text(),"result":{"oneOf":[{"type":"null"},outcome]},"created_at":{"type":"string","format":"date-time"}}});
             // symbol/market/interval 是这张图实际按哪个品种去找的回显。
             let used = json!({"type":["string","null"]});
             if method == "post" {
@@ -180,6 +245,13 @@ pub fn data(path: &str, method: &str) -> Value {
                 "scene":{"type":["object","null"],"properties":{"attachment_id":uuid(),"replaced_after_submission":{"type":"boolean"}}},
                 "scene_replaced_after_submission":{"type":"boolean","description":"true when the scene in effect was uploaded after the record was submitted; the superseded originals stay retrievable from GET /v1/calls/{id}"},
                 "locating":{"type":["object","null"],"properties":{"job_id":uuid(),"status":text()}},
+                // §5.3：舞台上的每一条轨。第一条（`primary`）是记录自己的品种，其余是
+                // 这条记录里每一张已经对上行情的附件，品种可以不同；所有轨都开到主轨
+                // 的同一个终点，进度按时间戳对齐。顶层 `symbol`/`window`/`bars` 仍旧是
+                // 主轨的那一份，没有变。
+                "tracks":{"type":"array","items":object(json!({"attachment_id":{"type":["string","null"],"format":"uuid"},"kind":{"type":["string","null"]},"matched_by":{"type":["string","null"],"description":"auto | user"},"primary":{"type":"boolean"},"symbol":text(),"market":text(),"interval":text(),"source":text(),
+                    "window":object(json!({"start_at":{"type":"string","format":"date-time"},"end_at":{"type":"string","format":"date-time"},"bars_before":{"type":"integer"},"truncated":{"type":"boolean"},"coverage_complete":{"type":"boolean"}}),&["start_at","end_at"]),
+                    "bars":{"type":"array","items":any_object()},"bars_included":{"type":"boolean"}}),&["primary","symbol","market","interval","window","bars_included"])},
                 "bars":{"type":"array","items":object(json!({"start":{"type":"string","format":"date-time"},"end":{"type":"string","format":"date-time"},"open":text(),"high":text(),"low":text(),"close":text(),"volume":{"type":["string","null"]}}),&["start","end","open","high","low","close"])},
                 "bars_included":{"type":"boolean","description":"false when bars=none: metadata only, the caller fetches the klines itself"},
                 "storage_policy":text()}),
@@ -191,6 +263,7 @@ pub fn data(path: &str, method: &str) -> Value {
                 "window",
                 "judgment",
                 "levels",
+                "tracks",
                 "bars",
                 "bars_included",
                 "storage_policy",

@@ -17,6 +17,103 @@ async fn setup() -> (Services, Uuid, tempfile::TempDir) {
     )
 }
 #[tokio::test]
+async fn saved_history_pages_deduplicate_quote_variants_without_rewriting_evidence() {
+    let (s, owner, _tmp) = setup().await;
+    let attachment = Uuid::new_v4();
+    sqlx::query("INSERT INTO attachments(id,owner_id,sha256,mime,size,width,height,kind) VALUES($1,$2,'test','image/png',1,640,320,'query')").bind(attachment).bind(owner).execute(&s.db.pool).await.unwrap();
+    let base = format!("TEST{}", Uuid::new_v4().simple());
+    let usdt = format!("{base}USDT");
+    let usdc = format!("{base}USDC");
+    for (symbol, quote) in [(&usdt, "USDT"), (&usdc, "USDC")] {
+        sqlx::query("INSERT INTO instrument_catalog VALUES('binance','usd_m',$1,$2,now())")
+            .bind(symbol)
+            .bind(json!({"baseAsset":base,"quoteAsset":quote,"contractType":"PERPETUAL"}))
+            .execute(&s.db.pool)
+            .await
+            .unwrap();
+    }
+    let started = chart_search::create(
+        &s,
+        owner,
+        "pages",
+        serde_json::from_value(json!({
+            "attachment_id":attachment,"scope":"binance_history","interval":"1h"
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let id: Uuid = serde_json::from_value(started["search_run_id"].clone()).unwrap();
+    let make = |symbol: &str, score: f64| {
+        json!({"id":Uuid::new_v4(),"symbol":symbol,"market":"usd_m","interval":"1h",
+        "start_at":"2024-11-05T00:00:00Z","end_at":"2024-11-09T17:00:00Z","match":{"score":score,"level":"likely"},"chart_request":{"symbol":symbol}})
+    };
+    let mut items = vec![make(&usdt, 0.9), make(&usdc, 0.89)];
+    items.extend((0..9).map(|i| make(&format!("{base}{i}"), 0.8 - i as f64 * 0.01)));
+    for item in &items[2..] {
+        sqlx::query("INSERT INTO instrument_catalog VALUES('binance','usd_m',$1,$2,now())")
+            .bind(item["symbol"].as_str().unwrap())
+            .bind(
+                json!({"baseAsset":item["symbol"],"quoteAsset":"USDT","contractType":"PERPETUAL"}),
+            )
+            .execute(&s.db.pool)
+            .await
+            .unwrap();
+    }
+    let stored = json!({"status":"final","items":items[..5],"ranked_items":items,"pagination":"frozen_verified_ranking_v1"});
+    sqlx::query("UPDATE chart_search_runs SET result=$2 WHERE id=$1")
+        .bind(id)
+        .bind(&stored)
+        .execute(&s.db.pool)
+        .await
+        .unwrap();
+    let read = chart_search::get(&s, owner, id).await.unwrap();
+    let ranked = read["result"]["ranked_items"].as_array().unwrap();
+    assert_eq!(ranked.len(), 10);
+    assert_eq!(ranked[0]["chart_request"]["symbol"], usdt);
+    assert!(!ranked.iter().any(|v| v["symbol"] == usdc));
+    assert!(
+        ranked
+            .windows(2)
+            .all(|pair| pair[0]["match"]["score"].as_f64() >= pair[1]["match"]["score"].as_f64())
+    );
+    let original: Value = sqlx::query_scalar("SELECT result FROM chart_search_runs WHERE id=$1")
+        .bind(id)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(original, stored);
+    let (other, _) = s.db.create_user("pages-other").await.unwrap();
+    assert_eq!(
+        chart_search::get(&s, other, id).await.unwrap_err().code,
+        "not_found"
+    );
+}
+#[tokio::test]
+async fn outline_checks_attachment_owner_before_reading_pixels_and_never_creates_a_job() {
+    let (s, owner, _tmp) = setup().await;
+    let attachment = Uuid::new_v4();
+    sqlx::query("INSERT INTO attachments(id,owner_id,sha256,mime,size,width,height,kind) VALUES($1,$2,'test','image/png',1,640,320,'query')").bind(attachment).bind(owner).execute(&s.db.pool).await.unwrap();
+    let (other, _) = s.db.create_user("outline-other").await.unwrap();
+    let error = chart_search::outline(
+        &s,
+        other,
+        serde_json::from_value(json!({"attachment_id":attachment})).unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "not_found");
+    for table in ["chart_analyses", "chart_search_runs", "jobs"] {
+        let count: i64 =
+            sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE owner_id=$1"))
+                .bind(other)
+                .fetch_one(&s.db.pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+}
+#[tokio::test]
 async fn chart_search_cancel_is_idempotent_and_fences_old_worker() {
     let (s, owner, _tmp) = setup().await;
     let attachment = Uuid::new_v4();

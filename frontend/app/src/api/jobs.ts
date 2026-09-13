@@ -73,23 +73,23 @@ export async function waitFor(
 export function jobLine(status: JobStatus): { text: string; progress: number } {
   switch (status) {
     case 'queued':
-      return { text: '排上队了，马上开始', progress: 0.1 }
+      return { text: '排上队了', progress: 0.1 }
     case 'running':
-      return { text: '正在做，可以先去做别的', progress: 0.6 }
+      return { text: '还在做', progress: 0.6 }
     case 'retry_wait':
-      return { text: '中间断了一次，正在自己重试', progress: 0.5 }
+      return { text: '断了一次，正在重试', progress: 0.5 }
     case 'succeeded':
       return { text: '做完了', progress: 1 }
     case 'failed':
-      return { text: '没有做完', progress: 1 }
+      return { text: '没做完', progress: 1 }
     case 'needs_attention':
-      return { text: '停下来了，要你决定接下来怎么办', progress: 1 }
+      return { text: '停下来了', progress: 1 }
     case 'blocked_capability':
-      return { text: '它要用的服务现在没开着', progress: 1 }
+      return { text: '要用的服务没开', progress: 1 }
     case 'awaiting_input':
-      return { text: '已暂停', progress: 1 }
+      return { text: '停着', progress: 1 }
     case 'cancelled':
-      return { text: '已取消', progress: 1 }
+      return { text: '不做了', progress: 1 }
     default:
       return { text: '正在做', progress: 0.5 }
   }

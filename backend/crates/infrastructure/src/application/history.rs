@@ -147,8 +147,23 @@ pub async fn build(s: &Services, j: &Job) -> Result<Value> {
     // payload, bars and raster images are dropped here. Nothing writes them to disk/DB.
     Ok(result)
 }
-/// The three window sizes every screenshot search looks through.
-pub const LOCATE_WINDOWS: [usize; 3] = [64, 128, 256];
+/// 每一次「给图找行情」会翻的窗口档位。原来只有 64/128/256 三档，人截的图落在
+/// 96 或 192 根上时最近的一档差出 50%，形状被拉伸到认不出来；补上 96 与 192 之后
+/// 任何根数到最近一档的偏差都不超过 ±25%（§5.5-1）。
+pub const LOCATE_WINDOWS: [usize; 5] = [64, 96, 128, 192, 256];
+
+/// 最大的那一档，供「一段要多宽才装得下一个窗口」这类算术使用。
+pub const LARGEST_WINDOW: usize = LOCATE_WINDOWS[LOCATE_WINDOWS.len() - 1];
+
+/// 查询时只查最接近 `n` 根的两档：五档全查是五倍的 ANN 开销，而差出一档以上的
+/// 窗口本来就不会排到前面（§5.5-1）。
+pub fn nearest_windows(n: usize) -> Vec<i32> {
+    let mut sizes = LOCATE_WINDOWS;
+    sizes.sort_by_key(|w| w.abs_diff(n));
+    let mut out: Vec<i32> = sizes.into_iter().take(2).map(|v| v as i32).collect();
+    out.sort_unstable();
+    out
+}
 
 /// Is this range already indexed at all three window sizes? A `complete`
 /// coverage segment whose requested range contains the asked-for one is the
@@ -506,14 +521,24 @@ pub async fn search_mode(
     let (model, dimension) = crate::adapters::ann::space(&input.model_id)?;
     crate::adapters::ann::configure(&mut tx).await?;
     let sql = format!(
-        "WITH ann_candidates AS MATERIALIZED (SELECT id,market,symbol,timeframe,start_at,end_at,bars_count,input_hash,embedding::vector({dimension}) <=> $5::vector({dimension}) AS distance FROM public_market.features WHERE published AND model_id='{model}' AND end_at<=$1 AND ($2::text IS NULL OR symbol=$2) AND ($3::text IS NULL OR market=$3) AND timeframe=$4 ORDER BY embedding::vector({dimension}) <=> $5::vector({dimension}) LIMIT 3000) SELECT * FROM ann_candidates ORDER BY distance+0,id LIMIT 1000"
+        "WITH ann_candidates AS MATERIALIZED (SELECT id,market,symbol,timeframe,start_at,end_at,bars_count,input_hash,embedding::vector({dimension}) <=> $5::vector({dimension}) AS distance FROM public_market.features WHERE published AND model_id='{model}' AND end_at<=$1 AND ($2::text IS NULL OR symbol=$2) AND ($3::text IS NULL OR market=$3) AND timeframe=$4 AND ($6::int[] IS NULL OR bars_count=ANY($6)) ORDER BY embedding::vector({dimension}) <=> $5::vector({dimension}) LIMIT 3000) SELECT * FROM ann_candidates ORDER BY distance+0,id LIMIT 1000"
     );
+    // §5.5-1：几何模型按窗口根数建索引，查的时候只看最接近的两档；别的模型（整图
+    // 视觉）没有这个概念，一格不筛。
+    let sizes: Option<Vec<i32>> = (model == scorebook_core::domain::chart_match::MODEL)
+        .then(|| {
+            quality["detected_candles"]
+                .as_u64()
+                .map(|v| nearest_windows(v as usize))
+        })
+        .flatten();
     let rows = sqlx::query(&sql)
         .bind(cutoff)
         .bind(&input.symbol)
         .bind(&input.market)
         .bind(&input.interval)
         .bind(vector)
+        .bind(sizes)
         .fetch_all(&mut *tx)
         .await?;
     let mut selected: Vec<Value> = vec![];
@@ -621,6 +646,13 @@ pub async fn revalidate(s: &Services, owner: Uuid, id: Uuid, key: &str) -> Resul
     Ok(result)
 }
 
+/// 候选条数的防御性上界。跟着 §5.5-2 把精排预算抬到 300，这条线也得跟上。
+/// 它拦的不是用户输入，是「上游预算改了却没人想起这里」：
+/// 两个调用方各自的上界都必须待在这条线以下——单品种重温检索自己把 `limit` clamp
+/// 在 `1..=50`，够不着；「按图找」传进来的是 `chart_search::RERANK_BUDGET`，那边有
+/// 一条编译期断言把它和这个数锁在一起，谁抬预算忘了抬这里就编译不过。
+pub const SOURCE_LOOKUP_BUDGET: usize = 400;
+
 /// 给每个候选窗口贴上它的行情来源。来路证不出来的窗口一格都不许端出去——没有
 /// 任何 ready 世代认领这一行，或者认领它的世代不是 `rest`/`monthly_archive`，这一条
 /// 不松。松的是「证不出来之后怎么办」：原来是整次检索直接报错退出，等于让一行丢失的
@@ -632,7 +664,7 @@ pub async fn attach_market_sources(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     items: &mut Vec<Value>,
 ) -> Result<usize> {
-    if items.len() > 50 {
+    if items.len() > SOURCE_LOOKUP_BUDGET {
         return Err(Error::bad("market_source_lookup_budget"));
     }
     let ids: Vec<Uuid> = items

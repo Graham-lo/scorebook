@@ -1,28 +1,33 @@
+import { openMarketChart } from './market-view'
 // 重温一遍 —— 把一次判断放回它当时那段真实行情里，从头走一次。
 //
 // 五屏一个网址：`#/relive/<call_id>/<n>`，n = 1…5。
-//   1 回到那一刻   画到判断时刻停住，判断之后一根不画
-//   2 定下的标准   当时写下的价位画成水平线，观察期拉成一段
-//   3 市场的答案   一根一根往后长，走到哪一步就打哪一个标
-//   4 后来         复盘、成交、后来那张图、同一段行情里的其它判断
-//   5 全貌         整段缩到一屏，结论和两张截图并排
+//   1 当时    画到判断时刻停住，判断之后一根不画
+//   2 逐根看  一根一根往后长，当时定下的价位画成水平线
+//   3 答案    市场给的那个结果；还没判就在这儿判
+//   4 复盘    写过的复盘，和这一段里真实成交、同段行情的其它判断
+//   5 打法    这类局面后来归到哪一套打法上
 //
 // 这几屏只摆事实：品种、周期、时间、当时的原话、算出来的价位、市场给的数字。
 // 没有一句解说，也没有一句提示——那些属于写记录和写复盘的流程，不属于看。
 //
-// K 线是真的行情，不是那张截图。截图只在第 1 屏角落里做个对照。
+// K 线是真的行情，不是那张截图。记录上每一张**已经对上行情**的图在舞台上方各
+// 占一个 tab，点谁播谁：同一条记录里的对比图品种可以不一样。
 // 这一段行情是临时借来的：离开这个页面就发 DELETE 还回去。
 
 import { MAX_BARS, fetchKlines } from '../../api/binance'
+import { judge } from '../../api/calls'
 import { ApiError } from '../../api/errors'
 import { WriteAction } from '../../api/http'
+import { get as getJob, isRunning } from '../../api/jobs'
+import { closedIndex, closedWindow } from '../../data/replay-time'
 import { episode as fetchEpisode } from '../../api/knowledge'
 import {
   deleteReplay,
   getReplay,
-  putChartSetup,
   type ChartSetup,
   type Replay,
+  type ReplayTrack,
 } from '../../api/replay'
 import * as trades from '../../api/trades'
 import type {
@@ -31,52 +36,49 @@ import type {
   CallDetail,
   Evaluation,
   FillRow,
+  Market,
   OutcomeState,
   ReviewRecord,
   Uuid,
 } from '../../api/types'
-import { STANCES, TEMPLATES } from '../../data/criteria'
+import { STANCES } from '../../data/criteria'
 import { percent, price as decimalPrice } from '../../data/decimal'
-import { figures, head as headOutcome } from '../../data/outcome'
+import { VERDICTS, figures, head as headOutcome } from '../../data/outcome'
 import { INTERVAL_SECONDS, MARKET_LABELS, type Interval } from '../../data/session'
 import { detail, invalidate } from '../../data/store'
-import { DASH, dateTime, utcRange } from '../../data/time'
+import { DASH, dateTime } from '../../data/time'
 import { go, route } from '../../router'
-import { stamp, stanceBadge } from '../../ui/bits'
-import { h, type Child } from '../../ui/dom'
-import { lightbox } from '../../ui/lightbox'
+import { stamp } from '../../ui/bits'
+import { h } from '../../ui/dom'
+import { openScreenshot } from './screenshot'
 import { attachmentImage } from '../../ui/media'
 import { prefersReducedMotion, stagger } from '../../ui/motion'
+import { anyPopOpen, popChip } from '../../ui/pop'
+import { REVIEW_ACTIONS } from '../review/draft'
 import { empty, spinner } from '../../ui/states'
 import { problem, toast } from '../../ui/toast'
 import { createCandles, type CandleStage, type LevelLine, type StageBand, type StageMark } from './candles'
-import { locateBoard } from './locate'
-import {
-  EMPTY as EMPTY_SETUP,
-  MAX_LINES,
-  MAX_VOL_LINES,
-  SHOT_DEFAULT,
-  cloneSetup,
-  normalizeSetup,
-  setupIsEmpty,
-  validateSetup,
-} from './setup'
+import { normalizeSetup } from './setup'
+import { maxPeriod, readChoice, setupFor, writeChoice, seededNames, menuItems, menuFooter, LINE_ORDER, type Choice, type LineName } from './indicator-choice'
+import { data as marketData } from '../../api/market'
+import { historyStart } from '../../data/chart-window'
 
-const TITLES = ['回到那一刻', '定下的标准', '市场的答案', '后来', '全貌']
+const TITLES = ['当时', '逐根看', '答案', '复盘', '打法']
 
 /**
  * 这一段行情在后端是按 24 小时过期的临时缓存，五屏之间来回走不该每次都重取，
  * 所以整条记录的回放在这里留到人离开为止。离开时连它一起丢掉。
  */
 let holdId: Uuid | null = null
+let holdTrackKey = ''
 let holdCall: CallDetail | null = null
 let holdReplay: Replay | null = null
-/** 这一份 K 线是浏览器直连交易所取的，还是后端缓存给的。 */
-type Source = 'binance' | 'backend'
-let holdSource: Source = 'backend'
+let holdStart: 'shot' | 'judgment' = 'shot'
+let holdProgressAt: string | null = null
+/** 窗口之前那一段只取一次：换屏、换 tab 都用同一份。 */
+let holdLead: { key: string; bars: Bar[] } | null = null
 
-/** 这次会话里已经自动找过一遍的截图，不再重复起检索。 */
-const searched = new Set<Uuid>()
+/* --------------------------------------------------------------- 页面 */
 
 export function relivePage(host: HTMLElement, arg: string): () => void {
   const parts = arg.split('/')
@@ -85,13 +87,29 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
   const step = Number.isFinite(wanted) ? Math.min(5, Math.max(1, Math.trunc(wanted))) : 1
 
   let alive = true
+  const lifetime = new AbortController()
   let stage: CandleStage | null = null
-  let locate: { destroy: () => void } | null = null
-  const setupAction = new WriteAction()
-  // 第 3 屏把这三个交给键盘用；别的屏就是空的。
+  let locateTimer = 0
+  let locateFailures = 0
+  let choice: Choice = readChoice()
+  /** 这条记录截图上认出来的那一份参数种子。开了哪条线还是人自己说了算。 */
+  const record = (): ChartSetup => normalizeSetup(holdCall?.chart_setup ?? null)
+  /** 现在舞台上放的是哪一条轨：换指标的时候还要按它去补前置那一段。 */
+  let lastLook: Look | null = null
+  const judgeAction = new WriteAction()
+  // 舞台在的时候，键盘就归它：左右逐根，空格播放/暂停。
+  let stepBy: ((delta: number) => void) | null = null
   let playAgain: (() => void) | null = null
   let pauseNow: (() => void) | null = null
   let isPlaying: (() => boolean) | null = null
+
+  /** 现在放的是哪一张图那一条轨。空的就是记录自己那一条。 */
+  let activeKey = holdId === id ? holdTrackKey : ''
+  /** 后取回来的那几条轨的 K 线，按轨的 key 存着。 */
+  const trackBars = new Map<string, Bar[]>()
+  const fetching = new Set<string>()
+  const failedTracks = new Set<string>()
+  let fullFallback: Promise<Replay> | null = null
 
   const top = h('header.rlv-top')
   const body = h('section.rlv-body')
@@ -109,7 +127,9 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     holdId = id
     holdCall = null
     holdReplay = null
-    holdSource = 'backend'
+    holdTrackKey = ''
+    holdStart = 'shot'
+    holdProgressAt = null
   }
 
   paintTop(null)
@@ -117,14 +137,16 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
   void load()
 
   const onKey = (e: KeyboardEvent) => {
+    if (document.querySelector('[aria-modal="true"]') || anyPopOpen()) return
     const target = e.target as HTMLElement | null
     if (target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)) return
-    if (e.key === 'ArrowRight') {
+    if (target?.closest('button, a, [role=button]') && e.key === ' ') return
+    if (e.key === 'ArrowRight' && stepBy) {
       e.preventDefault()
-      if (step < 5) go(`relive/${id}/${step + 1}`)
-    } else if (e.key === 'ArrowLeft') {
+      stepBy(1)
+    } else if (e.key === 'ArrowLeft' && stepBy) {
       e.preventDefault()
-      if (step > 1) go(`relive/${id}/${step - 1}`)
+      stepBy(-1)
     } else if (e.key === 'Escape') {
       e.preventDefault()
       go(`call/${id}`)
@@ -140,6 +162,8 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     if (route().page !== 'relive') return
     deleteReplay(id)
   }
+  const onVisibility = () => { if (document.hidden) pauseNow?.() }
+  document.addEventListener('visibilitychange', onVisibility)
   window.addEventListener('pagehide', onHide)
 
   async function load(): Promise<void> {
@@ -151,10 +175,8 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       let failure: ApiError | null = null
       if (!replay) {
         try {
-          const got = await pullReplay()
-          replay = got.replay
+          replay = await pullReplay()
           holdReplay = replay
-          holdSource = got.source
         } catch (error) {
           if (!alive) return
           if (error instanceof ApiError) failure = error
@@ -169,7 +191,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       body.replaceChildren(
         empty({
           title: error instanceof Error ? error.message : '这一段读不出来',
-          action: h('a.btn.sm', { href: `#/call/${id}`, text: '回到记录' }),
+          action: h('a.btn.sm', { href: `#/call/${id}`, text: '退出重温' }),
         }),
       )
     }
@@ -185,42 +207,36 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
    * 后端还没部署 `bars=none` 的时候，它会照旧把 K 线一起给回来（没有
    * `bars_included` 这个字段），那就直接用，什么都不用变。
    */
-  async function pullReplay(): Promise<{ replay: Replay; source: Source }> {
+  async function pullReplay(): Promise<Replay> {
     let meta: Replay
     try {
-      meta = await getReplay(id, { bars: 'none' })
+      meta = await getReplay(id, { bars: 'none', signal: lifetime.signal })
     } catch (error) {
       // 连这一条都不认（老后端可能挑参数），退回原来那一条路。
       if (!(error instanceof ApiError)) throw error
-      return { replay: await getReplay(id), source: 'backend' }
+      return getReplay(id, { signal: lifetime.signal })
     }
     // 没有 bars_included 就是老后端：它给什么就是什么。
-    if (meta.bars_included !== false) return { replay: meta, source: 'backend' }
-    if (meta.bars.length) return { replay: meta, source: 'backend' }
-    try {
-      const bars = await directBars(meta)
-      if (bars) return { replay: { ...meta, bars, bars_included: true }, source: 'binance' }
-    } catch {
-      /* 451、跨域、超时、网络断了——都不是人要处理的事，换一条路就是 */
-    }
-    return { replay: await getReplay(id), source: 'backend' }
+    if (meta.bars_included !== false) return meta
+    if (meta.bars.length) return meta
+    return meta
   }
 
-  /** 直连交易所取这一段。取回来的必须和窗口对得上，对不上就当没取到。 */
-  async function directBars(meta: Replay): Promise<Bar[] | null> {
-    const seconds = INTERVAL_SECONDS[meta.interval as Interval]
-    const start = Date.parse(meta.window.start_at)
-    const end = Date.parse(meta.window.end_at)
+  /** 直连交易所取一段。取回来的必须和窗口对得上，对不上就当没取到。 */
+  async function directBars(
+    symbol: string,
+    market: Market,
+    interval: string,
+    startAt: string,
+    endAt: string,
+  ): Promise<Bar[] | null> {
+    const seconds = INTERVAL_SECONDS[interval as Interval]
+    const start = Date.parse(startAt)
+    const end = Date.parse(endAt)
     if (!seconds || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null
     const expected = Math.floor((end - start) / (seconds * 1_000))
     if (expected < 2 || expected > MAX_BARS) return null
-    const bars = await fetchKlines({
-      symbol: meta.symbol,
-      market: meta.market,
-      interval: meta.interval,
-      start_at: meta.window.start_at,
-      end_at: meta.window.end_at,
-    })
+    const bars = await fetchKlines({ symbol, market, interval, start_at: startAt, end_at: endAt }, lifetime.signal)
     // 根数对不上（多出来、或者缺了一大半）就不要：宁可慢一点用后端那份，
     // 也不能拿一段残缺的行情去看一次判断。
     if (bars.length < 2 || bars.length > expected + 2) return null
@@ -238,7 +254,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     const line = h(
       'div.rlv-id',
       {},
-      h('a.rlv-back', { href: `#/call/${id}`, text: '回到记录' }),
+      h('a.rlv-back', { href: `#/call/${id}`, text: '退出重温' }),
       h('b.rlv-sym', { text: replay?.symbol ?? call?.instrument ?? '未标品种' }),
       h('span.rlv-mk.mono', {
         text: [
@@ -264,13 +280,105 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     top.replaceChildren(line, rail)
   }
 
+  /* ------------------------------------------------------------ 对比图 */
+
+  /** 记录自己那一条永远排第一，后面每一条对应一张已经对上行情的图。 */
+  function tracksOf(replay: Replay): ReplayTrack[] {
+    const tracks = (replay.tracks ?? []).filter(track => track.symbol && track.interval)
+    if (tracks.length) return tracks
+    const own: ReplayTrack = {
+      kind: 'scene',
+      symbol: replay.symbol,
+      market: replay.market,
+      interval: replay.interval,
+      window: replay.window,
+      bars: replay.bars,
+    }
+    return [own]
+  }
+
+  function keyOf(track: ReplayTrack): string {
+    return track.attachment_id ?? `${track.symbol}-${track.interval}`
+  }
+
+  function tabLabel(track: ReplayTrack): string {
+    const word = track.kind === 'reference' ? '参考' : track.kind === 'supplement' ? '之后' : '当时'
+    return `${track.symbol} ${word}`
+  }
+
+  function activeTrack(replay: Replay): ReplayTrack {
+    const all = tracksOf(replay)
+    return all.find((track) => keyOf(track) === activeKey) ?? (all[0] as ReplayTrack)
+  }
+
+  /** 这一条轨的 K 线。后端只给了边界时自己去交易所取一次，取到就存着。 */
+  function barsOf(track: ReplayTrack): Bar[] | null {
+    if (track.bars?.length) return track.bars
+    const key = keyOf(track)
+    const held = trackBars.get(key)
+    if (held) return held
+    if (!fetching.has(key) && !failedTracks.has(key)) {
+      fetching.add(key)
+      void (async () => {
+        try {
+          let bars = await directBars(
+            track.symbol,
+            track.market,
+            track.interval,
+            track.window.start_at,
+            track.window.end_at,
+          ).catch(() => null)
+          if (!alive) return
+          if (!bars) {
+            fullFallback ??= getReplay(id, { signal: lifetime.signal }).catch(error => { fullFallback = null; throw error })
+            const full = await fullFallback
+            bars = tracksOf(full).find(one => keyOf(one) === key)?.bars ?? null
+          }
+          if (!bars?.length) throw new Error('这一段行情暂时没取到')
+          trackBars.set(key, bars)
+          track.bars = bars
+        } catch {
+          failedTracks.add(key)
+        }
+        fetching.delete(key)
+        if (!alive || !holdReplay || keyOf(activeTrack(holdReplay)) !== key) return
+        if (holdCall && holdReplay) paint(holdCall, holdReplay, null)
+      })()
+    }
+    return null
+  }
+
+  function tabsRow(replay: Replay): HTMLElement | null {
+    const all = tracksOf(replay)
+    if (all.length < 2) return null
+    const row = h('div.rlv-tabs')
+    for (const track of all) {
+      const key = keyOf(track)
+      row.appendChild(
+        h('button.rlv-tab', {
+          text: tabLabel(track),
+          class: key === activeKey || (!activeKey && track === all[0]) ? 'on' : '',
+          on: {
+            click: () => {
+              if (activeKey === key) return
+              activeKey = key
+              holdTrackKey = key
+              if (holdCall && holdReplay) paint(holdCall, holdReplay, null)
+            },
+          },
+        }),
+      )
+    }
+    return row
+  }
+
   /* ------------------------------------------------------------ 主体 */
 
   function paint(call: CallDetail, replay: Replay | null, failure: ApiError | null): void {
+    clearTimeout(locateTimer)
     stage?.destroy()
     stage = null
-    locate?.destroy()
-    locate = null
+    stepBy = null
     playAgain = null
     pauseNow = null
     isPlaying = null
@@ -278,32 +386,81 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     const screen = h('div.rlv-screen', { data: { step: String(step) } })
     body.replaceChildren(screen)
 
-    if (!replay) {
+    if (!replay || (!replay.bars.length && !(replay.tracks ?? []).length)) {
+      void failure
+      if (replay?.locating && ['queued', 'running', 'retry_wait'].includes(replay.locating.status)) {
+        screen.appendChild(spinner('正在对上行情…'))
+        followLocation(replay.locating.job_id, screen)
+        return
+      }
       screen.appendChild(
-        h('div.rlv-flat', {}, h('p.rlv-say', { text: failure?.message ?? '这一段行情取不到。' })),
-      )
-      if (failure?.code !== 'replay_interval_unsupported') screen.appendChild(board(call, false))
-      screen.appendChild(
-        h('div.rlv-acts', {}, h('a.btn.sm', { href: `#/call/${id}`, text: '回到记录' })),
+        empty({
+          title: '没有对上行情的图',
+          action: h('a.btn.sm.primary', { href: `#/call/${id}`, text: '去对上' }),
+        }),
       )
       stagger(screen.children, 6)
       return
     }
 
-    if (!replay.bars.length) {
-      screen.appendChild(h('div.rlv-flat', {}, h('p.rlv-say', { text: '这一段行情里没有 K 线。' })))
+    const track = activeTrack(replay)
+    const bars = barsOf(track)
+    if (!bars) {
+      screen.appendChild(tabsRow(replay) ?? h('div', { hidden: true }))
+      if (failedTracks.has(keyOf(track))) screen.appendChild(empty({
+        title: '这一段行情暂时没取到', action: h('button.btn.sm', { text: '再试一次', on: { click: () => {
+          failedTracks.delete(keyOf(track)); paint(call, replay, null)
+        } } }),
+      }))
+      else screen.appendChild(spinner('正在把那一段行情取回来…'))
       stagger(screen.children, 6)
       return
     }
+    const look: Look = {
+      track,
+      bars,
+      own: track.symbol === replay.symbol && track.interval === replay.interval && track.market === replay.market,
+    }
 
-    if (step === 1) screenOne(screen, call, replay)
-    else if (step === 2) screenTwo(screen, call, replay)
-    else if (step === 3) screenThree(screen, call, replay)
-    else if (step === 4) screenFour(screen, call, replay)
-    else screenFive(screen, call, replay)
+    if (step === 1) screenOne(screen, call, replay, look)
+    else if (step === 2) screenTwo(screen, call, replay, look)
+    else if (step === 3) screenThree(screen, call, replay, look)
+    else if (step === 4) screenFour(screen, call, replay, look)
+    else screenFive(screen, call)
 
     screen.appendChild(walkRow())
     stagger(screen.children, 8)
+  }
+
+  function followLocation(jobId: string, screen: HTMLElement): void {
+    locateTimer = window.setTimeout(() => { void (async () => {
+      try {
+        const job = await getJob(jobId, { signal: lifetime.signal })
+        if (!alive) return
+        locateFailures = 0
+        if (isRunning(job)) { followLocation(jobId, screen); return }
+        if (job.status === 'succeeded') { holdReplay = null; holdCall = await detail(id, { refresh: true }); await load(); return }
+        screen.replaceChildren(empty({ title: '这张图还需要你确认', action: h('a.btn.sm', { href: `#/call/${id}`, text: '查看定位结果' }) }))
+      } catch {
+        if (!alive) return
+        if (++locateFailures < 3) { followLocation(jobId, screen); return }
+        screen.replaceChildren(empty({ title: '定位进度暂时没读到', action: h('button.btn.sm', { text: '重试', on: { click: () => { locateFailures = 0; screen.replaceChildren(spinner('正在对上行情…')); followLocation(jobId, screen) } } }) }))
+      }
+    })() }, 3000)
+  }
+
+  function startPoint(screen: HTMLElement, call: CallDetail, replay: Replay, look: Look): { end: string; start?: string; shot: boolean } {
+    const location = call.attachments.find(attachment => attachment.id === look.track.attachment_id)?.location
+    const shot = holdStart === 'shot' && Boolean(location)
+    const end = shot && location ? location.end_at : replay.judgment.at
+    const start = shot && location ? location.start_at : undefined
+    const choices = h('div.rlv-tools', { style: 'margin-bottom:10px' })
+    for (const [mode, label] of [['shot', '图中窗口'], ['judgment', '判断时刻']] as const) {
+      if (mode === 'shot' && !location) continue
+      choices.appendChild(h('button.chip', { text: label, class: (shot ? mode === 'shot' : mode === 'judgment') ? 'on' : '', attrs: { 'aria-pressed': String(shot ? mode === 'shot' : mode === 'judgment') }, on: { click: () => { holdStart = mode; holdProgressAt = null; paint(call, replay, null) } } }))
+    }
+    screen.append(choices, h('div.faint', { style: 'margin-bottom:10px', text: shot ? `${dateTime(start)} – ${dateTime(end)}` : `判断于 ${dateTime(end)} · 仅展示此前已收盘 K 线` }))
+    return { start, end, shot }
   }
 
   function walkRow(): HTMLElement {
@@ -311,30 +468,36 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     row.appendChild(
       step > 1
         ? h('a.btn.sm.ghost', { href: `#/relive/${id}/${step - 1}`, text: `上一屏 · ${TITLES[step - 2]}` })
-        : h('a.btn.sm.ghost', { href: `#/call/${id}`, text: '回到记录' }),
+        : h('a.btn.sm.ghost', { href: `#/call/${id}`, text: '退出重温' }),
     )
-    // 最后一屏自己带着「再看一遍」和「回到记录」，这里就不再重复一遍。
     if (step < 5) {
       row.appendChild(h('a.btn.sm.primary', { href: `#/relive/${id}/${step + 1}`, text: `下一屏 · ${TITLES[step]}` }))
     }
     return row
   }
 
-  /* ------------------------------------------------------- 第 1 屏 */
+  /* ------------------------------------------------------- 第 1 屏 当时 */
 
-  function screenOne(screen: HTMLElement, call: CallDetail, replay: Replay): void {
-    const judgeIndex = indexOf(replay, replay.judgment.at)
+  function screenOne(screen: HTMLElement, call: CallDetail, replay: Replay, look: Look): void {
+    const point = startPoint(screen, call, replay, look)
+    const visible = closedWindow(look.bars, point.end, point.start)
+    if (!visible.length) { screen.appendChild(empty({ title: '这个时刻之前没有已收盘 K 线' })); return }
+    look = { ...look, bars: visible }
+    const judgeIndex = visible.length - 1
     const words = call.original_text.trim()
-    const badge = [STANCES[call.body.stance] ?? '', call.body.confidence === null || call.body.confidence === undefined ? '' : `把握 ${call.body.confidence}`]
+    const badge = [
+      STANCES[call.body.stance] ?? '',
+      call.body.confidence === null || call.body.confidence === undefined ? '' : `把握 ${call.body.confidence}%`,
+    ]
       .filter(Boolean)
       .join(' · ')
 
-    const marks: StageMark[] = [
+    const marks: StageMark[] = point.shot ? [] : [
       {
         id: 'judgment',
         index: judgeIndex,
-        price: replay.judgment.base_price ? Number(replay.judgment.base_price) : null,
-        label: badge || '这一刻',
+        price: look.own && replay.judgment.base_price ? Number(replay.judgment.base_price) : null,
+        label: look.own ? badge || '判断前' : `${replay.symbol} 判断前`,
         sub: words ? cut(words, 60) : null,
         brief: true,
         kind: 'judgment',
@@ -342,9 +505,9 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       },
     ]
 
-    const built = mount(screen, call, {
-      bars: replay.bars,
-      interval: replay.interval,
+    const built = mount(screen, replay, look, {
+      bars: look.bars,
+      interval: look.track.interval,
       marks,
       judgmentAt: replay.judgment.at,
     })
@@ -352,35 +515,34 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     // 判断点右边留一段空白：判断气泡站在空白里，不压住判断前那几根。
     built.zoom({ from: 0, to: judgeIndex + Math.max(6, Math.ceil((judgeIndex + 1) * 0.16)) })
 
-    const shot = sceneShot(call)
+    const shot = call.attachments.find(one => one.id === look.track.attachment_id) ?? (look.own ? sceneShot(call) : null)
     if (shot) {
       const corner = h('div.rlv-shot')
+      corner.hidden = true
       corner.appendChild(
         attachmentImage(shot.id, {
-          alt: '当时那张图',
+          alt: '当时图',
           ratio: { width: shot.width, height: shot.height },
           maxWidth: 220,
           lazy: false,
-          onReady: (url, image) => {
-            image.addEventListener('click', () => lightbox(url, `当时那张图 · ${dateTime(shot.uploaded_at)}`))
+          onReady: (_url, image) => {
+            image.addEventListener('click', () => openScreenshot(shot.id, '当时图', shot.location, { call, attachment: shot }))
           },
         }),
       )
-      corner.appendChild(h('span.rlv-shotl', { text: '当时那张图' }))
+      corner.appendChild(h('span.rlv-shotl', { text: '当时图' }))
       built.node.appendChild(corner)
+      screen.appendChild(h('button.btn.sm.ghost', {
+        text: '对照原图', attrs: { 'aria-expanded': 'false' }, on: { click: (event) => {
+          corner.hidden = !corner.hidden
+          const button = event.currentTarget as HTMLButtonElement
+          button.textContent = corner.hidden ? '对照原图' : '收起原图'
+          button.setAttribute('aria-expanded', String(!corner.hidden))
+        } },
+      }))
     }
 
-    screen.appendChild(
-      facts(
-        ['品种', replay.symbol],
-        ['周期', replay.interval],
-        ['判断时刻', dateTime(replay.judgment.at)],
-        judgmentPrice(replay, judgeIndex),
-      ),
-    )
     if (words) screen.appendChild(h('blockquote.rlv-words', { text: words }))
-    // 后台正在给这条记录的图找位置的话，进来就接着看那一条任务。
-    screen.appendChild(board(call, true, !!replay.locating))
   }
 
   function showWords(words: string): void {
@@ -394,181 +556,45 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     toast(words)
   }
 
-  /**
-   * 这条记录上所有图片的定位板。
-   *
-   * 一条记录可以挂好几张图，未必都是这条记录的现场——同板块的对比图就不是。
-   * 所以不再只拿第一张场景图去钉，而是把每一张都摆出来，各自说清楚要按哪个
-   * 品种、哪个周期去找。
-   */
-  function board(call: CallDetail, auto: boolean, running = false): HTMLElement {
-    const built = locateBoard({
-      call,
-      auto,
-      pending: running,
-      asked: searched,
-      onChange: () => {
-        // 钉的位置变了、或者哪张图换了身份：记录详情的缓存也旧了，一起重新取。
-        invalidate(id)
-        holdReplay = null
-        holdCall = null
-        void load()
-      },
-    })
-    locate = built
-    return built.node
-  }
+  /* ----------------------------------------------------- 第 2 屏 逐根看 */
 
-  /* ------------------------------------------------------- 第 2 屏 */
-
-  function screenTwo(screen: HTMLElement, call: CallDetail, replay: Replay): void {
-    const judgeIndex = indexOf(replay, replay.judgment.at)
-    const levels = levelLines(replay)
+  function screenTwo(screen: HTMLElement, call: CallDetail, replay: Replay, look: Look): void {
+    const point = startPoint(screen, call, replay, look)
+    const judgeIndex = closedIndex(look.bars, replay.judgment.at)
+    const startIndex = closedIndex(look.bars, point.end)
+    const initialAt = holdProgressAt ?? point.end
+    const initialIndex = closedIndex(look.bars, initialAt)
+    const last = look.bars.length - 1
+    const levels = look.own ? levelLines(replay) : []
     const horizonEnd = replay.levels?.horizon_end_at ?? null
-    const horizonIndex = horizonEnd ? indexOf(replay, horizonEnd) : judgeIndex
-    const bands: StageBand[] = horizonEnd && horizonIndex > judgeIndex
-      ? [{ id: 'horizon', from: judgeIndex, to: horizonIndex, label: `观察到 ${dateTime(horizonEnd)}`, kind: 'horizon' }]
-      : []
+    const horizonIndex = horizonEnd ? indexIn(look.bars, horizonEnd) : judgeIndex
+    const bands: StageBand[] =
+      horizonEnd && horizonIndex > judgeIndex
+        ? [{ id: 'horizon', from: judgeIndex, to: horizonIndex, label: dateTime(horizonEnd), kind: 'horizon' }]
+        : []
 
-    const built = mount(screen, call, {
-      bars: replay.bars,
-      interval: replay.interval,
-      levels,
-      bands,
-      judgmentAt: replay.judgment.at,
-      marks: [
-        {
-          id: 'judgment',
-          index: judgeIndex,
-          price: replay.judgment.base_price ? Number(replay.judgment.base_price) : null,
-          label: STANCES[call.body.stance] ?? '这一刻',
-          kind: 'judgment',
-        },
-      ],
-    })
-    built.showUpTo(judgeIndex)
-    built.zoom({ from: 0, to: Math.max(judgeIndex, horizonIndex) })
-
-    const rules = replay.levels
-    if (!rules || !levels.length) {
-      screen.appendChild(h('p.rlv-say', { text: '没有定标准。' }))
-      return
-    }
-    const rows: [string, string][] = []
-    // 模板号认不出来就不写这一行，界面上不出现后端自己的代号。
-    const named = TEMPLATES[rules.template as keyof typeof TEMPLATES]
-    if (named) rows.push(['标准', named])
-    if (rules.target_price) rows.push(['目标价', decimalPrice(rules.target_price) ?? rules.target_price])
-    if (rules.threshold_abs) rows.push(['幅度', decimalPrice(rules.threshold_abs) ?? rules.threshold_abs])
-    if (rules.invalidation_price) rows.push(['失效价', decimalPrice(rules.invalidation_price) ?? rules.invalidation_price])
-    if (rules.boundary_price) rows.push(['边界', decimalPrice(rules.boundary_price) ?? rules.boundary_price])
-    if (rules.trigger) {
-      rows.push([
-        '触发价',
-        `${rules.trigger.comparator === 'lte' ? '跌到' : '涨到'} ${decimalPrice(rules.trigger.price) ?? rules.trigger.price}`,
-      ])
-    }
-    if (rules.horizon_end_at) rows.push(['观察到', dateTime(rules.horizon_end_at)])
-    screen.appendChild(facts(...rows))
-  }
-
-  /* ------------------------------------------------------- 第 3 屏 */
-
-  function screenThree(screen: HTMLElement, call: CallDetail, replay: Replay): void {
-    const judgeIndex = indexOf(replay, replay.judgment.at)
-    const last = replay.bars.length - 1
-    const answer = replay.marks
     const marks: StageMark[] = [
       {
         id: 'judgment',
         index: judgeIndex,
-        price: replay.judgment.base_price ? Number(replay.judgment.base_price) : null,
-        label: STANCES[call.body.stance] ?? '这一刻',
+        price: look.own && replay.judgment.base_price ? Number(replay.judgment.base_price) : null,
+        label: '判断',
         kind: 'judgment',
       },
     ]
-    if (answer?.trigger_at) {
-      marks.push({
-        id: 'trigger',
-        index: indexOf(replay, answer.trigger_at),
-        price: answer.trigger_price ? Number(answer.trigger_price) : null,
-        label: '触发',
-        sub: dateTime(answer.trigger_at),
-        kind: 'trigger',
-        hold: 900,
-      })
-    }
-    if (answer?.first_threshold_interval) {
-      marks.push({
-        id: 'threshold',
-        index: indexOf(replay, answer.first_threshold_interval[0]),
-        label: '首次达标',
-        sub: dateTime(answer.first_threshold_interval[0]),
-        kind: 'threshold',
-        hold: 1200,
-      })
-    }
-    if (answer?.mfe_at) {
-      marks.push({ id: 'mfe', index: indexOf(replay, answer.mfe_at), label: '最有利', sub: percent(answer.mfe), kind: 'mfe' })
-    }
-    if (answer?.mae_at) {
-      marks.push({ id: 'mae', index: indexOf(replay, answer.mae_at), label: '最不利', sub: percent(answer.mae), kind: 'mae' })
-    }
-    if (answer?.end_at && answer.invalidation_hit) {
-      marks.push({ id: 'end', index: indexOf(replay, answer.end_at), label: '碰到失效价', sub: dateTime(answer.end_at), kind: 'invalidation' })
-    } else if (answer?.end_at) {
-      marks.push({
-        id: 'end',
-        index: indexOf(replay, answer.end_at),
-        label: stateLabel(replay),
-        sub: percent(answer.signed_return),
-        kind: 'end',
-        hold: 1400,
-      })
-    }
 
-    const result = h('div.rlv-result', { hidden: true })
-    const status = h('span.rlv-status', { text: dateTime(replay.judgment.at) })
-    const counter = h('span.rlv-count.mono', { text: `${judgeIndex + 1} / ${replay.bars.length}` })
     let speed = 1
-
-    const built = mount(screen, call, {
-      bars: replay.bars,
-      interval: replay.interval,
-      levels: levelLines(replay),
+    const built = mount(screen, replay, look, {
+      bars: look.bars,
+      interval: look.track.interval,
+      levels,
+      bands,
       judgmentAt: replay.judgment.at,
       marks,
-      onMark: (mark) => {
-        status.textContent = mark.sub ? `${mark.label} · ${mark.sub}` : mark.label
-        if (mark.kind === 'invalidation') {
-          built.pause()
-          reveal()
-          paintPlay()
-        } else if (mark.kind === 'end') {
-          reveal()
-        }
-      },
-      onFrame: (count) => {
-        counter.textContent = `${count} / ${replay.bars.length}`
-        const bar = replay.bars[Math.max(0, count - 1)]
-        if (bar && !built.playing()) return
-        if (bar) status.textContent = dateTime(bar.start)
-      },
-      onEnd: () => {
-        reveal()
-        paintPlay()
-        if (!answer) status.textContent = '还在等'
-      },
+      onEnd: () => paintPlay(),
+      onFrame: count => { holdProgressAt = look.bars[count - 1]?.end ?? initialAt },
     })
-    built.showUpTo(judgeIndex)
-
-    function reveal(): void {
-      if (answer) result.hidden = false
-    }
-
-    function paintPlay(): void {
-      playBtn.textContent = built.playing() ? '暂停' : built.shown() - 1 >= last ? '重新播放' : '播放'
-    }
+    built.showUpTo(initialIndex)
 
     const playBtn = h('button.btn.sm.primary', {
       text: '播放',
@@ -577,10 +603,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
           if (built.playing()) {
             built.pause()
           } else {
-            if (built.shown() - 1 >= last) {
-              built.showUpTo(judgeIndex)
-              result.hidden = true
-            }
+            if (built.shown() - 1 >= last) built.showUpTo(startIndex)
             built.play(speed)
           }
           paintPlay()
@@ -588,11 +611,22 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       },
     })
 
+    function paintPlay(): void {
+      playBtn.textContent = built.playing() ? '暂停' : '播放'
+    }
+
+    function move(delta: number): void {
+      built.pause()
+      const next = Math.min(last, Math.max(-1, built.shown() - 1 + delta))
+      built.showUpTo(next)
+      paintPlay()
+    }
+
     const speeds = h('span.seg')
     for (const value of [1, 2, 4]) {
       speeds.appendChild(
         h('button', {
-          text: `×${value}`,
+          text: `${value}×`,
           class: value === speed ? 'on' : '',
           on: {
             click: (e) => {
@@ -609,22 +643,30 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       )
     }
 
-    const rewind = h('button.btn.sm.ghost', {
-      text: '回到判断时刻',
-      on: {
-        click: () => {
-          built.pause()
-          built.showUpTo(judgeIndex)
-          result.hidden = true
-          status.textContent = dateTime(replay.judgment.at)
-          paintPlay()
-        },
-      },
-    })
+    screen.appendChild(
+      h(
+        'div.rlv-controls',
+        {},
+        h('button.btn.sm.ghost', { text: '上一根', on: { click: () => move(-1) } }),
+        playBtn,
+        h('button.btn.sm.ghost', { text: '下一根', on: { click: () => move(1) } }),
+        speeds,
+        h('button.btn.sm.ghost', {
+          text: point.shot ? '回到图中末尾' : '跳到判断时刻',
+          on: {
+            click: () => {
+              built.pause()
+              built.showUpTo(startIndex)
+              paintPlay()
+            },
+          },
+        }),
+      ),
+    )
 
-    screen.appendChild(h('div.rlv-controls', {}, playBtn, speeds, rewind, counter, status))
+    stepBy = move
     playAgain = () => {
-      if (built.shown() - 1 >= last) built.showUpTo(judgeIndex)
+      if (built.shown() - 1 >= last) built.showUpTo(startIndex)
       built.play(speed)
       paintPlay()
     }
@@ -633,21 +675,114 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       paintPlay()
     }
     isPlaying = () => built.playing()
-
-    const rows = figures(answer ? evaluationOf(answer) : null)
-    if (rows.length) {
-      result.appendChild(facts(...rows.map((row) => [row.key, row.value] as [string, string])))
-      screen.appendChild(result)
-    } else {
-      screen.appendChild(h('p.rlv-say', { text: answer ? '这一段还没有数字。' : '还在等。' }))
-    }
     paintPlay()
+    void call
   }
 
-  /* ------------------------------------------------------- 第 4 屏 */
+  /* ------------------------------------------------------- 第 3 屏 答案 */
 
-  function screenFour(screen: HTMLElement, call: CallDetail, replay: Replay): void {
-    const last = replay.bars.length - 1
+  function screenThree(screen: HTMLElement, call: CallDetail, replay: Replay, look: Look): void {
+    const judgeIndex = indexIn(look.bars, replay.judgment.at)
+    const last = look.bars.length - 1
+    const answer = replay.marks
+    const marks: StageMark[] = [
+      {
+        id: 'judgment',
+        index: judgeIndex,
+        price: look.own && replay.judgment.base_price ? Number(replay.judgment.base_price) : null,
+        label: '判断',
+        kind: 'judgment',
+      },
+    ]
+    if (look.own && answer) {
+      if (answer.trigger_at) {
+        marks.push({
+          id: 'trigger',
+          index: indexIn(look.bars, answer.trigger_at),
+          price: answer.trigger_price ? Number(answer.trigger_price) : null,
+          label: '触发',
+          sub: dateTime(answer.trigger_at),
+          kind: 'trigger',
+        })
+      }
+      if (answer.first_threshold_interval) {
+        marks.push({
+          id: 'threshold',
+          index: indexIn(look.bars, answer.first_threshold_interval[0]),
+          label: '首次达标',
+          sub: dateTime(answer.first_threshold_interval[0]),
+          kind: 'threshold',
+        })
+      }
+      if (answer.mfe_at) {
+        marks.push({ id: 'mfe', index: indexIn(look.bars, answer.mfe_at), label: '最有利', sub: percent(answer.mfe), kind: 'mfe' })
+      }
+      if (answer.mae_at) {
+        marks.push({ id: 'mae', index: indexIn(look.bars, answer.mae_at), label: '最不利', sub: percent(answer.mae), kind: 'mae' })
+      }
+      if (answer.end_at) {
+        marks.push({
+          id: 'end',
+          index: indexIn(look.bars, answer.end_at),
+          label: answer.invalidation_hit ? '碰到失效价' : stateLabel(replay),
+          sub: percent(answer.signed_return),
+          kind: answer.invalidation_hit ? 'invalidation' : 'end',
+        })
+      }
+    }
+
+    const built = mount(screen, replay, look, {
+      bars: look.bars,
+      interval: look.track.interval,
+      levels: look.own ? levelLines(replay) : [],
+      judgmentAt: replay.judgment.at,
+      marks,
+    })
+    built.showUpTo(last)
+    built.zoom({ from: 0, to: last })
+
+    const now = headOutcome(call)
+    const state: OutcomeState = now ? now.result.state : 'pending'
+    const box = h('div.rlv-answer')
+    box.appendChild(h('div.eyebrow.noline', { text: '市场的答案' }))
+    box.appendChild(h('div.rlv-verdict', {}, stamp(state, true)))
+    const rows = figures(now?.result ?? answer ? evaluationOf(now?.result ?? null, answer) : null)
+    if (rows.length) box.appendChild(facts(...rows.map((row) => [row.key, row.value] as [string, string])))
+    const decided = state === 'realized' || state === 'unrealized' || state === 'not_triggered'
+    if (!decided && !call.voided) {
+      const acts = h('div.rlv-acts')
+      for (const [key, label] of Object.entries(VERDICTS)) {
+        acts.appendChild(
+          h('button.btn.sm.ghost', {
+            text: label,
+            on: { click: () => void setVerdict(call, key as keyof typeof VERDICTS) },
+          }),
+        )
+      }
+      box.appendChild(acts)
+    }
+    screen.appendChild(box)
+  }
+
+  async function setVerdict(call: CallDetail, state: keyof typeof VERDICTS): Promise<void> {
+    const payload = { state, expected_revision: call.revision }
+    try {
+      await judge(call.id, payload, judgeAction.keyFor(payload))
+      judgeAction.reset()
+      toast('记下了')
+      invalidate(id)
+      holdCall = null
+      holdReplay = null
+      await load()
+    } catch (error) {
+      problem(error instanceof Error ? error.message : '没保存上，再试一次')
+    }
+  }
+
+  /* ------------------------------------------------------- 第 4 屏 复盘 */
+
+  function screenFour(screen: HTMLElement, call: CallDetail, replay: Replay, look: Look): void {
+    const last = look.bars.length - 1
     const marks: StageMark[] = []
     const bands: StageBand[] = []
 
@@ -656,7 +791,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     call.reviews.forEach((review: ReviewRecord, i) => {
       marks.push({
         id: `review-${review.id}`,
-        index: indexOf(replay, review.created_at),
+        index: indexIn(look.bars, review.created_at),
         label: `复盘 ${i + 1}`,
         sub: dateTime(review.created_at),
         kind: 'review',
@@ -670,17 +805,17 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       if (shot.location) {
         bands.push({
           id: `shot-${shot.id}`,
-          from: indexOf(replay, shot.location.start_at),
-          to: indexOf(replay, shot.location.end_at),
-          label: '后来那张图',
+          from: indexIn(look.bars, shot.location.start_at),
+          to: indexIn(look.bars, shot.location.end_at),
+          label: '之后',
           kind: 'shot',
           onClick: () => openShot(shot),
         })
       } else {
         marks.push({
           id: `shot-${shot.id}`,
-          index: indexOf(replay, shot.captured_at ?? shot.uploaded_at),
-          label: '后来那张图',
+          index: indexIn(look.bars, shot.captured_at ?? shot.uploaded_at),
+          label: '之后',
           sub: dateTime(shot.captured_at ?? shot.uploaded_at),
           kind: 'shot',
           rail: true,
@@ -689,10 +824,10 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       }
     }
 
-    const built = mount(screen, call, {
-      bars: replay.bars,
-      interval: replay.interval,
-      levels: levelLines(replay),
+    const built = mount(screen, replay, look, {
+      bars: look.bars,
+      interval: look.track.interval,
+      levels: look.own ? levelLines(replay) : [],
       judgmentAt: replay.judgment.at,
       marks,
       bands,
@@ -708,32 +843,27 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       built.setMarks(live, bands)
     }
 
-    if (!call.reviews.length) {
+    if (call.reviews.length) {
+      showReview(call.reviews[call.reviews.length - 1] as ReviewRecord)
+    }
+    screen.appendChild(later)
+    if (!call.voided) {
       screen.appendChild(
         h(
           'div.rlv-acts',
           {},
-          h('button.btn.sm.primary', { text: '现在就写', on: { click: () => go(`review/${call.id}/step/1`) } }),
+          h('a.btn.sm.primary', { href: `#/review/${call.id}/step/1`, text: '写复盘' }),
         ),
       )
-    } else {
-      screen.appendChild(
-        facts(
-          ['复盘', `${call.reviews.length} 条`],
-          ['最近一条', dateTime(call.reviews[call.reviews.length - 1]!.created_at)],
-        ),
-      )
-      showReview(call.reviews[call.reviews.length - 1] as ReviewRecord)
     }
-    screen.appendChild(later)
 
     function showReview(review: ReviewRecord): void {
       const rows: [string, string][] = []
       if (review.body.note) rows.push(['这次看到了什么', review.body.note])
       if (review.body.better_play) rows.push(['更好的打法', review.body.better_play])
-      if (review.body.vs_last) rows.push(['和上次比', review.body.vs_last])
+      if (review.body.vs_last) rows.push(['和上次比', REVIEW_ACTIONS.find(action => action.value === review.body.vs_last)?.label ?? review.body.vs_last])
       later.replaceChildren(
-        h('div.rlv-rhead', {}, h('b', { text: dateTime(review.created_at) }), h('span.faint', { text: '复盘' })),
+        h('div.rlv-rhead', {}, h('b', { text: dateTime(review.created_at) })),
         ...rows.map(([k, v]) => h('div.rlv-rrow', {}, h('i', { text: k }), h('p', { text: v }))),
       )
     }
@@ -741,28 +871,29 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     function openShot(shot: Attachment): void {
       later.replaceChildren(
         attachmentImage(shot.id, {
-          alt: '后来那张图',
+          alt: '之后',
           ratio: { width: shot.width, height: shot.height },
           lazy: false,
-          onReady: (url, image) => {
-            image.addEventListener('click', () => lightbox(url, `后来那张图 · ${dateTime(shot.uploaded_at)}`))
+          onReady: (_url, image) => {
+            image.addEventListener('click', () => openScreenshot(shot.id, '之后的走势', shot.location, { call, attachment: shot }))
           },
         }),
       )
     }
 
-    void addFills(built, call, replay, addMarks)
-    void addEpisode(built, call, replay, addMarks)
+    void addFills(built, call, look, replay, addMarks)
+    void addEpisode(built, call, look, addMarks)
   }
 
   /** 这一段时间里这个品种上真实成交的几笔。读不到就不画。 */
   async function addFills(
     built: CandleStage,
     call: CallDetail,
+    look: Look,
     replay: Replay,
     addMarks: (extra: StageMark[]) => void,
   ): Promise<void> {
-    if (!call.instrument) return
+    if (!call.instrument || !look.own) return
     try {
       const page = await trades.fills({
         symbol: call.instrument,
@@ -772,7 +903,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       if (!alive || stage !== built) return
       const extra: StageMark[] = page.items.slice(0, 20).map((row: FillRow) => ({
         id: `fill-${row.id}`,
-        index: indexOf(replay, row.fill.traded_at),
+        index: indexIn(look.bars, row.fill.traded_at),
         price: Number(row.fill.price),
         label: row.fill.side === 'BUY' ? '买入' : '卖出',
         sub: `${row.fill.quantity} @ ${decimalPrice(row.fill.price) ?? row.fill.price}`,
@@ -788,7 +919,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
   async function addEpisode(
     built: CandleStage,
     call: CallDetail,
-    replay: Replay,
+    look: Look,
     addMarks: (extra: StageMark[]) => void,
   ): Promise<void> {
     const link = call.episode_links.find((l) => l.status !== 'rejected')
@@ -800,7 +931,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       if (!others.length) return
       const extra: StageMark[] = others.map((l) => ({
         id: `ep-${l.id}`,
-        index: indexOf(replay, l.created_at),
+        index: indexIn(look.bars, l.created_at),
         label: '另一次判断',
         kind: 'other' as const,
         rail: true,
@@ -812,408 +943,138 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
     }
   }
 
-  /* ------------------------------------------------------- 第 5 屏 */
+  /* ------------------------------------------------------- 第 5 屏 打法 */
 
-  function screenFive(screen: HTMLElement, call: CallDetail, replay: Replay): void {
-    const last = replay.bars.length - 1
-    const judgeIndex = indexOf(replay, replay.judgment.at)
-    const answer = replay.marks
-    const now = headOutcome(call)
-    const marks: StageMark[] = [
-      {
-        id: 'judgment',
-        index: judgeIndex,
-        price: replay.judgment.base_price ? Number(replay.judgment.base_price) : null,
-        label: STANCES[call.body.stance] ?? '这一刻',
-        kind: 'judgment',
-      },
-    ]
-    if (answer?.trigger_at) {
-      marks.push({ id: 'trigger', index: indexOf(replay, answer.trigger_at), price: answer.trigger_price ? Number(answer.trigger_price) : null, label: '触发', kind: 'trigger' })
-    }
-    if (answer?.mfe_at) marks.push({ id: 'mfe', index: indexOf(replay, answer.mfe_at), label: '最有利', sub: percent(answer.mfe) ?? null, kind: 'mfe' })
-    if (answer?.mae_at) marks.push({ id: 'mae', index: indexOf(replay, answer.mae_at), label: '最不利', sub: percent(answer.mae) ?? null, kind: 'mae' })
-    if (answer?.end_at) {
-      marks.push({ id: 'end', index: indexOf(replay, answer.end_at), label: stateLabel(replay), sub: percent(answer.signed_return) ?? null, kind: answer.invalidation_hit ? 'invalidation' : 'end' })
-    }
-    for (const review of call.reviews) {
-      marks.push({ id: `review-${review.id}`, index: indexOf(replay, review.created_at), label: '复盘', kind: 'review', rail: true })
-    }
-
-    const verdict = h(
-      'div.rlv-verdict',
-      {},
-      stanceBadge(call.body.stance),
-      now ? stamp(now.result.state, true) : stamp('pending', true),
-      ...figures(now?.result ?? null).map((row) =>
-        h('span.rlv-fig', {}, h('i', { text: row.key }), h('b.mono', { text: row.value })),
-      ),
-    )
-    screen.appendChild(verdict)
-
-    const built = mount(screen, call, {
-      bars: replay.bars,
-      interval: replay.interval,
-      levels: levelLines(replay),
-      judgmentAt: replay.judgment.at,
-      marks,
-    })
-    built.showUpTo(last)
-    built.zoom({ from: 0, to: last })
-
-
-    const before = sceneShot(call)
-    const after = [...call.attachments].find((a) => a.kind === 'supplement') ?? null
-    if (before || after) {
-      const pair = h('div.rlv-pair')
-      if (before) pair.appendChild(shotCard(before, '拍下时'))
-      if (after) pair.appendChild(shotCard(after, '后来'))
-      screen.appendChild(pair)
-    }
-
-    screen.appendChild(
-      facts(
-        ['品种', replay.symbol],
-        ['周期', replay.interval],
-        ['这一段', `${utcRange(replay.window.start_at, replay.window.end_at)} UTC`],
-        ['K 线', `${replay.bars.length} 根${replay.window.truncated ? '（截断）' : ''}`],
-      ),
-    )
-
-    screen.appendChild(
-      h(
-        'div.rlv-acts',
-        {},
-        h('a.btn.sm', { href: `#/relive/${id}/3`, text: '再看一遍' }),
-        h('a.btn.sm.ghost', { href: `#/call/${id}`, text: '回到记录' }),
-      ),
-    )
-  }
-
-  function shotCard(shot: Attachment, label: string): HTMLElement {
-    return h(
-      'figure.rlv-card',
-      {},
-      attachmentImage(shot.id, {
-        alt: label,
-        ratio: { width: shot.width, height: shot.height },
-        maxWidth: 420,
-        lazy: false,
-        onReady: (url, image) => {
-          image.addEventListener('click', () => lightbox(url, `${label} · ${dateTime(shot.uploaded_at)}`))
-        },
-      }),
-      h('figcaption', {}, h('b', { text: label }), h('span.mono.faint', { text: dateTime(shot.captured_at ?? shot.uploaded_at) })),
-    )
-  }
-
-  /* ------------------------------------------------------- 画线设置 */
-
-  /**
-   * 图上画什么，人自己说了算。
-   *
-   * 面板只改形状，不算指标——算在 candles.ts 里，改完立刻重画一次，看得见才知道
-   * 是不是要的那条线。改稳了（半秒不动）再存回后端：调一个周期不该发五次请求。
-   * 存不上就照实说一句，图上那条线留着不撤，人下次进来再改一次就是。
-   *
-   * 「截图默认」是记录截图上那一套（MA30/120/256 + VOL + MACD(10,30,9)）；
-   * 手调乱了按一下就回去。「清空」是一条不画，只看 K 线本身。
-   */
-  function setupPanel(call: CallDetail, built: CandleStage): HTMLElement {
-    let setup: ChartSetup = chartSetup(call)
-    const box = h('div.rlv-setup')
-    let timer = 0
-
-    /** 改一次：先自己看一遍规矩，过得去才画、才存。 */
-    function apply(next: ChartSetup): void {
-      const bad = validateSetup(next)
-      if (bad) {
-        problem(bad)
-        repaint()
-        return
-      }
-      setup = next
-      built.setSetup(setup)
-      repaint()
-      save()
-    }
-
-    function save(): void {
-      window.clearTimeout(timer)
-      const payload = cloneSetup(setup)
-      timer = window.setTimeout(() => {
-        void putChartSetup(call.id, payload, setupAction.keyFor(payload))
-          .then(() => {
-            setupAction.reset()
-            if (holdCall) holdCall = { ...holdCall, chart_setup: payload }
-          })
-          .catch((error: unknown) => {
-            problem(error instanceof Error ? error.message : '这几条线没有存上。')
-          })
-      }, 500)
-    }
-
-    /* --------------------------------------------------- 几个小零件 */
-
-    function numberBox(value: string | number, width: string, onDone: (raw: string) => void): HTMLElement {
-      const input = h('input.rlv-num', {
-        type: 'number',
-        value: String(value),
-        style: `width:${width}`,
-        attrs: { min: '0', step: 'any' },
-      }) as HTMLInputElement
-      input.addEventListener('change', () => onDone(input.value.trim()))
-      return input
-    }
-
-    function intOf(raw: string): number | null {
-      const n = Number(raw)
-      return Number.isInteger(n) && n >= 1 && n <= 500 ? n : null
-    }
-
-    /** 一行开关：标题按一下开，再按一下关。 */
-    function switcher(label: string, on: boolean, flip: () => void): HTMLElement {
-      return h('button.rlv-sw', { text: label, class: on ? 'on' : '', on: { click: flip } })
-    }
-
-    /** 一串周期：每个都能单独去掉，后面跟一个空格填新的。 */
-    function periodList(name: string, values: number[], onSet: (next: number[]) => void): HTMLElement {
-      const wrap = h('span.rlv-chips')
-      for (const n of values) {
-        wrap.appendChild(
-          h('button.rlv-chip', {
-            text: `${name}${n}`,
-            title: '去掉这一条',
-            on: { click: () => onSet(values.filter((v) => v !== n)) },
-          }, h('u', { text: '×' })),
-        )
-      }
-      const input = h('input.rlv-num.add', {
-        type: 'number',
-        placeholder: '加',
-        style: 'width:4.2em',
-        attrs: { min: '1', max: '500', step: '1' },
-      }) as HTMLInputElement
-      const take = () => {
-        const raw = input.value.trim()
-        if (!raw) return
-        const n = intOf(raw)
-        if (n === null) {
-          problem('周期要填 1 到 500 之间的整数')
-          return
-        }
-        input.value = ''
-        if (values.includes(n)) return
-        onSet([...values, n].sort((a, b) => a - b))
-      }
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault()
-          take()
-        }
-      })
-      input.addEventListener('blur', take)
-      wrap.appendChild(input)
-      return wrap
-    }
-
-    function row(head: Child, ...rest: Child[]): HTMLElement {
-      return h('div.rlv-srow', {}, head, ...rest)
-    }
-
-    /* ------------------------------------------------------ 重画一遍 */
-
-    function repaint(): void {
-      const boll = setup.boll
-      const volume = setup.volume
-      const macd = setup.macd
-      const rsi = setup.rsi
-      const atr = setup.atr
-
-      box.replaceChildren(
-        row(
-          h('i.rlv-sname', { text: '预设' }),
-          h('button.btn.xs', {
-            text: '截图默认',
-            on: { click: () => apply(cloneSetup(SHOT_DEFAULT)) },
-          }),
-          h('button.btn.xs.ghost', {
-            text: '清空',
-            disabled: setupIsEmpty(setup),
-            on: { click: () => apply(cloneSetup(EMPTY_SETUP)) },
-          }),
-          h('span.rlv-snote', { text: `主图均线最多 ${MAX_LINES} 条` }),
-        ),
-        row(
-          h('i.rlv-sname', { text: 'MA' }),
-          periodList('MA', setup.ma, (ma) => apply({ ...cloneSetup(setup), ma })),
-        ),
-        row(
-          h('i.rlv-sname', { text: 'EMA' }),
-          periodList('EMA', setup.ema, (ema) => apply({ ...cloneSetup(setup), ema })),
-        ),
-        row(
-          switcher('BOLL', boll !== null, () =>
-            apply({ ...cloneSetup(setup), boll: boll ? null : { n: 20, k: '2' } }),
-          ),
-          boll ? h('span.rlv-sub', { text: '周期' }) : null,
-          boll
-            ? numberBox(boll.n, '4.2em', (raw) => {
-                const n = intOf(raw)
-                if (n === null) {
-                  problem('布林周期要在 1 到 500 之间')
-                  repaint()
-                  return
-                }
-                apply({ ...cloneSetup(setup), boll: { n, k: boll.k } })
-              })
-            : null,
-          boll ? h('span.rlv-sub', { text: '倍数' }) : null,
-          boll
-            ? numberBox(boll.k, '4.2em', (raw) => {
-                const k = Number(raw)
-                if (!Number.isFinite(k) || k <= 0 || k > 10) {
-                  problem('布林倍数要在 0 到 10 之间')
-                  repaint()
-                  return
-                }
-                apply({ ...cloneSetup(setup), boll: { n: boll.n, k: raw } })
-              })
-            : null,
-        ),
-        row(
-          switcher('VOL', volume !== null, () =>
-            apply({ ...cloneSetup(setup), volume: volume ? null : { ma: [5, 10] } }),
-          ),
-          volume
-            ? periodList('MAVOL', volume.ma, (ma) => apply({ ...cloneSetup(setup), volume: { ma } }))
-            : null,
-          volume ? h('span.rlv-snote', { text: `量均线最多 ${MAX_VOL_LINES} 条` }) : null,
-        ),
-        row(
-          switcher('MACD', macd !== null, () =>
-            apply({ ...cloneSetup(setup), macd: macd ? null : { fast: 12, slow: 26, signal: 9 } }),
-          ),
-          ...(macd
-            ? ([
-                h('span.rlv-sub', { text: '快' }),
-                numberBox(macd.fast, '4.2em', (raw) => {
-                  const fast = intOf(raw)
-                  if (fast === null) return repaint()
-                  apply({ ...cloneSetup(setup), macd: { ...macd, fast } })
-                }),
-                h('span.rlv-sub', { text: '慢' }),
-                numberBox(macd.slow, '4.2em', (raw) => {
-                  const slow = intOf(raw)
-                  if (slow === null) return repaint()
-                  apply({ ...cloneSetup(setup), macd: { ...macd, slow } })
-                }),
-                h('span.rlv-sub', { text: '信号' }),
-                numberBox(macd.signal, '4.2em', (raw) => {
-                  const signal = intOf(raw)
-                  if (signal === null) return repaint()
-                  apply({ ...cloneSetup(setup), macd: { ...macd, signal } })
-                }),
-              ] as Child[])
-            : []),
-        ),
-        row(
-          switcher('RSI', rsi !== null, () =>
-            apply({ ...cloneSetup(setup), rsi: rsi ? null : { n: 14 } }),
-          ),
-          rsi ? h('span.rlv-sub', { text: '周期' }) : null,
-          rsi
-            ? numberBox(rsi.n, '4.2em', (raw) => {
-                const n = intOf(raw)
-                if (n === null) {
-                  problem('RSI 周期要在 1 到 500 之间')
-                  return repaint()
-                }
-                apply({ ...cloneSetup(setup), rsi: { n } })
-              })
-            : null,
-        ),
-        row(
-          switcher('ATR', atr !== null, () =>
-            apply({ ...cloneSetup(setup), atr: atr ? null : { n: 14 } }),
-          ),
-          atr ? h('span.rlv-sub', { text: '周期' }) : null,
-          atr
-            ? numberBox(atr.n, '4.2em', (raw) => {
-                const n = intOf(raw)
-                if (n === null) {
-                  problem('ATR 周期要在 1 到 500 之间')
-                  return repaint()
-                }
-                apply({ ...cloneSetup(setup), atr: { n } })
-              })
-            : null,
-        ),
+  function screenFive(screen: HTMLElement, call: CallDetail): void {
+    const box = h('div.rlv-play')
+    box.appendChild(h('div.eyebrow.noline', { text: '这类局面的打法' }))
+    if (call.adoptions.length) {
+      const first = call.adoptions[0] as { playbook_id: Uuid }
+      box.appendChild(
+        h('a.btn.sm', { href: `#/archive/${first.playbook_id}`, text: '看这类局面' }),
       )
+    } else if (call.tags.length) {
+      for (const tag of call.tags) box.appendChild(h('a.btn.sm', { href: `#/archive/${tag.id}`, text: tag.name }))
+    } else {
+      box.appendChild(h('p.rlv-say', { text: '还没归类' }))
+      if (!call.voided) {
+        box.appendChild(h('a.btn.sm.ghost', { href: `#/archive?call=${call.id}`, text: '归到一类局面' }))
+      }
     }
-
-    repaint()
-    return box
+    screen.appendChild(box)
   }
 
   /* ---------------------------------------------------------- 工具 */
 
   function mount(
     screen: HTMLElement,
-    call: CallDetail,
+    replay: Replay,
+    look: Look,
     options: Omit<Parameters<typeof createCandles>[0], 'setup'>,
   ): CandleStage {
-    const built = createCandles({ ...options, setup: chartSetup(call) })
+    const line = h('div.rlv-factline')
+    let visibleEnd = look.track.window.end_at
+    const tabs = tabsRow(replay)
+    const paintLine = (count: number) => {
+      const bar = look.bars[Math.max(0, Math.min(look.bars.length - 1, count - 1))] ?? null
+      if (bar) visibleEnd = bar.end
+      line.textContent = factText(look, bar)
+    }
+    lastLook = look
+    const built = createCandles({
+      ...options,
+      setup: setupFor(choice, record()),
+      onFrame: (count) => {
+        paintLine(count)
+        options.onFrame?.(count)
+      },
+    })
     stage = built
+    if (tabs) screen.appendChild(tabs)
+    const expand = h('button.btn.sm.ghost', { text: '全屏 K 线', attrs: { 'aria-label': '全屏查看当前走势' }, on: { click: () => { const at = look.track.window; openMarketChart({ symbol: look.track.symbol, market: look.track.market, interval: look.track.interval, start_at: at.start_at, end_at: visibleEnd, source: holdCall?.attachments.find(shot => shot.id === look.track.attachment_id)?.location?.source ?? (replay.source === 'monthly_archive' ? 'monthly_archive' : 'rest') }, '这段走势', { attachmentId: look.track.attachment_id ?? undefined, fullscreen: true, record: record(), choice }) } } })
+    screen.appendChild(h('div.rlv-chart-heading', {}, line, expand))
     screen.appendChild(h('div.rlv-plate', {}, built.node))
-    screen.appendChild(tools(call, built, options.judgmentAt ?? null))
+    screen.appendChild(tools(built))
+    paintLine(look.bars.length)
+    void warmLead(look, built)
     return built
   }
 
-  /**
-   * 图下面那一条：指标面板的开关、回到判断那一根、还有这一段行情是哪来的。
-   *
-   * 数据来源写出来是因为两条路给的东西不完全一样——直连交易所的那份带成交量，
-   * 后端缓存里的旧数据可能没有。看图的人有权知道自己在看哪一份。
-   */
-  function tools(call: CallDetail, built: CandleStage, judgmentAt: string | null): HTMLElement {
-    const panel = setupPanel(call, built)
-    panel.hidden = true
-    const toggle = h('button.btn.sm.ghost', {
-      text: '指标',
-      on: {
-        click: () => {
-          panel.hidden = !panel.hidden
-          toggle.classList.toggle('on', !panel.hidden)
-        },
-      },
-    })
-    const row = h(
-      'div.rlv-tools',
-      {},
-      toggle,
-      judgmentAt
-        ? h('button.btn.sm.ghost', {
-            text: '回到判断点',
-            on: { click: () => built.focus(built.indexAt(judgmentAt)) },
-          })
-        : null,
-      h('button.btn.sm.ghost', { text: '看全段', on: { click: () => built.resetView() } }),
-      h('span.rlv-src', {
-        text: holdSource === 'binance' ? '行情来自币安 · 直连' : '行情来自后端缓存',
-        title:
-          holdSource === 'binance'
-            ? '这一段 K 线是浏览器直接问交易所要的，后端没有留副本。'
-            : '这一段 K 线是后端取回来的临时缓存，离开这个页面就还回去。',
-      }),
+  /** 轨道来源：定位过的那张图记着自己是从哪儿来的，没有就按这次回放的来源。 */
+  function trackSource(look: Look): 'rest' | 'monthly_archive' | undefined {
+    return (
+      holdCall?.attachments.find((shot) => shot.id === look.track.attachment_id)?.location?.source ??
+      (holdReplay?.source === 'monthly_archive' ? 'monthly_archive' : 'rest')
     )
-    return h('div.rlv-toolbox', {}, row, panel)
   }
 
-  /** 这条记录要画什么：存过就照存的画，从来没存过就用截图上那一套。 */
-  function chartSetup(call: CallDetail): ChartSetup {
-    if (!call.chart_setup) return cloneSetup(SHOT_DEFAULT)
-    return normalizeSetup(call.chart_setup)
+  /**
+   * 开着长周期指标时，把窗口开头之前那一段也取回来喂给指标。取不到就算了：
+   * 线从窗口里能算出值的地方开始画，和以前一样。
+   */
+  async function warmLead(look: Look, built: CandleStage): Promise<void> {
+    const need = maxPeriod(setupFor(choice, record()))
+    if (need <= 0) return
+    const track = look.track
+    const key = `${track.symbol}|${track.market}|${track.interval}|${track.window.start_at}`
+    if (holdLead?.key === key) {
+      built.setLead(holdLead.bars)
+      return
+    }
+    const want = Math.min(1900, Math.ceil(need * 1.5))
+    try {
+      const got = await marketData(
+        {
+          symbol: track.symbol,
+          market: track.market,
+          interval: track.interval,
+          start_at: historyStart(track.window.start_at, track.interval, want),
+          end_at: track.window.start_at,
+          source: trackSource(look),
+        },
+        { signal: lifetime.signal },
+      )
+      const edge = Date.parse(track.window.start_at)
+      const bars = got.bars.filter((bar) => Date.parse(bar.start) < edge)
+      holdLead = { key, bars }
+      if (alive && stage === built) built.setLead(bars)
+    } catch {
+      /* 取不到前置那一段：指标照旧从窗口里能算的位置起头 */
+    }
+  }
+
+  /** 舞台下面那一条：只有指标那一颗按钮，开哪几条线人自己说了算。 */
+  function tools(built: CandleStage): HTMLElement {
+    const chip = popChip({
+      label: () => '指标',
+      active: () => LINE_ORDER.some((name) => name !== 'volume' && choice[name]),
+      items: () => menuItems(choice, record()),
+      footer: () => menuFooter(record()),
+      onPick: (value) => {
+        if (value === '__shot') {
+          const next: Choice = { ...choice }
+          for (const name of seededNames(record())) next[name] = true
+          choice = next
+        } else if (value === '__none') {
+          // 「全部关」不关成交量：那是这张图的底座，不是一条指标。
+          const next: Choice = { ...choice }
+          for (const name of LINE_ORDER) if (name !== 'volume') next[name] = false
+          choice = next
+        } else {
+          const name = value as LineName
+          choice = { ...choice, [name]: !choice[name] }
+        }
+        writeChoice(choice)
+        built.setSetup(setupFor(choice, record()))
+        chip.refresh()
+        if (lastLook) void warmLead(lastLook, built)
+      },
+    })
+    return h('div.rlv-toolbox', {}, h('div.rlv-tools', {}, chip.node,
+      h('button.chip', { text: '−', title: '缩小', attrs: { 'aria-label': '缩小 K 线图' }, on: { click: () => built.zoomBy(1.4) } }),
+      h('button.chip', { text: '+', title: '放大', attrs: { 'aria-label': '放大 K 线图' }, on: { click: () => built.zoomBy(1 / 1.4) } }),
+      h('button.chip', { text: '复位', title: '恢复视野；也可双击图表', on: { click: () => built.resetView() } }),
+    ))
   }
 
   function facts(...rows: FactRow[]): HTMLElement {
@@ -1234,12 +1095,13 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
 
   return () => {
     alive = false
+    clearTimeout(locateTimer)
+    lifetime.abort()
     stage?.destroy()
     stage = null
-    locate?.destroy()
-    locate = null
     document.removeEventListener('keydown', onKey)
     window.removeEventListener('pagehide', onHide)
+    document.removeEventListener('visibilitychange', onVisibility)
     // 换屏还在同一条记录上就留着这一段行情；真的离开了才还回去。
     const next = route()
     if (next.page === 'relive' && next.arg.split('/')[0] === id) return
@@ -1248,40 +1110,48 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
       holdId = null
       holdCall = null
       holdReplay = null
-      holdSource = 'backend'
     }
   }
 }
 
 /* ------------------------------------------------------------- 小工具 */
 
+/** 舞台上现在放的是哪一条轨，以及它是不是记录自己那一条。 */
+interface Look {
+  track: ReplayTrack
+  bars: Bar[]
+  /** 品种和周期都跟记录一致：价位线、成交、结果标注才对得上。 */
+  own: boolean
+}
+
 /** 事实标签：名字、值，外加一句说明这个值是哪来的（可选）。 */
 type FactRow = [string, string] | [string, string, string]
 
-function indexOf(replay: Replay, iso: string | null | undefined): number {
-  if (!iso || !replay.bars.length) return 0
-  const at = new Date(iso).getTime()
-  if (!Number.isFinite(at)) return 0
-  const first = new Date(replay.bars[0]!.start).getTime()
-  if (at <= first) return 0
-  for (let i = 0; i < replay.bars.length; i += 1) {
-    const bar = replay.bars[i]!
-    if (at >= new Date(bar.start).getTime() && at < new Date(bar.end).getTime()) return i
+/** 舞台上面那一行：品种 · 周期 · 这一根的时间 · 开高低收。 */
+function factText(look: Look, bar: Bar | null): string {
+  const parts = [look.track.symbol, look.track.interval]
+  if (bar) {
+    parts.push(dateTime(bar.start))
+    parts.push(
+      [
+        `开 ${decimalPrice(bar.open) ?? DASH}`,
+        `高 ${decimalPrice(bar.high) ?? DASH}`,
+        `低 ${decimalPrice(bar.low) ?? DASH}`,
+        `收 ${decimalPrice(bar.close) ?? DASH}`,
+      ].join(' '),
+    )
   }
-  return replay.bars.length - 1
+  return parts.join(' · ')
 }
 
-/**
- * 当时价格。记录里存着就用记录里的；没存（后端拿不到 base_price）就退到判断时刻
- * 那一根 K 线的收盘价——同一根，舞台上标的也是它。标一句「按 K 线收盘」，免得
- * 被当成当时记下来的价。
- */
-function judgmentPrice(replay: Replay, judgeIndex: number): FactRow {
-  const recorded = replay.judgment.base_price
-  if (recorded) return ['当时价格', decimalPrice(recorded) ?? DASH]
-  const bar = replay.bars[judgeIndex]
-  if (!bar) return ['当时价格', DASH]
-  return ['当时价格', decimalPrice(bar.close) ?? DASH, '按 K 线收盘']
+function indexIn(bars: Bar[], iso: string | null | undefined): number {
+  if (!iso || !bars.length) return 0
+  const at = new Date(iso).getTime()
+  if (!Number.isFinite(at)) return 0
+  for (let i = bars.length - 1; i >= 0; i -= 1) {
+    if (Date.parse(bars[i]!.start) <= at) return i
+  }
+  return 0
 }
 
 function levelLines(replay: Replay): LevelLine[] {
@@ -1307,7 +1177,9 @@ function levelLines(replay: Replay): LevelLine[] {
 }
 
 /** 回放里的那一组数字就是判分用的那一组，原样交给 `figures` 排。 */
-function evaluationOf(marks: NonNullable<Replay['marks']>): Evaluation {
+function evaluationOf(result: Evaluation | null, marks: Replay['marks']): Evaluation | null {
+  if (result) return result
+  if (!marks) return null
   return {
     state: (marks.state as OutcomeState) ?? 'pending',
     reason: marks.reason,
@@ -1324,11 +1196,11 @@ function evaluationOf(marks: NonNullable<Replay['marks']>): Evaluation {
 
 function stateLabel(replay: Replay): string {
   const state = replay.marks?.state ?? ''
-  if (state === 'realized') return '兑现'
-  if (state === 'unrealized') return '未兑现'
-  if (state === 'not_triggered') return '未触发'
+  if (state === 'realized') return '对'
+  if (state === 'unrealized') return '错'
+  if (state === 'not_triggered') return '不算'
   if (state === 'insufficient_data') return '数据不足'
-  return '观察期结束'
+  return '到期'
 }
 
 function sceneShot(call: CallDetail): Attachment | null {

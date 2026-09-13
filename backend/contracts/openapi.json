@@ -199,11 +199,23 @@
             ]
           },
           "source": {
-            "$ref": "#/components/schemas/HistorySource"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HistorySource",
+                "description": "手填时不给：服务端自己知道这段 K 线是从哪儿取来的。"
+              }
+            ]
           },
           "start_at": {
+            "description": "手填时只给「最后一根的时间」，起点由 `bars_count`（缺省用几何数出来的\n根数）反推，所以这一格可以不给（§5.2 第 6 步）。",
             "format": "date-time",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "symbol": {
             "type": "string"
@@ -212,9 +224,7 @@
         "required": [
           "symbol",
           "interval",
-          "start_at",
-          "end_at",
-          "source"
+          "end_at"
         ],
         "type": "object"
       },
@@ -525,6 +535,13 @@
             ]
           },
           "market": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query_text": {
+            "description": "Optional private-record text retrieval, combined with the screenshot.\nTrimmed; blank means image-only. At most 4096 UTF-8 bytes.\nNonempty text is unsupported for public market history.",
             "type": [
               "string",
               "null"
@@ -2219,8 +2236,23 @@
           "direction_consistent": {
             "type": "boolean"
           },
+          "level": {
+            "description": "给前端的档位词来源，只回枚举值：`sure|likely|weak` 或 `很像|像|有点像` 对应的键。",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "meaning": {
             "type": "string"
+          },
+          "rarity": {
+            "description": "校准后的稀有度：同档位样本里低于此分的比例（§5.5-3）。",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "reverse": {
             "type": "boolean"
@@ -2228,6 +2260,14 @@
           "score": {
             "format": "double",
             "type": "number"
+          },
+          "z": {
+            "description": "本次比对分布里的 z 分数（§5.2 第 5 步）。",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "required": [
@@ -4237,10 +4277,141 @@
                                   "type": "string"
                                 },
                                 "result": {
-                                  "additionalProperties": true,
-                                  "type": [
-                                    "object",
-                                    "null"
+                                  "oneOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "anchors": {
+                                          "additionalProperties": true,
+                                          "type": [
+                                            "object",
+                                            "null"
+                                          ]
+                                        },
+                                        "attachment_id": {
+                                          "format": "uuid",
+                                          "type": "string"
+                                        },
+                                        "candidates": {
+                                          "items": {
+                                            "additionalProperties": true,
+                                            "properties": {
+                                              "bars_count": {
+                                                "type": "integer"
+                                              },
+                                              "end_at": {
+                                                "format": "date-time",
+                                                "type": "string"
+                                              },
+                                              "interval": {
+                                                "type": "string"
+                                              },
+                                              "market": {
+                                                "type": "string"
+                                              },
+                                              "match": {
+                                                "properties": {
+                                                  "level": {
+                                                    "enum": [
+                                                      "sure",
+                                                      "likely",
+                                                      "weak"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "reverse": {
+                                                    "type": "boolean"
+                                                  },
+                                                  "score": {
+                                                    "type": "number"
+                                                  },
+                                                  "z": {
+                                                    "type": [
+                                                      "number",
+                                                      "null"
+                                                    ]
+                                                  }
+                                                },
+                                                "type": "object"
+                                              },
+                                              "start_at": {
+                                                "format": "date-time",
+                                                "type": "string"
+                                              },
+                                              "symbol": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "symbol",
+                                              "market",
+                                              "interval",
+                                              "start_at",
+                                              "end_at",
+                                              "match"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "type": "array"
+                                        },
+                                        "method": {
+                                          "enum": [
+                                            "extremes",
+                                            "time_axis",
+                                            "shape_sweep",
+                                            null
+                                          ],
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        },
+                                        "min_margin": {
+                                          "type": [
+                                            "number",
+                                            "null"
+                                          ]
+                                        },
+                                        "min_score": {
+                                          "type": [
+                                            "number",
+                                            "null"
+                                          ]
+                                        },
+                                        "outcome": {
+                                          "enum": [
+                                            "located",
+                                            "candidates",
+                                            "needs_manual",
+                                            "already_located",
+                                            "unreadable"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "reason": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        },
+                                        "search_run_id": {
+                                          "format": "uuid",
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "outcome",
+                                        "attachment_id",
+                                        "candidates"
+                                      ],
+                                      "type": "object"
+                                    }
                                   ]
                                 },
                                 "status": {
@@ -4402,10 +4573,141 @@
                                   "type": "string"
                                 },
                                 "result": {
-                                  "additionalProperties": true,
-                                  "type": [
-                                    "object",
-                                    "null"
+                                  "oneOf": [
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "anchors": {
+                                          "additionalProperties": true,
+                                          "type": [
+                                            "object",
+                                            "null"
+                                          ]
+                                        },
+                                        "attachment_id": {
+                                          "format": "uuid",
+                                          "type": "string"
+                                        },
+                                        "candidates": {
+                                          "items": {
+                                            "additionalProperties": true,
+                                            "properties": {
+                                              "bars_count": {
+                                                "type": "integer"
+                                              },
+                                              "end_at": {
+                                                "format": "date-time",
+                                                "type": "string"
+                                              },
+                                              "interval": {
+                                                "type": "string"
+                                              },
+                                              "market": {
+                                                "type": "string"
+                                              },
+                                              "match": {
+                                                "properties": {
+                                                  "level": {
+                                                    "enum": [
+                                                      "sure",
+                                                      "likely",
+                                                      "weak"
+                                                    ],
+                                                    "type": "string"
+                                                  },
+                                                  "reverse": {
+                                                    "type": "boolean"
+                                                  },
+                                                  "score": {
+                                                    "type": "number"
+                                                  },
+                                                  "z": {
+                                                    "type": [
+                                                      "number",
+                                                      "null"
+                                                    ]
+                                                  }
+                                                },
+                                                "type": "object"
+                                              },
+                                              "start_at": {
+                                                "format": "date-time",
+                                                "type": "string"
+                                              },
+                                              "symbol": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "symbol",
+                                              "market",
+                                              "interval",
+                                              "start_at",
+                                              "end_at",
+                                              "match"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "type": "array"
+                                        },
+                                        "method": {
+                                          "enum": [
+                                            "extremes",
+                                            "time_axis",
+                                            "shape_sweep",
+                                            null
+                                          ],
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        },
+                                        "min_margin": {
+                                          "type": [
+                                            "number",
+                                            "null"
+                                          ]
+                                        },
+                                        "min_score": {
+                                          "type": [
+                                            "number",
+                                            "null"
+                                          ]
+                                        },
+                                        "outcome": {
+                                          "enum": [
+                                            "located",
+                                            "candidates",
+                                            "needs_manual",
+                                            "already_located",
+                                            "unreadable"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "reason": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        },
+                                        "search_run_id": {
+                                          "format": "uuid",
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "outcome",
+                                        "attachment_id",
+                                        "candidates"
+                                      ],
+                                      "type": "object"
+                                    }
                                   ]
                                 },
                                 "status": {
@@ -4567,6 +4869,13 @@
                         {
                           "additionalProperties": true,
                           "properties": {
+                            "anchor": {
+                              "additionalProperties": true,
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
                             "attachment_id": {
                               "format": "uuid",
                               "type": "string"
@@ -4590,6 +4899,295 @@
                             },
                             "market": {
                               "type": "string"
+                            },
+                            "matched_by": {
+                              "description": "auto | user",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "preview": {
+                              "additionalProperties": true,
+                              "properties": {
+                                "bars": {
+                                  "items": {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "bars_count": {
+                                  "type": "integer"
+                                },
+                                "end_at": {
+                                  "format": "date-time",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "match": {
+                                  "properties": {
+                                    "level": {
+                                      "enum": [
+                                        "sure",
+                                        "likely",
+                                        "weak"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "reverse": {
+                                      "type": "boolean"
+                                    },
+                                    "score": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "type": [
+                                    "object",
+                                    "null"
+                                  ]
+                                },
+                                "start_at": {
+                                  "format": "date-time",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "bars",
+                                "bars_count"
+                              ],
+                              "type": "object"
+                            },
+                            "score": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "search_run_id": {
+                              "format": "uuid",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "source": {
+                              "type": "string"
+                            },
+                            "start_at": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "symbol": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "attachment_id",
+                            "symbol",
+                            "market",
+                            "interval",
+                            "start_at",
+                            "end_at",
+                            "source"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "deleted": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "deleted"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "expired": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "expired"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "meta": {
+                      "properties": {
+                        "api_version": {
+                          "const": "v1"
+                        }
+                      },
+                      "required": [
+                        "api_version"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found for authenticated owner"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "x-required-permission": "records.write"
+      }
+    },
+    "/v1/attachments/{id}/location-preview": {
+      "post": {
+        "operationId": "post__v1_attachments__id__location-preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentLocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "anchor": {
+                              "additionalProperties": true,
+                              "type": [
+                                "object",
+                                "null"
+                              ]
+                            },
+                            "attachment_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "bars_count": {
+                              "type": [
+                                "integer",
+                                "null"
+                              ]
+                            },
+                            "confirmed_at": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "end_at": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "interval": {
+                              "type": "string"
+                            },
+                            "market": {
+                              "type": "string"
+                            },
+                            "matched_by": {
+                              "description": "auto | user",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "preview": {
+                              "additionalProperties": true,
+                              "properties": {
+                                "bars": {
+                                  "items": {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "bars_count": {
+                                  "type": "integer"
+                                },
+                                "end_at": {
+                                  "format": "date-time",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "match": {
+                                  "properties": {
+                                    "level": {
+                                      "enum": [
+                                        "sure",
+                                        "likely",
+                                        "weak"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "reverse": {
+                                      "type": "boolean"
+                                    },
+                                    "score": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "type": [
+                                    "object",
+                                    "null"
+                                  ]
+                                },
+                                "start_at": {
+                                  "format": "date-time",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "bars",
+                                "bars_count"
+                              ],
+                              "type": "object"
                             },
                             "score": {
                               "type": [
@@ -6692,6 +7290,95 @@
                             "symbol": {
                               "type": "string"
                             },
+                            "tracks": {
+                              "items": {
+                                "additionalProperties": true,
+                                "properties": {
+                                  "attachment_id": {
+                                    "format": "uuid",
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "bars": {
+                                    "items": {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "bars_included": {
+                                    "type": "boolean"
+                                  },
+                                  "interval": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "market": {
+                                    "type": "string"
+                                  },
+                                  "matched_by": {
+                                    "description": "auto | user",
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "primary": {
+                                    "type": "boolean"
+                                  },
+                                  "source": {
+                                    "type": "string"
+                                  },
+                                  "symbol": {
+                                    "type": "string"
+                                  },
+                                  "window": {
+                                    "additionalProperties": true,
+                                    "properties": {
+                                      "bars_before": {
+                                        "type": "integer"
+                                      },
+                                      "coverage_complete": {
+                                        "type": "boolean"
+                                      },
+                                      "end_at": {
+                                        "format": "date-time",
+                                        "type": "string"
+                                      },
+                                      "start_at": {
+                                        "format": "date-time",
+                                        "type": "string"
+                                      },
+                                      "truncated": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "start_at",
+                                      "end_at"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "primary",
+                                  "symbol",
+                                  "market",
+                                  "interval",
+                                  "window",
+                                  "bars_included"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
                             "window": {
                               "additionalProperties": true,
                               "properties": {
@@ -6729,6 +7416,7 @@
                             "window",
                             "judgment",
                             "levels",
+                            "tracks",
                             "bars",
                             "bars_included",
                             "storage_policy"
@@ -8033,6 +8721,146 @@
         "x-required-permission": "search.save"
       }
     },
+    "/v1/chart-analyses/outline": {
+      "post": {
+        "operationId": "post__v1_chart-analyses_outline",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChartAnalysisInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "attachment_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "interval": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "source": {
+                              "const": "screenshot_contour"
+                            },
+                            "storage_policy": {
+                              "const": "ephemeral"
+                            },
+                            "symbol": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "values": {
+                              "items": {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              },
+                              "maxItems": 2000,
+                              "minItems": 16,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "attachment_id",
+                            "source",
+                            "symbol",
+                            "interval",
+                            "values",
+                            "storage_policy"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "deleted": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "deleted"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "expired": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "expired"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "meta": {
+                      "properties": {
+                        "api_version": {
+                          "const": "v1"
+                        }
+                      },
+                      "required": [
+                        "api_version"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Not found for authenticated owner"
+          },
+          "409": {
+            "description": "Idempotency or revision conflict"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "x-required-permission": "search.compute"
+      }
+    },
     "/v1/chart-search/runs": {
       "post": {
         "operationId": "post__v1_chart-search_runs",
@@ -8201,6 +9029,84 @@
                               "type": "string"
                             },
                             "result": {
+                              "additionalProperties": true,
+                              "properties": {
+                                "items": {
+                                  "items": {
+                                    "additionalProperties": true,
+                                    "properties": {
+                                      "bars_count": {
+                                        "type": "integer"
+                                      },
+                                      "end_at": {
+                                        "format": "date-time",
+                                        "type": "string"
+                                      },
+                                      "interval": {
+                                        "type": "string"
+                                      },
+                                      "market": {
+                                        "type": "string"
+                                      },
+                                      "match": {
+                                        "properties": {
+                                          "direction_consistent": {
+                                            "type": "boolean"
+                                          },
+                                          "level": {
+                                            "enum": [
+                                              "sure",
+                                              "likely",
+                                              "weak",
+                                              null
+                                            ],
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "rarity": {
+                                            "type": [
+                                              "number",
+                                              "null"
+                                            ]
+                                          },
+                                          "reverse": {
+                                            "type": "boolean"
+                                          },
+                                          "score": {
+                                            "type": "number"
+                                          }
+                                        },
+                                        "type": "object"
+                                      },
+                                      "start_at": {
+                                        "format": "date-time",
+                                        "type": "string"
+                                      },
+                                      "symbol": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "match"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "status": {
+                                  "type": "string"
+                                },
+                                "verdict": {
+                                  "enum": [
+                                    "found",
+                                    "weak",
+                                    "none"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
                               "type": [
                                 "object",
                                 "null"

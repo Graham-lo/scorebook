@@ -142,6 +142,47 @@ export interface Attachment {
   capture_time_proven?: boolean
   /** 这张图钉在公开行情的哪一段。没钉过就是 null。 */
   location?: AttachmentLocation | null
+  /**
+   * 这三项说的不是这张图本身，而是「这张图挂在这条记录上的那条链接」现在算不算
+   * 数：什么时候挂上的、什么时候被后来的那张接替了、接替它的是哪一张。同一张图
+   * 可以挂在不止一条记录上，所以这句话只有对着某一条记录才有意义。
+   *
+   * 后端没部署换图那一版时整片缺失——缺了就是「这条记录没换过图」，不是错误。
+   * `superseded_at` 是 null 也一样，那是还在生效的那一张。
+   */
+  attached_at?: Instant
+  superseded_at?: Instant | null
+  superseded_by?: Uuid | null
+}
+
+/**
+ * 这条记录此刻拿哪一张当现场图。换的是判断不是证据：截图的字节、sha256、size、
+ * uploaded_at 一个字都不会变，附件一行都不会删。
+ *
+ * 后端没部署这一版时整片缺失——缺了就是这一项没开，不是错误。
+ */
+export interface SceneInEffect {
+  attachment_id: Uuid
+  /** 挂到这条记录上的时刻。换回旧图会重新算一次。 */
+  attached_at: Instant
+  /** 图自己的上传时刻，不随换图改变。 */
+  uploaded_at: Instant
+  /** 这一张是记录提交之后才传上来的。 */
+  replaced_after_submission: boolean
+}
+
+/**
+ * 换下来的那几张。一行都没删，sha256 还在，随时可以指回去。按 `superseded_at`
+ * 从早到晚排。后端没部署这一版时整片缺失。
+ */
+export interface SupersededScene {
+  attachment_id: Uuid
+  sha256: string
+  uploaded_at: Instant
+  attached_at: Instant
+  superseded_at: Instant
+  /** 接替它的那一张。 */
+  superseded_by: Uuid
 }
 
 /**
@@ -298,6 +339,18 @@ export interface CallDetail {
   adoptions: AdoptionRecord[]
   /** 这条记录的图上画哪几条线。没设过就是 null，设过也可能只有其中几项。 */
   chart_setup?: ChartSetupWire | null
+  /**
+   * 现在生效的现场图是记录提交之后才换上来的。重温、自动钉图、这一页的显示都跟
+   * 着它走，但「按图找」的证据池闸门一个字都没放松——记录成立那一刻还不存在的
+   * 图不进证据池，所以这条记录在别人的按图找里不会出现。
+   *
+   * 后端没部署这一版时整片缺失——缺了就是这一项没开，不是错误。
+   */
+  scene_replaced_after_submission?: boolean
+  /** 此刻生效的那一张现场图。一张现场图都没有时是 null；旧后端整片缺失。 */
+  scene_in_effect?: SceneInEffect | null
+  /** 换下来的那几张，按换下来的先后排。没换过就是空数组；旧后端整片缺失。 */
+  superseded_scenes?: SupersededScene[]
 }
 
 export interface CreatedCall {
@@ -947,4 +1000,25 @@ export interface CsvMapping {
   columns: Record<string, string>
   constants?: Record<string, string>
   timestamp_format: string
+}
+
+/**
+ * `GET /v1/market/bounds` 回的那一份：这个合约的行情从哪儿到哪儿、中间缺哪几段。
+ *
+ * 时间全是 RFC 3339 的字符串，`null` 表示后端也不知道——不知道不等于没有，别拿
+ * 它当「没上市」用。
+ */
+export interface InstrumentBounds {
+  market: Market
+  symbol: string
+  interval: string
+  status: string
+  onboard_at: Instant | null
+  delivery_at: Instant | null
+  first_bar_at: Instant | null
+  last_bar_at: Instant | null
+  gaps: { start: Instant; end: Instant; seen_at?: Instant | null }[]
+  verified_at: Instant | null
+  /** 后端此刻的时间。本机时钟偏得离谱的时候，「贴近现在」按它算。 */
+  server_now: Instant
 }

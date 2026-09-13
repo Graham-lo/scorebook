@@ -1,133 +1,119 @@
-// 起检索、读进度、停手。
+// 给一张图的那条路：起检索、读进度。
 //
-//   起检索  POST /v1/chart-search/runs —— 比哪一堆图必须由人明说。
-//   看进度  GET  /v1/chart-search/runs/{id} —— 断开重连不会再起一次检索；
-//           重来只有人按了才算。
-//   停手    带 expected_generation；版本对不上就是别处已经动过它了。
+//   起检索  POST /v1/chart-search/runs —— 我的记录里、币安历史里各起一条。
+//   读进度  GET  /v1/chart-search/runs/{id} —— 断线重连不会再起一次；
+//           中途出现的 provisional 只是候选，做完才算数。
+//
+// 比哪一堆图不再问人：默认两边都比，右上角那个开关按下去就只比自己的记录。
 
-import { ApiError } from '../../api/errors'
 import { Latest } from '../../api/http'
-import { cancelSearch, searchRun, startSearch, type ChartSearchInput, type ChartSearchRun } from '../../api/chart'
-import type { Uuid } from '../../api/types'
-import { h } from '../../ui/dom'
-import { empty, note, spinner } from '../../ui/states'
-import { problem, toast } from '../../ui/toast'
-import { MAX_HITS, cancelAction, forgetRun, lane, moving, period, rejectedExcludes, searchAction, state, rememberRun, queryFingerprint, searchVersion, finishSubmission, type SearchCtx } from './state'
+import { cancelSearch, searchRun, startSearch, type ChartSearchInput } from '../../api/chart'
+import { prefs } from '../../data/prefs'
+import { moving, state, type RunSlot } from './state'
 
-/** 同一时间只有一条轮询在跑。 */
-let pollingVersion = 0
+/** 一次看几条。后端默认 5，这一页照它的默认走。 */
 
-/**
- * 这一次要发出去的请求体。
- *
- * 单独拎出来是因为它有一处不能想当然：人一条都没否过的时候，`exclude` 整个字段
- * 都不许出现——写成空数组，请求体和幂等键就跟从前不一样了，而这一次问的其实是
- * 同一件事。
- */
-export function searchBody(queryId: Uuid): ChartSearchInput {
-  const excluded = rejectedExcludes()
+export interface RunCtx {
+  alive(): boolean
+  sleep(ms: number): Promise<void>
+  repaint(): void
+}
+
+export function searchBody(slot: RunSlot, queryId: string, interval: string): ChartSearchInput {
   return {
     attachment_id: queryId,
-    scope: state.scope,
-    ...(state.region ? { region: state.region } : {}),
-    ...(state.symbol ? { symbol: state.symbol } : {}),
-    ...(state.market ? { market: state.market } : {}),
-    // 「不限」必须显式写出来：后端分不清「人选了不限」和「前端漏传周期」就
-    // 会把一次 422 变成一次全库检索。
-    interval: period.interval,
-    interval_policy: period.anyInterval ? 'any_interval' : 'same_interval',
-    ...(state.reverse ? { reverse: true } : {}),
-    ...(state.redUp ? { red_up: true } : {}),
-    limit: Math.min(MAX_HITS, Math.max(1, state.limit)),
-    ...(excluded.length ? { exclude: excluded } : {}),
+    scope: slot.scope,
+    ...(slot.scope === 'private' && state.text.trim() ? { query_text: state.text.trim() } : {}),
+    interval,
+    interval_policy: 'same_interval',
+    // 图上是不是红涨绿跌，按设置里的涨跌配色当首选；认反了 K 线的方向就全反了。
+    ...(prefs().updown === 'red_up' ? { red_up: true } : {}),
+    limit: state.limit,
+    ...(slot.exclude.length ? { exclude: [...slot.exclude] } : {}),
   }
 }
 
-export async function runSearch(ctx: SearchCtx): Promise<void> {
-  if (!state.queryId || state.submitting || (state.runId && (!state.run || moving(state.run.status)))) return
-  if (!period.chosen) {
-    problem('请先说清楚截图的 K 线周期，或者明说不限周期。')
-    return
-  }
-  const input = searchBody(state.queryId)
-  forgetRun()
-  const version = searchVersion
-  const fingerprint = queryFingerprint()
-  state.submitting = true
-  ctx.repaintControls()
-  ctx.resultPane.replaceChildren(spinner('正在安排这次检索…'))
-  try {
-    // 幂等键跟着请求体走，否决集合也在里面：连着按两次「都不是」报的不是同一
-    // 份集合，于是这是两次不同的检索，而不是被当成同一次重发。
-    const started = await startSearch(input, searchAction.keyFor(input))
-    searchAction.reset()
-    if (version !== searchVersion || fingerprint !== queryFingerprint()) return
-    rememberRun(started.search_run_id)
-  } catch (error) {
-    if (!ctx.alive() || version !== searchVersion || fingerprint !== queryFingerprint()) return
-    ctx.resultPane.replaceChildren(
-      empty({
-        title: '这次没有搜成',
-        tip: error instanceof Error ? error.message : '稍后再试一次。',
-        action: h('button.btn.sm', { text: '重试', on: { click: () => ctx.runSearch() } }),
-      }),
-    )
-  } finally {
-    finishSubmission()
+/** 两条路一起起：只看我的记录时就只起一条。 */
+export function launchAll(ctx: RunCtx): void {
+  launch(state.mine, ctx)
+  if (state.onlyMine) {
+    state.market.version += 1
+    state.market.runId = null
+    state.market.run = null
+    state.market.failed = false
+  } else {
+    launch(state.market, ctx)
   }
 }
 
-/**
- * 读这次检索的状态，直到它停下来。
- *
- * 中途读到的 provisional 会照样画出来，但会明说那还只是候选：来源核验和几何精排
- * 都在最后一步做。断开重连不会再起一次检索——重来只有人按了才算。
- */
-export async function poll(ctx: SearchCtx): Promise<void> {
-  const mine = ++pollingVersion
-  const id = state.runId
-  if (!id) return
-  const signal = lane.begin()
-  const current = () => ctx.alive() && mine === pollingVersion && state.runId === id && !signal.aborted
+async function stopRun(id: string): Promise<void> {
   try {
-    for (;;) {
-      if (!current()) return
-      let run: ChartSearchRun
-      try {
-        run = await searchRun(id, { signal })
-      } catch (error) {
-        if (Latest.aborted(error) || !current()) return
-        if (error instanceof ApiError && error.status === 404) {
-          forgetRun()
-          ctx.resultPane.replaceChildren(note('warn', '这次检索已经不在了，重新搜一次吧。'))
-          return
-        }
-        await ctx.sleep(6_000)
-        continue
-      }
-      if (!current()) return
-      state.run = run
-      ctx.repaintControls()
-      ctx.repaintResults()
-      if (!moving(run.status)) return
-      await ctx.sleep(2_000)
+    const previous = await searchRun(id)
+    if (moving(previous.status)) await cancelSearch(id, previous.generation, crypto.randomUUID())
+  } catch { /* 完成或已取消的任务无需再操作。 */ }
+}
+
+export function launch(slot: RunSlot, ctx: RunCtx): void {
+  const queryId = state.queryId
+  const interval = state.interval
+  if (!queryId || !interval) return
+  const previousId = slot.runId
+  const previousRun = slot.run
+  if (previousId) void (async () => {
+    try {
+      const previous = previousRun ?? await searchRun(previousId)
+      if (moving(previous.status)) await cancelSearch(previousId, previous.generation, crypto.randomUUID())
+    } catch { /* A completed or already-cancelled run needs no further action. */ }
+  })()
+  const mine = (slot.version += 1)
+  slot.runId = null
+  slot.run = null
+  slot.page = 0
+  slot.failed = false
+  const body = searchBody(slot, queryId, interval)
+  void (async () => {
+    try {
+      const started = await startSearch(body, slot.action.keyFor(body))
+      slot.action.reset()
+      if (mine !== slot.version) { void stopRun(started.search_run_id); return }
+      slot.runId = started.search_run_id
+      if (!ctx.alive()) return
+      ctx.repaint()
+      await poll(slot, ctx, mine)
+    } catch {
+      if (!ctx.alive() || mine !== slot.version) return
+      slot.failed = true
+      ctx.repaint()
     }
-  } finally { /* Each loop owns its request signal. */ }
+  })()
 }
 
-export async function stopSearch(ctx: SearchCtx): Promise<void> {
-  const run = state.run
-  if (!run) return
-  const body = { id: run.id, expected_generation: run.generation }
-  try {
-    await cancelSearch(run.id, run.generation, cancelAction.keyFor(body))
-    cancelAction.reset()
-    if (!ctx.alive() || state.runId !== run.id) return
-    toast('这次检索已经停手。')
-  } catch (error) {
-    if (!ctx.alive()) return
-    // 版本对不上就是别处已经动过它了：把状态读回来给人看，不盲重试。
-    problem(error instanceof Error ? error.message : '没有停下来。')
+/** 读这一条检索的状态，直到它停下来。 */
+export async function poll(slot: RunSlot, ctx: RunCtx, mine = slot.version): Promise<void> {
+  const id = slot.runId
+  if (!id) return
+  const lane = new Latest()
+  const signal = lane.begin()
+  const current = (): boolean => ctx.alive() && mine === slot.version && slot.runId === id
+  let failures = 0
+  slot.failed = false
+  for (;;) {
+    if (!current()) return
+    try {
+      const run = await searchRun(id, { signal })
+      if (!current()) return
+      failures = 0
+      slot.failed = false
+      slot.run = run
+      ctx.repaint()
+      if (!moving(run.status)) return
+    } catch (error) {
+      if (Latest.aborted(error) || !current()) return
+      failures += 1
+      if (failures >= 3) { slot.failed = true; ctx.repaint(); return }
+      await ctx.sleep(6_000)
+      continue
+    }
+    await ctx.sleep(2_000)
   }
-  void poll(ctx)
 }

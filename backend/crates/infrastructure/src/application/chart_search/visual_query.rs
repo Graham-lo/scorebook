@@ -13,7 +13,7 @@ pub async fn encode(
             s,
             owner,
             input.attachment_id,
-            input.region.clone(),
+            Some(region.clone()),
             "dinov2-small-v1",
             false,
         )

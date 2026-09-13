@@ -1,74 +1,80 @@
 /* ============================================================
-   基础：重置、页面底色、中文排版层级
+   基础：重置、正文、排版类
    ------------------------------------------------------------
-   正文按「读得下去一段中文」来定：14.5px / 1.72，次要文字 13px 起，
-   不做 10px 的灰色小字——看不清的说明等于没写。
+   晨光是亮色的：清晨的天空垫在最底下（.sky 在 shell.css），纸是白的，
+   字是靛蓝的墨。这里定义的排版类（.h1 .h2 .eyebrow .quote …）被每一页
+   的 feature 样式引用，名字一个不改。
    ============================================================ */
-*{box-sizing:border-box;margin:0;padding:0}
-html{-webkit-text-size-adjust:100%}
-body{
-  background:var(--paper); color:var(--ink);
-  font-family:var(--font); font-size:14.5px; line-height:1.72;
-  font-variant-numeric:tabular-nums; letter-spacing:.004em;
-  -webkit-font-smoothing:antialiased; min-height:100vh; position:relative;
-}
-/* 静态柔光保留纸张底色，阅读时不持续驱动合成。 */
-body::before{
-  content:''; position:fixed; inset:-20vmax; z-index:0; pointer-events:none;
-  background:var(--wash-1),var(--wash-2),var(--wash-3);
-  opacity:.72; filter:blur(6px);
 
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  margin:0;min-height:100vh;
+  font-family:var(--font);font-size:14.5px;line-height:1.6;color:var(--ink);
+  background:var(--day);
+  font-feature-settings:"tnum" 1,"ss01" 1;font-variant-numeric:tabular-nums;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+  overflow-x:hidden;
 }
-body::after{
-  content:''; position:fixed; inset:0; z-index:0; pointer-events:none; opacity:var(--grain);
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
-}
+/* 旧的水洗层和颗粒层：晨光改用 .sky，这两层留空以免别处引用时出错。 */
+body::before,body::after{content:none}
+
 main{position:relative;z-index:1}
 a{color:inherit;text-decoration:none}
-button,input,textarea,select{font:inherit;color:inherit}
-button{background:none;border:0;cursor:pointer}
+button,input,textarea,select{font:inherit;color:inherit;letter-spacing:inherit}
+button{cursor:pointer;background:none;border:0;padding:0;-webkit-tap-highlight-color:transparent}
 svg{display:block}
-img{max-width:100%}
-mark{background:linear-gradient(transparent 56%,var(--hl) 56%);color:inherit;border-radius:2px;padding:0 1px}
-::selection{background:color-mix(in srgb,var(--blue) 26%,transparent);color:var(--ink)}
-:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:5px}
-/* 任何设了 display 的类都会盖掉浏览器自带的 [hidden]，这条统一兜住。 */
+img{max-width:100%;height:auto}
+mark{
+  background:linear-gradient(transparent 58%,var(--hl) 58%);color:inherit;border-radius:2px;padding:0 1px;
+}
+::selection{background:var(--sun);color:var(--ink)}
+:focus-visible{outline:2px solid var(--gold-lo);outline-offset:3px;border-radius:6px}
 [hidden]{display:none!important}
 
 /* ---------- 排版 ---------- */
 .serif{font-family:var(--serif)}
-.mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .muted,.tip,.faint{color:var(--ink3)}
-.tip{font-size:13px;line-height:1.7;color:var(--ink3)}
-.faint{font-size:12.5px;color:var(--ink3)}
-.h1{font-family:var(--serif);font-size:36px;line-height:1.14;font-weight:500;letter-spacing:-.014em;text-wrap:balance}
-.h1 .lat{font-family:var(--serif);font-style:italic;font-weight:300;font-size:21px;color:var(--ink3);margin-left:10px;letter-spacing:0}
-.h2{font-family:var(--serif);font-size:23px;font-weight:500;line-height:1.28}
-.h3{font-size:14.5px;font-weight:600;letter-spacing:.004em}
-.sub{color:var(--ink2);font-size:14px;max-width:62ch;margin-top:8px;line-height:1.74}
+.tip{font-size:13px;line-height:1.6}
+.faint{font-size:12.5px}
+
+.h1{
+  margin:0;font-family:var(--serif);font-weight:600;font-size:40px;line-height:1.1;letter-spacing:-.02em;color:var(--ink);
+  text-wrap:balance;
+}
+.h1 em,.ph h1 em{font-style:normal;color:var(--gold)}
+.h1 .lat{font-style:italic;font-weight:500;color:var(--ink2)}
+.h2{margin:0;font-family:var(--serif);font-weight:600;font-size:23px;line-height:1.25;letter-spacing:-.01em;color:var(--ink)}
+.h3{margin:0;font-size:14.5px;font-weight:700;line-height:1.4;color:var(--ink)}
+.sub{margin:8px 0 0;max-width:62ch;font-size:15px;line-height:1.7;color:var(--ink3)}
+
 .eyebrow{
-  display:inline-flex;align-items:center;gap:9px;font-size:11px;font-weight:600;
-  text-transform:uppercase;letter-spacing:.15em;color:var(--blue-text);font-stretch:112%;
+  display:inline-flex;align-items:center;gap:10px;margin:0;
+  font-size:11.5px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--gold);
 }
-.eyebrow::after{content:'';height:1px;width:30px;background:linear-gradient(90deg,var(--blue-line),transparent)}
-.eyebrow.noline::after{display:none}
-/* 用户自己写下的那句话。它是页面上最该被读到的东西，所以最大、最有分量。 */
+.eyebrow::after{content:'';width:30px;height:1px;background:var(--gold-line)}
+.eyebrow.noline::after{content:none}
+
 .quote{
-  font-family:var(--serif);font-size:20px;line-height:1.6;color:var(--ink);
-  padding-left:17px;border-left:2px solid var(--blue);letter-spacing:-.005em;
+  margin:0;padding:6px 0 6px 18px;border-left:3px solid var(--gold-lo);
+  font-family:var(--serif);font-size:20px;line-height:1.55;color:var(--ink);
+  background:linear-gradient(90deg,var(--gold-soft),transparent 70%);border-radius:0 var(--r) var(--r) 0;
 }
-.quote.lg{font-size:26px;line-height:1.48}
-.quote.sm{font-size:16px;padding-left:13px}
-.sentence{font-size:14.5px;line-height:1.76;color:var(--ink2)}
-.grow{flex:1}
-.row{display:flex;align-items:center;gap:10px}
-.line{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px;color:var(--ink3)}
-.col{display:flex;flex-direction:column}
+.quote.lg{font-size:26px;line-height:1.45;padding:10px 0 10px 22px}
+.quote.sm{font-size:16px;padding:4px 0 4px 14px;border-left-width:2px}
+.sentence{font-family:var(--serif);font-size:17px;line-height:1.6;color:var(--ink)}
+
+.grow{flex:1;min-width:0}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.line{display:flex;align-items:center;gap:10px;min-width:0}
+.col{display:flex;flex-direction:column;gap:6px;min-width:0}
 .stack{display:flex;flex-direction:column;gap:14px}
-.hr{height:1px;background:var(--rule);margin:16px 0;border:0}
-.crumb{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink3);margin-bottom:15px}
-.crumb a{color:var(--ink2);border-bottom:1px solid transparent;transition:border-color var(--t1),color var(--t1)}
-.crumb a:hover{border-color:var(--blue);color:var(--blue-text)}
-.actions-row,.acts{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.hr{height:1px;background:var(--rule);margin:14px 0;border:0}
+.crumb{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink3)}
+.crumb a{color:var(--ink3);transition:color var(--t1)}
+.crumb a:hover{color:var(--gold)}
+.actions-row,.acts{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .acts{margin-top:12px}
-.acts .faint{font-size:12px}
+.acts .faint{margin-left:auto}

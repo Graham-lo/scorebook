@@ -147,6 +147,12 @@ export function defaultMarket(): Market {
 }
 
 export const MARKET_LABELS: Record<Market, string> = {
+  usd_m: 'U本位',
+  coin_m: '币本位',
+}
+
+/** 表格里品种旁边那行小字，交易所自己的写法。其余地方一律用中文。 */
+export const MARKET_SHORT: Record<Market, string> = {
   usd_m: 'USDⓈ-M',
   coin_m: 'COIN-M',
 }

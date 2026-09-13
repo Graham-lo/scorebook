@@ -10,6 +10,7 @@ import * as knowledge from '../api/knowledge'
 import type { CallDetail, TagRecord, Uuid } from '../api/types'
 
 const details = new Map<Uuid, CallDetail>()
+const requests = new Map<Uuid, Promise<CallDetail>>()
 
 export function cachedDetail(id: Uuid): CallDetail | null {
   return details.get(id) ?? null
@@ -19,16 +20,34 @@ export async function detail(id: Uuid, options: { refresh?: boolean } = {}): Pro
   if (!options.refresh) {
     const hit = details.get(id)
     if (hit) return hit
+    const pending = requests.get(id)
+    if (pending) return pending
   }
-  const fresh = await callsApi.get(id)
-  details.set(id, fresh)
-  return fresh
+  // refresh 和 invalidate 都让旧请求失去回填资格。旧调用者也接到最新一轮结果。
+  if (options.refresh) details.delete(id)
+  const request: Promise<CallDetail> = callsApi.get(id).then((fresh) => {
+    if (requests.get(id) !== request) return detail(id)
+    details.set(id, fresh)
+    return fresh
+  }, (error: unknown) => {
+    if (requests.get(id) !== request) return detail(id)
+    throw error
+  }).finally(() => {
+    if (requests.get(id) === request) requests.delete(id)
+  })
+  requests.set(id, request)
+  return request
 }
 
 /** Called after any write so the next read sees the server's version. */
 export function invalidate(id?: Uuid): void {
-  if (id) details.delete(id)
-  else details.clear()
+  if (id) {
+    details.delete(id)
+    requests.delete(id)
+  } else {
+    details.clear()
+    requests.clear()
+  }
 }
 
 let tags: Map<Uuid, TagRecord> | null = null

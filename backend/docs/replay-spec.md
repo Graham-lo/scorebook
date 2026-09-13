@@ -181,6 +181,12 @@ ALTER TABLE attachment_locations ADD COLUMN matched_by text NOT NULL DEFAULT 'us
 - **`GET /v1/instruments` 离线兜底**：清单本来就只从 `instrument_catalog` 读，唯一的实时调用是热度排序用的 24 小时成交额；现在它失败不再让整张清单打不开——退回目录自己的顺序，响应里 `source` 为 `cached`、`ordering` 为 `trading_then_symbol`，并始终带 `refreshed_at`（目录这份是什么时候刷进来的）。实时拿不到且目录从来没刷进来过才 503 `instruments_unavailable`。worker 的 maintenance 队列每 6 小时刷一次目录，启动先刷一次，失败只记日志、目录原样留着。
 - **状态码差异**：契约里写的 400（`invalid_bars_mode`、`invalid_kind`）在本仓库落成 422——`ErrorKind::Invalid` 全库统一映射 422（`crates/http/src/error.rs`），错误码字符串与契约一致。前端按 `error.code` 判断即可。
 
+### 1.8 一次重温放所有已定位的截图（2026-09-12，`docs/redesign-2026-09-12.md` §5.4）
+
+`GET /v1/calls/{id}/replay` 多一个顶层 `tracks[]`：这条记录下**每一张已定位的截图各是一条轨**，品种不同也一起给。同板块对比图本来就是三个品种，从前按记录自己的 `instrument` 只放得出一条，另外两张图定位了也看不见。每条轨带 `attachment_id`、`kind`、`matched_by`、`primary`、`symbol`/`market`/`interval`、`window{start_at,end_at,bars_before,truncated,coverage_complete}` 和 `bars`（`bars=none` 时为空）。`primary` 只有一条，仍是场景截图那一条，顶层的 `symbol`/`window`/`bars` 与它逐字节一致——旧前端不改也照常工作，`tracks` 是加出来的，不是换掉的。
+
+同日的另一件事记在这里免得以后找不着：**§1.7 那条「按下都不是就把索引往更早推一段」的策略，不在实时定位这条路上了。** 定位改走 `locate_anchored.rs`：先读图上的时间轴和价格轴，锚给出品种/周期/最后一根的时刻之后，答案只能在那十根附近，再往更早推只会把它推离真值。`locate::ensure_index` / `decide` / `span_of` 连同 `tests/auto_locate.rs` 里钉它们的那几项都原样留着（它们钉的行为没有错，只是现在没人从实时路径上调），删掉的是「调用它」这一个决定。
+
 ## 2. 前端
 
 路由：`#/relive/<call_id>/<n>`，n = 1..5，一步一个网址（手机返回手势可用）。新文件 `src/features/relive/{index.ts,candles.ts,indicators.ts,locate.ts}`、`src/styles/relive.css`（加进 `src/styles/index.css` 的 import 链，放在 review 之后）、`src/api/replay.ts`。`main.ts` 里 `register('relive', relivePage)`。

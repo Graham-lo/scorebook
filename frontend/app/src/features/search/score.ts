@@ -1,67 +1,55 @@
-// 把精排分数读成一句人话。
+// 一条结果跟手里这张图有多像，只说三个词：很像 / 像 / 有点像。
 //
-// 后端 `chart_match::rerank` 给的是 `exp(-6 * alignment_cost)`，方向对不上再乘
-// 0.25。这个数本来就落在 (0, 1] 里，所以写成百分比是照实翻译，不是又缩放了一
-// 次——中间没有任何一步是这里发明的。
+// 词从后端来。它按档位抽样跑过一遍同样的检索，知道这个分在同类窗口里稀不稀奇，
+// 于是给出 `level`；前端不再把 0.347 这种数摆出来——那既读不出轻重，又容易被
+// 当成涨跌概率。
 //
-// 它是形状的接近程度，不是胜率，也不是上涨概率。后端自己把这件事写死在
-// `match.meaning` 的 `structural_similarity_not_probability` 里，界面上也不能松口。
+// 后端还没给 `level` 的时候按旧的分数分档，界限是交付文档定的：
+// ≥0.75 很像、≥0.6 像、≥0.45 有点像，再低就不说像，也就不显示这一条。
 
-/**
- * 分档的界。每一个数都有出处，不是看着顺眼定的：
- *
- * - **85**：后端 `attachment.locate` 自动钉图用的就是这条线（top1 ≥ 0.85 且比第
- *   二名多 0.05）。它那边的原话是「the same chart, not merely a similar one」，
- *   到了这边就该说「几乎是同一段」。
- * - **70 / 50 / 26**：把分数倒推回对齐代价看，这三条线分别是每根 K 线平均偏掉
- *   窗口高度的 6% / 12% / 22%（85 那条是 2.7%）。每往下一档，容得下的偏差差不多
- *   翻一倍，所以档与档之间是看得出来的，不是切得一样宽好看而已。
- * - 最后一档的界写 **26 而不是 25**，因为方向对不上的那一乘 0.25 是**含等号**的
- *   硬顶：形状一模一样但方向反了，分数正好是 0.25，25% 这个数本身就属于方向反
- *   了的那一侧，得归到下面这档来。这么定了，方向不一致的必然落在最后一档。
- *   反过来不成立——方向对、形状差得远（代价 0.225 往上）一样会掉下来。所以最后
- *   一档只说形状，方向一致不一致由外面那行自己交代，这里不替它作结论。
- */
-const BANDS: ReadonlyArray<readonly [number, string]> = [
-  [85, '几乎是同一段形状'],
-  [70, '很像'],
-  [50, '像'],
-  [26, '有点像'],
-  [0, '不太像'],
-]
+import type { MatchScore } from '../../api/chart'
 
-/**
- * 显示用的百分比。取整——这是个启发式的相似度，小数点后三位是假精度。
- */
-export function scorePercent(score: number): number {
-  if (!Number.isFinite(score)) return 0
-  return Math.max(0, Math.min(100, Math.round(score * 100)))
+export const LEVELS = ['很像', '像', '有点像'] as const
+export type Level = (typeof LEVELS)[number]
+
+/** 后端要是用标识符写这一格，翻回那三个词。 */
+const CODES: Record<string, Level> = {
+  sure: '很像',
+  likely: '像',
+  strong: '很像',
+  high: '很像',
+  very_similar: '很像',
+  similar: '像',
+  medium: '像',
+  mid: '像',
+  moderate: '像',
+  weak: '有点像',
+  low: '有点像',
+  somewhat_similar: '有点像',
 }
 
-/**
- * 这个百分比该怎么念。
- *
- * 收的是取整之后的百分比，不是原始分数：写着 85% 就得念「几乎是同一段形状」，
- * 不能因为原始值是 0.8496 就在旁边写「很像」。眼睛看到的那个数和那句话必须是
- * 同一件事。
- */
-export function scoreBand(percent: number): string {
-  for (const [floor, label] of BANDS) {
-    if (percent >= floor) return label
+function isLevel(value: string): value is Level {
+  return (LEVELS as readonly string[]).includes(value)
+}
+
+/** 没有 `level` 的旧后端：按分数分档。 */
+export function levelFromScore(score: number): Level | null {
+  if (!Number.isFinite(score)) return null
+  if (score >= 0.75) return '很像'
+  if (score >= 0.6) return '像'
+  if (score >= 0.45) return '有点像'
+  return null
+}
+
+/** 这一条该念哪个词；哪个词都算不上就是 null，不显示。 */
+export function levelWord(match: MatchScore | null | undefined): Level | null {
+  if (!match) return null
+  const given = typeof match.level === 'string' ? match.level.trim() : ''
+  if (given) {
+    if (isLevel(given)) return given
+    const word = CODES[given.toLowerCase()]
+    if (word) return word
+    if (given.toLowerCase() === 'none') return null
   }
-  // 最后一档的界是 0，而 scorePercent 不会给出负数，所以走不到这儿。
-  return '不太像'
+  return levelFromScore(match.score)
 }
-
-/**
- * 这条线到底比的是什么、又不能拿它当什么。
- *
- * 前半句说清楚比法：拉伸归一之后逐根比 OHLC，允许时间上错开几根（±6）。后半句
- * 是必须说的那一句——形状像不代表后面会同样走。
- */
-export const SCORE_MEANING =
-  '把两段走势都拉成一样长、一样高，再一根一根比开高低收的位置，允许时间上前后错开几根。'
-  + '分数只说形状像不像，不说后面会不会同样走：它不是胜率，也不是上涨概率。'
-
-/** 跟在方向后面那半句。号称在最显眼的地方把误读堵掉，就不能只写在悬停提示里。 */
-export const SCORE_CAVEAT = '只说形状像不像，不是涨跌概率'

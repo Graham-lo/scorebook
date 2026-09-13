@@ -76,8 +76,28 @@ export interface ReplayMarks {
   mae_at: Instant | null
 }
 
+/**
+ * 舞台上能切换的一条行情。第一条永远是这条记录自己的品种，后面每一条对应
+ * 一张**已经对上行情**的截图——同板块的对比图品种不一样，照样放得出来。
+ *
+ * 旧后端没有这个字段。缺了就只有记录自己那一条，行为和以前一模一样。
+ */
+export interface ReplayTrack {
+  /** 这条轨来自哪张图。记录自身那一条可以没有。 */
+  attachment_id?: Uuid | null
+  /** `scene` `reference` `supplement`，决定 tab 上那两个字。 */
+  kind?: string | null
+  symbol: string
+  market: Market
+  interval: string
+  window: ReplayWindow
+  bars: Bar[]
+}
+
 export interface Replay {
   call_id: Uuid
+  /** 见 `ReplayTrack`。只有一条、或者整片缺失时就是单图重温。 */
+  tracks?: ReplayTrack[]
   symbol: string
   market: Market
   interval: string
@@ -96,6 +116,24 @@ export interface Replay {
   bars_included?: boolean
   /** 后台正在给这条记录的截图找位置。找完了要重新拉一次这一段。 */
   locating?: { job_id: Uuid; status: string } | null
+  /**
+   * 这一次重温用的是哪一张现场图。换过图的记录用的是换上来的那一张，不是最早
+   * 传的那一张。后端没部署换图那一版时整片缺失——缺了就是「这条记录没换过图」，
+   * 不是错误。
+   */
+  scene?: ReplayScene | null
+  /**
+   * 用的这一张是记录提交之后才换上来的。重温照样用它，但「按图找」的证据池不
+   * 收它（见 `types.ts` 上 `CallDetail.scene_replaced_after_submission`）。
+   * 旧后端整片缺失，缺了就当没换过。
+   */
+  scene_replaced_after_submission?: boolean
+}
+
+/** 见 `Replay.scene`。后端没部署这一版时整个字段都不会出现。 */
+export interface ReplayScene {
+  attachment_id: Uuid
+  replaced_after_submission: boolean
 }
 
 export interface ReplayOptions extends RequestOptions {
@@ -133,6 +171,10 @@ export interface LocationInput {
   symbol: string
   market: Market
   interval: string
+  /**
+   * 起点。新后端按 `end_at` + `bars_count` 自己反推，这一格可以不给；旧后端要，
+   * 所以前端一律算好了一起发——两边都收得下。
+   */
   start_at: Instant
   end_at: Instant
   bars_count?: number | null
@@ -160,6 +202,19 @@ export function deleteLocation(attachmentId: Uuid, opts: RequestOptions = {}): P
   return sendDelete(`/v1/attachments/${attachmentId}/location`, opts)
 }
 
+export interface LocationPreview extends LocationInput {
+  preview: { bars: Bar[]; bars_count: number; match?: { score: number; level: string; reverse: boolean } }
+}
+
+/** Compare without saving a location or changing screenshot preferences. */
+export function previewLocation(
+  attachmentId: Uuid,
+  body: Omit<LocationInput, 'start_at' | 'source'>,
+  opts: RequestOptions = {},
+): Promise<LocationPreview> {
+  return postJson(`/v1/attachments/${attachmentId}/location-preview`, body, opts)
+}
+
 /**
  * 一张截图的定位进度。位置是长期的；任务只是这一次找的过程。
  * 后端还没上这两条路由的时候，调用会抛 404，由调用方退回旧的按图找。
@@ -173,7 +228,8 @@ export interface LocateJob {
 }
 
 export interface LocateResult {
-  outcome?: 'located' | 'ambiguous' | 'already_located' | string
+  outcome?: 'located' | 'ambiguous' | 'candidates' | 'needs_manual' | 'unreadable' | 'already_located' | string
+  anchors?: LocateAnchors | null
   candidates?: unknown[]
   /** 这一次的检索是在哪一段历史上跑的。旧后端没有这一格。 */
   index?: LocateIndex
@@ -200,7 +256,29 @@ export interface LocateIndex {
  * 后端读这张截图标题栏认出来的品种、市场、周期。认不出来就是 null——
  * 它宁可不填也不替人编一个，前端照样不许自己补一个上去。
  */
+/**
+ * 从图上读出来的那几样：品种、周期、最后一根的时间。后端认出几项就给几项，
+ * 认不出的那一项是 null——前端照实写「？」，不拿记录里的值去补。
+ *
+ * 整片可能缺失（还没上锚定定位那一版的后端），缺了就是「什么都没认出来」。
+ */
+export interface LocateAnchors {
+  symbol?: string | null
+  interval?: string | null
+  /** 最右那一根的时间，UTC。 */
+  end_at_guess?: Instant | null
+  /** 图上数出来多少根。手填时用它反推起点。 */
+  bars_guess?: number | null
+  utc_offset_minutes?: number | null
+  [key: string]: unknown
+}
+
 export interface LocateState {
+  /** `located` `candidates` `needs_manual` `already_located` `unreadable`。旧后端没有。 */
+  outcome?: string | null
+  anchors?: LocateAnchors | null
+  /** 后端拿不准时给的几段，和 job.result.candidates 是同一批。 */
+  candidates?: unknown[]
   location: AttachmentLocation | null
   job: LocateJob | null
   deduplicated?: boolean

@@ -19,6 +19,7 @@ pub async fn enqueue_tx(
         | "history.plan"
         | "history.subscription"
         | "history.universe"
+        | "chart.calibrate"
         | "trade.project"
         | "trade.sync"
         | "trade.export"
@@ -340,7 +341,11 @@ async fn execute(s: &Services, j: &Job) -> Result<Value> {
             let m = j.body["model_id"]
                 .as_str()
                 .ok_or_else(|| Error::bad("invalid_job"))?;
-            let (_, quality, _) = super::similarity::embed(s, j.owner, id, None, m).await?;
+            let (_, quality, _) = if m == "dinov2-small-v1" {
+                super::similarity::embed_chart_visual(s, j.owner, id).await?
+            } else {
+                super::similarity::embed(s, j.owner, id, None, m).await?
+            };
             Ok(json!({"attachment_id":id,"model_id":m,"quality":quality}))
         }
         "trade.export" => super::trades::historical_export::step(s, j).await,
@@ -348,6 +353,7 @@ async fn execute(s: &Services, j: &Job) -> Result<Value> {
         "trade.project" => super::trades::projection::build(s, j).await,
         "images.reindex" => super::chart_search::reindex::step(s, j).await,
         "chart.search" => super::chart_search::run(s, j).await,
+        "chart.calibrate" => super::chart_search::calibration::run(s, j).await,
         "attachment.locate" => super::locate::run(s, j).await,
         "history.index" => super::history::build(s, j).await,
         "history.plan" => super::history_plans::step(s, j).await,

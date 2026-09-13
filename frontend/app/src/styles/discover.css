@@ -1,98 +1,133 @@
 /* ============================================================
-   找相似：查询图和对照图是主角
+   找：一个输入框，下面是结果
    ------------------------------------------------------------
-   左边一列只放「用哪张图、在哪些范围里找」，右边整片留给结果。
-   技术细节收进 <details>，不占正文；但缺口和范围永远写在明面上。
+   输入框是这一页唯一的入口，所以它占满整宽、比别处都大一号；图、开关
+   都贴着它的下沿，不另起一块。结果按组往下排，每组一张纸。
    ============================================================ */
-.searchgrid{display:grid;grid-template-columns:368px 1fr;gap:22px;align-items:start}
-@media(max-width:1040px){.searchgrid{grid-template-columns:1fr}}
-.searchgrid>.col-q{position:sticky;top:76px;display:flex;flex-direction:column;gap:14px}
-@media(max-width:1040px){.searchgrid>.col-q{position:static}}
 
-/* 把图拖进来。空着的框里不放插画，一条虚线加两行字就够——它要说的是
-   「这儿可以放东西」，不是「这儿有张图」。 */
-.dropbig{
-  position:relative;border-radius:var(--r2);padding:34px 20px;text-align:center;cursor:pointer;
-  background:none;border:1px dashed var(--rule2);
-  transition:border-color var(--t2) var(--e),background var(--t2) var(--e),transform var(--t2) var(--e);
-}
-.dropbig:hover{transform:translateY(-1px);border-color:var(--blue-line);background:var(--blue-soft)}
-.dropbig .h3{margin-bottom:5px;font-size:15px}
-.dragging{box-shadow:inset 0 0 0 2px var(--blue),0 0 0 5px var(--glow)!important;background:var(--blue-soft)!important}
+.findbox{padding:16px 18px 13px}
 
-/* 在图上框选 */
-.region{position:relative;display:inline-block;max-width:100%;line-height:0;user-select:none;border-radius:var(--r2);overflow:hidden;box-shadow:0 0 0 1px var(--rule),var(--shadow)}
-.region img{display:block;max-width:100%;height:auto;cursor:crosshair;touch-action:none}
-.marquee{
-  position:absolute;border:1.5px solid var(--blue-bright);background:color-mix(in srgb,var(--blue) 14%,transparent);
-  box-shadow:0 0 0 9999px color-mix(in srgb,var(--board) 46%,transparent),0 0 18px 0 var(--glow);
-  pointer-events:none;border-radius:3px;
+.fbrow{display:flex;align-items:flex-start;gap:10px}
+.fin{
+  flex:1;min-width:0;display:block;resize:none;overflow-y:auto;
+  border:0;background:none;outline:none;padding:6px 0 4px;
+  font-family:var(--serif);font-size:18px;line-height:1.62;color:var(--ink);
 }
-.region-hint{
-  position:absolute;left:10px;bottom:10px;padding:6px 12px;border-radius:99px;
-  background:color-mix(in srgb,var(--board) 76%,transparent);backdrop-filter:blur(8px);
-  color:var(--board-ink);font-size:11.5px;line-height:1;letter-spacing:.02em;
-  pointer-events:none;animation:hintIn .5s var(--e-out) both;
+.fin::placeholder{color:var(--ink4);font-family:var(--font);font-size:15px}
+
+.ficon{
+  flex:none;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;
+  color:var(--ink3);background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule);
+  transition:transform var(--t1) var(--e),color var(--t2),background var(--t2),box-shadow var(--t2);
 }
+.ficon svg{width:17px;height:17px}
+.ficon:hover{transform:translateY(-1px);color:var(--blue-text);background:var(--blue-soft);box-shadow:inset 0 0 0 1px var(--blue-line)}
+.ficon:active{transform:scale(.96)}
+.ficon:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+.fbfoot{display:flex;align-items:center;gap:14px;margin-top:10px;padding-top:10px;border-top:1px solid var(--rule)}
+.fbshelf{flex:1;min-width:0;display:flex;align-items:center;gap:10px}
+.fbshelf:empty{min-height:24px}
+.fmine{display:flex;align-items:center;gap:9px;flex:none;font-size:13px;color:var(--ink2);cursor:pointer;user-select:none}
+
+/* 这一次拿去问的那张图。缩略图在左，名字在中，右边一颗叉。 */
+.fshelf{
+  display:inline-flex;align-items:center;gap:9px;max-width:100%;padding:4px 5px 4px 4px;border-radius:99px;
+  background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule2);animation:rise .28s var(--e-out) both;
+}
+.fshelf .shot-slot{width:34px;height:24px;border-radius:7px;overflow:hidden;flex:none;background:var(--sheet3)}
+.fshelf .shot-slot img{width:100%;height:100%;object-fit:cover}
+.fshelf .shot-wait{display:grid;place-items:center;width:100%;height:100%;color:var(--ink4)}
+.fshelf .shot-wait svg{width:13px;height:13px}
+.ftitle{font-family:var(--mono);font-size:12px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fx{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;color:var(--ink3);flex:none;transition:background var(--t1),color var(--t1)}
+.fx svg{width:12px;height:12px}
+.fx:hover{background:var(--rule);color:var(--ink)}
+.fup{flex:1;min-width:0}
+.fup .sync,.fup .progress-line{margin:0}
+
+/* ---------- 认出来了什么 ---------- */
+.frecog:empty{display:none}
+.fcard{margin-top:14px;padding:14px 18px;animation:rise .3s var(--e-out) both}
+.fline{font-family:var(--mono);font-size:14px;line-height:1.6;color:var(--ink);overflow-wrap:anywhere}
+.fchips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px}
+.fchips .chip{border:0}
 
 /* ---------- 结果 ---------- */
-.hits{display:flex;flex-direction:column;gap:16px}
-.hit{
-  display:grid;grid-template-columns:132px 1fr;gap:16px;padding:14px;border-radius:var(--r2);
-  background:var(--sheet);box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow);
-  opacity:0;transform:translateY(8px);animation:hitIn .5s var(--e-out) forwards;
+.fgroups{display:flex;flex-direction:column;gap:16px;margin-top:16px}
+.fgroup{padding:16px 18px 18px;opacity:0;transform:translateY(8px);animation:hitIn .46s var(--e-out) forwards;animation-delay:calc(var(--i,0)*42ms)}
+.fghead{margin-bottom:12px}
+.fgroups .empty{padding:38px 20px}
+.fgroups .sync,.fgroups .progress-line{margin:0}
+
+/* 说过的话：原话是主角，日期退到下面一行小字。 */
+.fwords{display:flex;flex-direction:column}
+.fword{padding:12px 0;border-top:1px solid var(--rule)}
+.fword:first-child{border-top:0;padding-top:2px}
+.fw{font-family:var(--serif);font-size:15.5px;line-height:1.68;color:var(--ink);overflow-wrap:anywhere}
+.fw mark{background:var(--hl);color:var(--hl-text);border-radius:3px;padding:0 2px}
+.fword .fm{margin-top:5px;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;color:var(--ink3)}
+.fword.link{cursor:pointer;margin:0 -10px;padding-left:10px;padding-right:10px;border-radius:var(--r);transition:background var(--t2) var(--e)}
+.fword.link:hover{background:var(--sheet2)}
+.fword.link:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+
+/* 标签和品种：一排可点的词。 */
+.fnames{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.fnames .chip{border:0;font-family:var(--mono);font-size:12.5px}
+
+/* 一条结果：小 K 线图 · 那一行事实 · 像到什么程度。 */
+.fhits{display:flex;flex-direction:column;gap:10px}
+.fhit{
+  display:grid;grid-template-columns:148px 1fr auto;align-items:center;gap:14px;padding:10px;border-radius:var(--r2);
+  background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule);
+  opacity:0;transform:translateY(8px);animation:hitIn .46s var(--e-out) forwards;
   animation-delay:calc(var(--i,0)*42ms);
-  transition:box-shadow var(--t2) var(--e),transform var(--t2) var(--e);
+  transition:box-shadow var(--t2) var(--e),transform var(--t2) var(--e),background var(--t2) var(--e);
 }
-.hit:hover{box-shadow:0 0 0 1px var(--blue-line),var(--shadow-lift);transform:translateY(-2px)}
-@media(max-width:600px){.hit{grid-template-columns:1fr}}
-/* 历史结果：图占满一行，说明在图下面。走势本身就是要看的东西。 */
-.hit.wide{grid-template-columns:1fr;gap:12px}
-.hit.wide .chart-slot{padding:10px;background:var(--sheet)}
-.hit .rank{
-  display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 7px;
-  border-radius:8px;background:var(--blue);color:#fff;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;
-  box-shadow:0 5px 14px -8px var(--glow);
+.fhit.link{cursor:pointer}
+.fhit.link:hover{transform:translateY(-2px);background:var(--sheet);box-shadow:inset 0 0 0 1px var(--blue-line),var(--shadow-lift)}
+.fhit.link:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.fhit-history{position:relative;grid-template-columns:210px 1fr auto}
+.fhit-history:hover{background:var(--sheet);box-shadow:inset 0 0 0 1px var(--blue-line),var(--shadow-lift)}
+.fhit-history:focus-within{outline:2px solid var(--blue);outline-offset:2px}
+.fhit-open{padding:0;border:0;background:none;text-align:left;font-weight:600;cursor:pointer}
+.fhit-open::after{content:'';position:absolute;inset:0;z-index:1;border-radius:var(--r2)}
+.fhit-open:focus-visible{outline:0}
+.fhit-action{display:inline-block;margin-top:8px;color:var(--blue-text);font-size:13px;font-weight:600}
+.fshot{border-radius:var(--r);overflow:hidden;background:var(--sheet);box-shadow:inset 0 0 0 1px var(--rule)}
+.fshot .chart-slot{padding:4px}
+.fshot .chart-slot svg{display:block;width:100%;height:auto}
+.fshot .chart-wait{padding:20px 8px;text-align:center;font-size:11.5px;color:var(--ink3)}
+.fshot .shot-slot{aspect-ratio:16/10}
+.fshot .shot-slot img{width:100%;height:100%;object-fit:cover;display:block}
+.fshot .shot-wait{display:grid;place-items:center;height:100%;color:var(--ink4)}
+.fb{min-width:0}
+.fh{font-family:var(--mono);font-size:13.5px;color:var(--ink);overflow-wrap:anywhere}
+.fm{margin-top:4px;font-size:12px;color:var(--ink3)}
+.fband{
+  flex:none;padding:4px 10px;border-radius:99px;white-space:nowrap;
+  font-size:12px;font-weight:600;color:var(--blue-text);
+  background:var(--blue-soft);box-shadow:inset 0 0 0 1px var(--blue-line);
 }
-.hit .words{font-family:var(--serif);font-size:15.5px;line-height:1.62;color:var(--ink);margin:7px 0;overflow-wrap:anywhere}
-.hit .line{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12px;color:var(--ink3)}
-.hit .near{display:flex;align-items:center;gap:8px;min-width:158px;flex-wrap:wrap}
-.hit .near .track{flex:1;min-width:64px;height:5px;border-radius:3px;background:var(--sheet3);overflow:hidden}
-.hit .near .track i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--blue),var(--blue-bright));transform-origin:left;animation:growX .7s var(--e-out) both}
-.hit .near .num{font-family:var(--mono);font-size:11.5px;color:var(--ink3)}
-/* 分档那句话跟着数走，比数重一档：先读到「像」，再回头看是多少。 */
-.hit .near .band{font-size:12px;color:var(--ink2);white-space:nowrap}
-/* 一条历史结果的抬头：名次和品种是主角，市场/周期/根数往右靠成一行小字。 */
-.hit .hithead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.hit .hitsym{font-family:var(--mono);font-size:16px;font-weight:500;letter-spacing:.01em;color:var(--ink)}
-.hit .hitwhen{display:flex;align-items:baseline;gap:7px;margin:6px 0 10px;font-family:var(--mono);font-size:13px;color:var(--ink2)}
-.hit .hitwhen .faint{font-size:11px;letter-spacing:.06em}
-/* 图例：色块用的就是后端画进 SVG 的那两种底色，不另发明一套颜色。 */
-.clegend{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--ink3)}
-.clegend span{display:inline-flex;align-items:center;gap:6px}
-.clegend .div{color:var(--rule2)}
-.clegend i{width:15px;height:11px;border-radius:3px;flex:none}
-.clegend i.a{background:color-mix(in srgb,#b39448 22%,var(--sheet2));box-shadow:inset 0 0 0 1px color-mix(in srgb,#a18139 55%,transparent)}
-.clegend i.b{background:var(--sheet2);box-shadow:inset 0 0 0 1px var(--rule2)}
 
-/* 已准备的历史范围 */
-.covrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--rule);font-size:12.5px;color:var(--ink2);flex-wrap:wrap}
-.covrow:first-child{border-top:0}
-
-/* 正在准备的那几段历史：页面上唯一会自己动的一块，所以给它一条呼吸的边 */
-.prep{
-  position:relative;margin:12px 0;padding:13px 15px;border-radius:var(--r);
-  background:color-mix(in srgb,var(--blue-soft) 62%,transparent);box-shadow:inset 0 0 0 1px var(--blue-line);
-  animation:prepIn .34s var(--e-out) both;
+/* 归纳出来的那一段。它是推出来的，不是记录里写着的，所以压在香槟金上。 */
+.fsum{
+  margin-bottom:12px;padding:13px 15px;border-radius:var(--r);
+  background:var(--hl);box-shadow:inset 0 0 0 1px var(--hl-line);
+  font-family:var(--serif);font-size:15px;line-height:1.72;color:var(--ink);white-space:pre-wrap;
+  animation:rise .3s var(--e-out) both;
 }
-.prep::before{content:'';position:absolute;left:0;top:10px;bottom:10px;width:2px;border-radius:2px;background:var(--blue);opacity:.55;animation:prepBar 2.4s var(--e-io) infinite}
-.prep.leaving{animation:prepOut .24s var(--e) both}
-.prephead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
-.prephead .mono{font-family:var(--mono);color:var(--ink);font-size:12.5px}
-.prep .acts{margin-top:9px}
-.prep .note{margin-top:0}
 
-/* 导好的那一份 */
+@media(max-width:640px){
+  .findbox{padding:13px 14px 11px}
+  .fin{font-size:16.5px}
+  .fbfoot{flex-wrap:wrap;gap:10px}
+  .fgroup{padding:14px 14px 16px}
+  .fhit{grid-template-columns:1fr auto;gap:10px}
+  .fshot{grid-column:1/-1}
+}
+
+/* ---------- 导好的那一份（设置页的备份导出） ---------- */
 .exdone{animation:exIn .4s var(--e-out) both}
 .exnums{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;max-width:540px;border-radius:var(--r);overflow:hidden;background:var(--rule);box-shadow:0 0 0 1px var(--rule)}
 .exnum{background:var(--sheet2);padding:13px 15px;display:flex;flex-direction:column;gap:2px}
@@ -102,20 +137,15 @@
 .exdone .note{margin-top:12px}
 
 @media(prefers-reduced-motion:reduce){
-  .prep,.prep.leaving,.exdone,.hit{animation:none;opacity:1;transform:none}
-  .prep::before{animation:none;opacity:.55}
+  .exdone,.fhit,.fgroup,.fcard,.fshelf,.fsum{animation:none;opacity:1;transform:none}
 }
 
-/* 从检索结果绕过来准备历史的那条回头路。它是一条动线，不是提示，所以给它
-   青蓝的底和一个真正的按钮，跟页面上其它说明区分开。 */
-.backq{
-  display:flex;align-items:center;gap:13px;margin-top:14px;padding:14px 16px;border-radius:var(--r2);
-  background:linear-gradient(120deg,var(--blue-soft),color-mix(in srgb,var(--blue-soft) 30%,transparent));
-  box-shadow:inset 0 0 0 1px var(--blue-line);animation:rise .34s var(--e-out) both;
-}
-.backq .ic{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;flex:none;background:var(--blue);color:#fff;box-shadow:0 6px 16px -8px var(--glow)}
-.backq .ic svg{width:16px;height:16px}
-.backq .b{flex:1;min-width:0}
-.backq .b b{display:block;font-size:14px;font-weight:600;color:var(--ink)}
-.backq .b span{display:block;margin-top:1px;font-size:12.5px;line-height:1.6;color:var(--ink2)}
-@media(prefers-reduced-motion:reduce){.backq{animation:none}}
+/* Search owns two rows; the generic one-line searchbox style must not collapse them. */
+.sheet.findbox{display:block;height:auto;min-height:0;padding:16px 18px 13px}
+.sheet.findbox .fbrow{min-width:0}
+.sheet.findbox .fin{height:auto}
+.sheet.findbox .fbfoot{padding:10px 0 0}
+.sheet.findbox .fbshelf{flex:1 1 220px}
+@media(max-width:720px){.sheet.findbox{padding:13px 14px 11px}}
+
+.fgroup{scroll-margin-top:90px}

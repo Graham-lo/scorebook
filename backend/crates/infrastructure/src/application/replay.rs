@@ -3,6 +3,7 @@
 //! Storage exception (README/docs/status.md): `replay_bars` is the one place a
 //! public OHLC window is written down, and only as an expiring cache for one
 //! record's stage. Statistics, settlement and search never read it. This module
+//! also records boundary timestamps (no OHLC) in `instrument_bounds`. It
 //! writes no outcome, manifest or event, and the only rows it ever deletes are
 //! `replay_bars` rows.
 use crate::{
@@ -92,6 +93,12 @@ pub fn interval_of(timeframe: Option<&str>) -> Result<Interval> {
         .ok_or_else(|| Error::bad("replay_interval_unsupported"))
 }
 
+/// §5.2 第 6 步「我来填」：只给 `{symbol, market, interval, end_at}` 就够了，
+/// 起点按根数反推，取一段真 K 线核对有覆盖之后写成 `matched_by='user'`，并把这
+/// 一段和截图的对照分一起回去（前端定位面板的「对照」区）。
+///
+/// 老形状（带 `start_at` 与 `source` 的整份定位）照收不误：那是自动定位写回来
+/// 的路，一格没动。
 pub async fn put_location(
     s: &Services,
     owner: Uuid,
@@ -99,14 +106,35 @@ pub async fn put_location(
     key: Option<&str>,
     input: AttachmentLocation,
 ) -> Result<Value> {
+    prepare_location(s, owner, attachment, key, input, false).await
+}
+
+/// A comparison must not pin a screenshot or change the user's timezone.
+pub async fn preview_location(
+    s: &Services,
+    owner: Uuid,
+    attachment: Uuid,
+    input: AttachmentLocation,
+) -> Result<Value> {
+    prepare_location(s, owner, attachment, None, input, true).await
+}
+
+async fn prepare_location(
+    s: &Services,
+    owner: Uuid,
+    attachment: Uuid,
+    key: Option<&str>,
+    input: AttachmentLocation,
+    preview_only: bool,
+) -> Result<Value> {
     if !matches!(input.market.as_str(), "usd_m" | "coin_m") {
         return Err(Error::bad("invalid_market"));
     }
     if !valid_symbol(&input.symbol) {
         return Err(Error::bad("invalid_symbol"));
     }
-    super::history::interval_of(&input.interval)?;
-    if input.start_at >= input.end_at {
+    let iv = super::history::interval_of(&input.interval)?;
+    if input.start_at.is_some_and(|v| v >= input.end_at) {
         return Err(Error::bad("invalid_location_window"));
     }
     if input.bars_count.is_some_and(|v| v <= 0) {
@@ -129,12 +157,80 @@ pub async fn put_location(
     if !owned {
         return Err(Error::not_found());
     }
+    // 起点没给才去读图：根数、几何和锚点都从这一次读图里来，读不动就按 128 根算，
+    // 人填的时间仍然算数。
+    let read = super::locate_anchored::read_chart(s, owner, attachment).await;
+    // 人明确给了起点，起点就是起点；只给了终点，就按根数往回倒推（§5.2 第 6 步）。
+    let wanted = input
+        .bars_count
+        .map(|v| v as usize)
+        .or_else(|| read.as_ref().map(|v| v.geometry.quality.detected_candles))
+        .unwrap_or(128)
+        .clamp(2, MAX_BARS as usize);
+    let end_at = iv.ceil(input.end_at);
+    let start_at = input
+        .start_at
+        .map(|v| iv.floor(v))
+        .unwrap_or_else(|| iv.add_bars(end_at, -(wanted as i64)));
+    if start_at >= end_at {
+        return Err(Error::bad("invalid_location_window"));
+    }
+    // 落库的根数只认这一段区间本身，不认请求里那个数：两者对不上时，对不上的是
+    // 请求，不是行情。
+    let bars_count =
+        (iv.bars_between(start_at, end_at).max(1) as usize).clamp(2, MAX_BARS as usize);
+    // 覆盖校验：这一段行情真的存在，币安上取得到，才让它成为一次定位。区间比一次
+    // 取数的上限还长时，只核对最前面的 2000 根——回放本来也只画得下这么多。
+    let check_end = if iv.bars_between(start_at, end_at) > MAX_BARS {
+        iv.add_bars(start_at, MAX_BARS)
+    } else {
+        end_at
+    };
+    let window =
+        super::locate_anchored::bars_of(s, &input.market, &input.symbol, iv, start_at, check_end)
+            .await
+            .unwrap_or_default();
+    if window.len() * 10 < bars_count * 9 {
+        return Err(Error::conflict("location_window_not_covered"));
+    }
+    let source = input.source.unwrap_or(HistorySource::Rest);
+    // 对照分：截图的几何和这一段行情比一比，前端只用那个词。
+    let mut preview = json!({
+        "bars": window,
+        "bars_count": window.len(),
+        "start_at": window.first().map(|b| b.start),
+        "end_at": window.last().map(|b| b.end),
+    });
+    let mut anchor = Value::Null;
+    let mut offset: Option<i32> = None;
+    if let Some(read) = &read {
+        let query = super::locate_anchored::query_candles(read);
+        if let Ok(theirs) = scorebook_core::domain::chart_match::from_bars(&window) {
+            let score = super::locate_anchored::best_score(&query, &theirs);
+            preview["match"] = json!({"score":score.score,"level":super::locate_anchored::preview_level(score.score),"reverse":score.reverse});
+        }
+        offset = super::locate_anchored::offset_matching(read, end_at);
+        let mut anchors = read.anchors.clone();
+        anchors.symbol = Some(input.symbol.clone());
+        anchors.interval = Some(iv.as_str().into());
+        anchors.utc_offset_minutes = offset.or(anchors.utc_offset_minutes);
+        anchor = json!({"anchors":anchors,"method":"manual"});
+    }
+    if preview_only {
+        tx.rollback().await?;
+        return Ok(
+            json!({"attachment_id":attachment,"symbol":input.symbol,"market":input.market,
+            "interval":iv.as_str(),"start_at":start_at,"end_at":end_at,"bars_count":bars_count,
+            "source":source_name(&source),"preview":preview,"anchor":anchor}),
+        );
+    }
+    super::locate::lock_content(&mut tx, owner, attachment).await?;
     let row: Value = sqlx::query_scalar(
-        r#"INSERT INTO attachment_locations(owner_id,attachment_id,symbol,market,interval,start_at,end_at,bars_count,source,score,search_run_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::numeric,$11)
+        r#"INSERT INTO attachment_locations(owner_id,attachment_id,symbol,market,interval,start_at,end_at,bars_count,source,score,search_run_id,matched_by,anchor)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::numeric,$11,'user',$12)
         ON CONFLICT(owner_id,attachment_id) DO UPDATE SET symbol=EXCLUDED.symbol,market=EXCLUDED.market,interval=EXCLUDED.interval,
         start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at,bars_count=EXCLUDED.bars_count,source=EXCLUDED.source,score=EXCLUDED.score,
-        search_run_id=EXCLUDED.search_run_id,confirmed_at=now()
+        search_run_id=EXCLUDED.search_run_id,matched_by='user',anchor=COALESCE(EXCLUDED.anchor,attachment_locations.anchor),confirmed_at=now()
         RETURNING (to_jsonb(attachment_locations)-'owner_id'-'score')||jsonb_build_object('score',score::text)"#,
     )
     .bind(owner)
@@ -142,17 +238,27 @@ pub async fn put_location(
     .bind(&input.symbol)
     .bind(&input.market)
     .bind(&input.interval)
-    .bind(input.start_at)
-    .bind(input.end_at)
-    .bind(input.bars_count)
-    .bind(source_name(&input.source))
+    .bind(start_at)
+    .bind(end_at)
+    .bind(bars_count as i32)
+    .bind(source_name(&source))
     .bind(input.score.as_deref())
     .bind(input.search_run_id)
+    .bind(&anchor)
     .fetch_one(&mut *tx)
     .await?;
-    end(&mut tx, owner, "replay.location.put", key, &body, &row).await?;
+    super::locate::share_location(&mut tx, owner, attachment, true).await?;
+    let mut out = row.clone();
+    if let Some(o) = out.as_object_mut() {
+        o.insert("preview".into(), preview);
+    }
+    end(&mut tx, owner, "replay.location.put", key, &body, &out).await?;
     tx.commit().await?;
-    Ok(row)
+    // 这个人截图用的时区：认下来之后，下一张图先按它试（§5.2 第 6 步末尾）。
+    if let Some(minutes) = offset {
+        super::locate::remember_offset(s, owner, minutes).await?;
+    }
+    Ok(out)
 }
 
 pub async fn delete_location(
@@ -166,8 +272,9 @@ pub async fn delete_location(
     if let Some(v) = cached {
         return Ok(v);
     }
+    super::locate::lock_content(&mut tx, owner, attachment).await?;
     let removed =
-        sqlx::query("DELETE FROM attachment_locations WHERE owner_id=$1 AND attachment_id=$2")
+        sqlx::query("DELETE FROM attachment_locations WHERE owner_id=$1 AND attachment_id IN (SELECT a.id FROM attachments a JOIN attachments requested ON requested.owner_id=a.owner_id AND requested.sha256=a.sha256 WHERE requested.owner_id=$1 AND requested.id=$2)")
             .bind(owner)
             .bind(attachment)
             .execute(&mut *tx)
@@ -369,14 +476,22 @@ async fn plan(s: &Services, owner: Uuid, call: Uuid) -> Result<Plan> {
     // 用的是**生效的**那一张场景图（定义见 `record_changes` 模块头）：图贴错了
     // 换过一张，重温就得跟着换，被接替的那一张钉在哪儿都不算数。
     let located: Option<(String, String, String, DateTime<Utc>, String)> = sqlx::query_as(
-        "SELECT l.symbol,l.market,l.interval,l.start_at,l.source FROM attachment_locations l JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id JOIN call_attachments ca ON ca.owner_id=a.owner_id AND ca.attachment_id=a.id WHERE l.owner_id=$1 AND ca.call_id=$2 AND a.kind='scene' AND ca.superseded_at IS NULL ORDER BY ca.attached_at,ca.attachment_id LIMIT 1",
+        "SELECT l.symbol,l.market,l.interval,l.start_at,l.source FROM attachment_locations l JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id JOIN call_attachments ca ON ca.owner_id=a.owner_id AND ca.attachment_id=a.id WHERE l.owner_id=$1 AND ca.call_id=$2 AND a.kind='scene' AND ca.superseded_at IS NULL AND l.symbol=$3 AND l.market=$4 AND l.interval=$5 ORDER BY ca.attached_at,ca.attachment_id LIMIT 1",
     )
     .bind(owner)
     .bind(call)
+    .bind(&symbol)
+    .bind(&market)
+    .bind(interval)
     .fetch_optional(&s.db.pool)
     .await?;
-    let located =
-        located.filter(|(sy, mk, tf, _, _)| *sy == symbol && *mk == market && *tf == interval);
+    // §5.3：定位的品种和记录的品种不一致也算数——一张 MU 的图钉在 MUUSDT 上，记录
+    // 本身可以是别的品种，那张图另起一条对照轨（见 `tracks`）。但主轨画的是记录
+    // 自己的品种，所以只有钉在同一张合约、同一周期上的位置才借得出起点；别的品种
+    // 的起点借过来，主轨就画到另一段行情上去了。
+    let located = located.filter(|(sym, mkt, ivl, _, _)| {
+        sym.eq_ignore_ascii_case(&symbol) && mkt == &market && ivl == interval
+    });
     // 事后换图要在重温结果里看得见：这一张是记录提交之后才上传的，那么窗口是照
     // 着一张当时还不存在的图开的。证据池那一侧不认它（见 `similarity`），但重温
     // 认，所以得说出来。被接替的那几张仍在 `GET /v1/calls/{id}` 里取得回来。
@@ -440,7 +555,32 @@ struct Cached {
     source: String,
 }
 
-async fn cached(s: &Services, p: &Plan) -> Result<Vec<Cached>> {
+/// 舞台上的一段：画谁、什么周期、从哪到哪。重温的主轨和每一条对照轨走的是同一
+/// 段逻辑，区别只在这几格（§5.3）。
+#[derive(Clone)]
+struct Span {
+    symbol: String,
+    market: String,
+    iv: Interval,
+    source: HistorySource,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+}
+
+impl Plan {
+    fn span(&self) -> Span {
+        Span {
+            symbol: self.symbol.clone(),
+            market: self.market.clone(),
+            iv: self.iv,
+            source: self.source.clone(),
+            start: self.start,
+            end: self.end,
+        }
+    }
+}
+
+async fn cached(s: &Services, p: &Span) -> Result<Vec<Cached>> {
     let rows = sqlx::query("SELECT bar_start,bar_end,open,high,low,close,volume,source FROM replay_bars WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5 AND expires_at>now() ORDER BY bar_start")
         .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(p.start).bind(p.end).fetch_all(&s.db.pool).await?;
     Ok(rows
@@ -462,10 +602,10 @@ async fn cached(s: &Services, p: &Plan) -> Result<Vec<Cached>> {
 
 async fn fetch(
     s: &Services,
-    p: &Plan,
+    p: &Span,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
-) -> Result<(Vec<Bar>, HistorySource)> {
+) -> Result<(Vec<Bar>, HistorySource, bool)> {
     let request = |source: HistorySource| ChartRequest {
         source,
         symbol: p.symbol.clone(),
@@ -482,16 +622,21 @@ async fn fetch(
         // A judgment from years ago is still replayable: when REST cannot serve
         // the range, the official monthly archive can.
         match super::market::data(s, &request(HistorySource::Rest)).await {
-            Ok(v) => return Ok((bars(v)?, HistorySource::Rest)),
+            Ok(v) => {
+                let complete = v["coverage_complete"] != false;
+                return Ok((bars(v)?, HistorySource::Rest, complete));
+            }
             Err(e) if e.kind == crate::error::ErrorKind::NotFound => return Err(e),
             Err(_) => {}
         }
     }
     let v = super::market::data(s, &request(HistorySource::MonthlyArchive)).await?;
-    Ok((bars(v)?, HistorySource::MonthlyArchive))
+    let complete = v["coverage_complete"] != false;
+    Ok((bars(v)?, HistorySource::MonthlyArchive, complete))
 }
 
-async fn store(s: &Services, p: &Plan, bars: &[Bar], source: &str) -> Result<()> {
+async fn store(s: &Services, request: &ChartRequest, bars: &[Bar], complete: bool) -> Result<()> {
+    super::market::observe_bounds(s, request, bars, complete).await;
     if bars.is_empty() {
         return Ok(());
     }
@@ -507,7 +652,7 @@ async fn store(s: &Services, p: &Plan, bars: &[Bar], source: &str) -> Result<()>
         FROM UNNEST($5::timestamptz[],$6::timestamptz[],$7::text[],$8::text[],$9::text[],$10::text[],$12::text[]) AS t(s,e,o,h,l,c,v)
         ON CONFLICT(market,symbol,interval,bar_start) DO UPDATE SET bar_end=EXCLUDED.bar_end,open=EXCLUDED.open,high=EXCLUDED.high,
         low=EXCLUDED.low,close=EXCLUDED.close,volume=EXCLUDED.volume,source=EXCLUDED.source,fetched_at=now(),expires_at=EXCLUDED.expires_at"#)
-        .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(source)
+        .bind(&request.market).bind(&request.symbol).bind(&request.interval).bind(source_name(&request.source))
         .bind(&starts).bind(&ends).bind(&open).bind(&high).bind(&low).bind(&close)
         .bind(CACHE_HOURS as i32).bind(&volume)
         .execute(&s.db.pool).await?;
@@ -546,11 +691,11 @@ fn bars_included(query: &ReplayQuery) -> Result<bool> {
     }
 }
 
-pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> Result<Value> {
-    let included = bars_included(&query)?;
-    let p = plan(s, owner, call).await?;
+/// 一段行情：缓存里有多少用多少，缺的补上一次，补完续命 24 小时。主轨和对照轨
+/// 共用它，所以两边的缓存规矩一模一样。
+async fn load(s: &Services, p: &Span, included: bool) -> Result<(Vec<Bar>, String, bool)> {
     let expected = p.iv.bars_between(p.start, p.end).max(0);
-    let mut have = cached(s, &p).await?;
+    let mut have = cached(s, p).await?;
     let mut source = have
         .first()
         .map(|c| c.source.clone())
@@ -567,9 +712,18 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> R
         if let (Some(first), Some(last)) = (missing.first(), missing.last()) {
             let from = *first;
             let to = p.iv.add_bars(*last, 1);
-            let (bars, used) = fetch(s, &p, from, to).await?;
+            let (bars, used, complete) = fetch(s, p, from, to).await?;
             source = source_name(&used).into();
-            store(s, &p, &bars, &source).await?;
+            let request = ChartRequest {
+                source: used,
+                market: p.market.clone(),
+                symbol: p.symbol.clone(),
+                interval: p.iv.as_str().into(),
+                start_at: from,
+                end_at: to,
+                match_end_at: None,
+            };
+            store(s, &request, &bars, complete).await?;
             let known: std::collections::HashSet<i64> = present;
             for bar in bars {
                 if bar.start >= p.start
@@ -597,6 +751,89 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> R
         && bars.first().is_some_and(|b| b.start == p.start)
         && bars.last().is_some_and(|b| b.end == p.end)
         && bars.windows(2).all(|w| w[0].end == w[1].start);
+    Ok((bars, source, coverage_complete))
+}
+
+/// 一条轨道：某一张图对上的那段行情。主轨是记录自己的品种，其余每一张已对上的
+/// 附件各一条，品种可以不同（§5.3）。进度靠时间戳对齐，所以每条轨都开到主轨的
+/// 同一个终点。
+struct Track {
+    attachment: Option<Uuid>,
+    kind: Option<String>,
+    matched_by: Option<String>,
+    span: Span,
+    primary: bool,
+}
+
+async fn track_rows(s: &Services, owner: Uuid, p: &Plan) -> Result<Vec<Track>> {
+    let mut out = vec![Track {
+        attachment: p.scene.as_ref().map(|(id, _)| *id),
+        kind: Some("scene".into()),
+        matched_by: None,
+        span: p.span(),
+        primary: true,
+    }];
+    let rows = sqlx::query(
+        "SELECT l.attachment_id,a.kind,l.symbol,l.market,l.interval,l.start_at,l.end_at,l.source,l.matched_by          FROM attachment_locations l          JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id          JOIN call_attachments ca ON ca.owner_id=a.owner_id AND ca.attachment_id=a.id          WHERE l.owner_id=$1 AND ca.call_id=$2 AND ca.superseded_at IS NULL          ORDER BY ca.attached_at,ca.attachment_id",
+    )
+    .bind(owner)
+    .bind(p.call)
+    .fetch_all(&s.db.pool)
+    .await?;
+    for r in rows {
+        let attachment: Uuid = r.get("attachment_id");
+        let symbol: String = r.get("symbol");
+        let market: String = r.get("market");
+        let interval: String = r.get("interval");
+        let Ok(iv) = interval_of(Some(&interval)) else {
+            continue;
+        };
+        // 记录自己的那条已经是主轨了，不再重复一条。
+        if symbol == p.symbol
+            && market == p.market
+            && iv == p.iv
+            && out[0].attachment == Some(attachment)
+        {
+            out[0].matched_by = r.get("matched_by");
+            out[0].kind = r.get("kind");
+            continue;
+        }
+        let start: DateTime<Utc> = r.get("start_at");
+        let start = iv.floor(start);
+        // 终点跟主轨对齐，好让进度条按时间走；太长就按 2000 根截断。
+        let mut end = iv.ceil(p.end.min(Utc::now()));
+        if end <= start {
+            end = iv.add_bars(start, 1);
+        }
+        if iv.bars_between(start, end) > MAX_BARS {
+            end = iv.add_bars(start, MAX_BARS);
+        }
+        let source = match r.get::<String, _>("source").as_str() {
+            "monthly_archive" => HistorySource::MonthlyArchive,
+            _ => HistorySource::Rest,
+        };
+        out.push(Track {
+            attachment: Some(attachment),
+            kind: r.get("kind"),
+            matched_by: r.get("matched_by"),
+            span: Span {
+                symbol,
+                market,
+                iv,
+                source,
+                start,
+                end,
+            },
+            primary: false,
+        });
+    }
+    Ok(out)
+}
+
+pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> Result<Value> {
+    let included = bars_included(&query)?;
+    let p = plan(s, owner, call).await?;
+    let (bars, source, coverage_complete) = load(s, &p.span(), included).await?;
     let bars_before = p.iv.bars_between(p.start, p.iv.floor(p.judgment)).max(0);
 
     let short = p.criteria.direction.as_deref() == Some("S")
@@ -636,6 +873,34 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> R
         }
         None => Value::Null,
     };
+    // §5.3：每一张已对上的附件各一条轨，主轨排在最前面。
+    let mut tracks: Vec<Value> = Vec::new();
+    for t in track_rows(s, owner, &p).await? {
+        let (tb, tsource, tcov) = if t.primary {
+            (bars.clone(), source.clone(), coverage_complete)
+        } else {
+            load(s, &t.span, included).await.unwrap_or_default()
+        };
+        let before = t
+            .span
+            .iv
+            .bars_between(t.span.start, t.span.iv.floor(p.judgment))
+            .max(0);
+        tracks.push(json!({
+            "attachment_id":t.attachment,
+            "kind":t.kind,
+            "matched_by":t.matched_by,
+            "primary":t.primary,
+            "symbol":t.span.symbol,
+            "market":t.span.market,
+            "interval":t.span.iv.as_str(),
+            "source":tsource,
+            "window":{"start_at":t.span.start,"end_at":t.span.end,"bars_before":before,
+                      "truncated":if t.primary{p.truncated}else{false},"coverage_complete":tcov},
+            "bars":if included{json!(tb)}else{json!([])},
+            "bars_included":included,
+        }));
+    }
     let expires = Utc::now() + Duration::hours(CACHE_HOURS);
     Ok(json!({
         "call_id":p.call,
@@ -650,6 +915,7 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> R
         "scene":p.scene.map(|(id,after)|json!({"attachment_id":id,"replaced_after_submission":after})),
         "scene_replaced_after_submission":p.scene.is_some_and(|(_,after)|after),
         "locating":super::locate::locating_for_call(s,owner,p.call).await?,
+        "tracks":tracks,
         "bars":if included{json!(bars)}else{json!([])},
         "bars_included":included,
         "storage_policy":format!("temporary;expires_at={}",expires.to_rfc3339()),
@@ -660,9 +926,13 @@ pub async fn get(s: &Services, owner: Uuid, call: Uuid, query: ReplayQuery) -> R
 /// replay feature ever deletes.
 pub async fn clear(s: &Services, owner: Uuid, call: Uuid) -> Result<Value> {
     let p = plan(s, owner, call).await?;
-    let removed = sqlx::query("DELETE FROM replay_bars WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5")
-        .bind(&p.market).bind(&p.symbol).bind(p.iv.as_str()).bind(p.start).bind(p.end)
-        .execute(&s.db.pool).await?.rows_affected();
+    // 退出时把这场重温落过的每一条轨都删掉，不只是主轨（§5.3）。
+    let mut removed = 0;
+    for t in track_rows(s, owner, &p).await? {
+        removed += sqlx::query("DELETE FROM replay_bars WHERE market=$1 AND symbol=$2 AND interval=$3 AND bar_start>=$4 AND bar_end<=$5")
+            .bind(&t.span.market).bind(&t.span.symbol).bind(t.span.iv.as_str()).bind(t.span.start).bind(t.span.end)
+            .execute(&s.db.pool).await?.rows_affected();
+    }
     Ok(json!({"call_id":call,"deleted":removed}))
 }
 

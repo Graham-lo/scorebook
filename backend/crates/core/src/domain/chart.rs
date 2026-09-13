@@ -103,7 +103,7 @@ pub fn svg_with_match(
             .replace('"', "&quot;")
     };
     let mut s = format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="580" viewBox="0 0 1200 580"><rect width="1200" height="580" rx="20" fill="#f8f9fb"/><g font-family="system-ui,sans-serif" fill="#45474c"><text x="28" y="30" font-size="16">{} · {} · Binance futures</text><text x="28" y="563" font-size="12">Reconstructed on request · UTC · source data not stored</text></g>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="580" viewBox="0 0 1200 580"><rect width="1200" height="580" rx="20" fill="#f8f9fb"/><g font-family="system-ui,sans-serif" fill="#45474c"><text x="28" y="30" font-size="16">{} · {} · 币安 · UTC</text></g>"##,
         escape(symbol),
         escape(interval)
     );

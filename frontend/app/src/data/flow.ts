@@ -1,18 +1,13 @@
 // 一条记录走到哪儿了 —— 全站唯一的判断处。
 //
-// 主线是「记录判断 → 持续观察 → 查看结果 → 完成复盘 → 沉淀做法」。它是一条
-// 路，不是审批链：随手记的一条可以跳过「查看结果」直接写复盘，观察期里也能先
-// 写一段阶段性的复盘，复盘发布之后行情还在走，这条记录仍然是开着的。
+// 五段：判断 → 走势 → 结果 → 复盘 → 打法。它是一条路，不是审批链：随手记的一条
+// 可以跳过「结果」直接写复盘，观察期里也能先写一段阶段性的复盘。
 //
-// 所有依据都来自后端已有的公开接口，前端不另算分、不另定分母、不猜。哪个环节
-// 该亮、下一步是什么，只在这一个文件里决定；页面只负责把它画出来。
+// 所有依据都来自后端已有的公开接口，前端不另算分、不另定分母、不猜。哪一段该亮、
+// 下一步是什么，只在这一个文件里决定；页面只负责把它画出来。
 //
-// 两个来源报的不是同一件事，这一点很容易写错，所以在这里说明白：
-//   · 复盘队列的一行报的是判分任务跑到哪一步（queued / waiting_due /
-//     completed …），它只说算没算完，不说算出来对不对，也不带原始标准；
-//   · 记录详情报的是结果版本本身（pending / realized / no_criteria …），
-//     知道有没有写标准，也知道已发布的复盘当时绑的是哪一版结果。
-// 两边各自折算成下面的 Answer，后面的规则就只有一套。
+// 两个来源报的不是同一件事：复盘队列的一行报的是判分任务跑到哪一步，记录详情报
+// 的是结果版本本身。两边各自折算成下面的 Answer，后面的规则就只有一套。
 
 import type {
   AssessmentState,
@@ -29,18 +24,16 @@ export type StageId = 'record' | 'observe' | 'outcome' | 'review' | 'distill'
 
 export interface Stage {
   id: StageId
-  /** 用户能懂的名字，和任务书里的用词一致。 */
+  /** 术语表 §4 的段名。 */
   title: string
-  /** 这一环节里，用户需要明白的那件事。 */
-  line: string
 }
 
 export const STAGES: Stage[] = [
-  { id: 'record', title: '记录判断', line: '当时看到了什么，为什么这样想' },
-  { id: 'observe', title: '持续观察', line: '还在等什么，什么时候有答案' },
-  { id: 'outcome', title: '查看结果', line: '市场实际怎么走的' },
-  { id: 'review', title: '完成复盘', line: '哪里对、哪里错、下次怎么改' },
-  { id: 'distill', title: '沉淀做法', line: '这次经验值不值得复用' },
+  { id: 'record', title: '判断' },
+  { id: 'observe', title: '走势' },
+  { id: 'outcome', title: '结果' },
+  { id: 'review', title: '复盘' },
+  { id: 'distill', title: '打法' },
 ]
 
 export type StepMark = 'done' | 'now' | 'todo' | 'skipped'
@@ -51,8 +44,6 @@ export interface NextStep {
   kind: NextKind
   /** 按钮上的话，写成一个动作。 */
   label: string
-  /** 为什么现在是这一步。一句话，不讲后端概念。 */
-  why: string
   /** 有的下一步只是「不用做什么」，那就没有按钮。 */
   href?: string
   iconName: string
@@ -126,93 +117,81 @@ export function flowOf(input: FlowInput): Flow {
   if (input.hasReview && input.outcomeChangedSinceReview) {
     // 结果版本变了。旧复盘一个字不动，只是请人再看一眼新的那版。
     stage = 'outcome'
-    summary = '复盘写完之后结果又更新了一版'
+    summary = '结果更新过'
     next = {
       kind: 'recheck',
-      label: '核对新的结果',
-      why: '这条记录的结果在你写完复盘之后更新过。原来那篇复盘保持原样，看过新的一版再决定要不要补写。',
+      label: '看结果',
       href: `#/call/${input.id}`,
       iconName: 'info',
     }
   } else if (input.hasReview && !input.hasDraft) {
     stage = 'distill'
-    summary = input.reviewedAt ? `${relative(input.reviewedAt)}写完复盘` : '复盘已经写完'
+    summary = input.reviewedAt ? `${relative(input.reviewedAt)}写完复盘` : '复盘写完了'
     next = input.distilled
       ? {
           kind: 'rest',
           label: '',
-          why: '这条已经走完一整轮，也接到了你的做法上。行情还在走，随时可以再补一段。',
           iconName: 'check',
         }
       : {
           kind: 'distill',
-          label: '接到我的做法上',
-          why: '这次的经验如果值得复用，把它接到一类局面或一个打法版本上。不接也行，复盘本身已经存住了。',
+          label: '归到一类局面',
           href: `#/call/${input.id}`,
           iconName: 'play',
         }
   } else if (input.hasDraft === true) {
     stage = 'review'
-    summary = input.draftSavedAt ? `复盘草稿停在 ${relative(input.draftSavedAt)}` : '有一份没写完的复盘'
+    summary = input.draftSavedAt ? `复盘草稿 ${relative(input.draftSavedAt)}` : '复盘草稿'
     next = {
       kind: 'continue',
-      label: '接着写完',
-      why: '上次写到一半的草稿还在，原样留着，接着往下写就行。',
+      label: '写复盘',
       href: `#/review/${input.id}`,
       iconName: 'review',
     }
   } else if (input.answer === 'none') {
     // 随手记的一条：没有标准可判，但随时可以直接写复盘。
     stage = 'review'
-    summary = '随手记的一条，没写判对错的标准'
+    summary = '没写怎么算对'
     next = {
       kind: 'write',
-      label: '直接写复盘',
-      why: '这条当时没写算对错的标准，所以不会自动判分。想说说它后来怎么走的，直接写就可以。',
+      label: '写复盘',
       href: `#/review/${input.id}`,
       iconName: 'review',
     }
   } else if (input.answer === 'attention') {
     stage = 'outcome'
-    summary = '这一条的结果算不下去，需要你看一眼'
+    summary = '结果算不出来'
     next = {
       kind: 'result',
-      label: '看看卡在哪了',
-      why: '按你写的标准算这一条时没能算完。打开看看是标准还要补一句，还是行情数据没到齐。',
+      label: '看结果',
       href: `#/call/${input.id}`,
       iconName: 'info',
     }
   } else if (input.answer === 'short') {
     stage = 'outcome'
-    summary = '行情数据还不够，暂时不下结论'
+    summary = '行情数据不够'
     next = {
       kind: 'result',
-      label: '看看缺了什么',
-      why: '这段行情的数据还没补齐，后端没有拿它凑一个结论。补齐之后会自动再算一次。',
+      label: '看结果',
       href: `#/call/${input.id}`,
       iconName: 'info',
     }
   } else if (input.answer === 'ready') {
     stage = 'outcome'
-    summary = '市场已经给出答案'
+    summary = '市场的答案到了'
     next = {
       kind: 'write',
-      label: '写这一条的复盘',
-      why: '结果已经出来了。趁着还记得，写下当时哪一半站得住、下次同样的局面怎么做更好。',
+      label: '写复盘',
       href: `#/review/${input.id}`,
       iconName: 'review',
     }
   } else {
     // waiting，或者后端还没算过：都还在观察期这一环节里。
     stage = 'observe'
-    summary = input.dueAt ? `${relative(input.dueAt)}出结果` : '还在观察期里'
+    summary = input.dueAt ? `${relative(input.dueAt)}出结果` : '还在等'
     next = {
       kind: 'observe',
-      label: '看看现在走到哪了',
-      why:
-        input.answer === 'waiting'
-          ? '还在观察期内，到期以后才算对错。中途也可以先写一段阶段性的复盘。'
-          : '后端还没有算过这一条的结果。可以先去看看行情，或者先写一段。',
+      label: '看走势',
       href: `#/call/${input.id}`,
       iconName: 'wave',
     }

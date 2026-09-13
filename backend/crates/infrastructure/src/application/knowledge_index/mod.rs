@@ -55,15 +55,59 @@ pub async fn request(s: &Services, owner: Uuid, key: &str) -> Result<Value> {
     Ok(json!({"job_id":id,"status":"queued"}))
 }
 pub async fn search(s: &Services, owner: Uuid, input: KnowledgeSearch) -> Result<Value> {
+    let limit = input.limit.unwrap_or(10).clamp(1, 30);
+    search_pool(s, owner, input, None, limit).await
+}
+
+/// Chart search needs the whole bounded retrieval pool before joining images.
+/// The public text-only endpoint keeps its existing limit and ranking behavior.
+pub(crate) async fn search_for_chart(
+    s: &Services,
+    owner: Uuid,
+    query: String,
+    before: Option<DateTime<Utc>>,
+) -> Result<Value> {
+    let kinds = [
+        "call",
+        "review",
+        "outcome",
+        "attachment",
+        "submission_feedback",
+        "episode",
+        "episode_link",
+        "episode_review",
+        "execution_link",
+    ];
+    search_pool(
+        s,
+        owner,
+        KnowledgeSearch {
+            query,
+            source_kind: None,
+            before,
+            limit: None,
+        },
+        Some(kinds.into_iter().map(str::to_owned).collect()),
+        120,
+    )
+    .await
+}
+
+async fn search_pool(
+    s: &Services,
+    owner: Uuid,
+    input: KnowledgeSearch,
+    source_kinds: Option<Vec<String>>,
+    limit: usize,
+) -> Result<Value> {
     if input.query.trim().is_empty() || input.query.len() > 4096 {
         return Err(Error::bad("invalid_knowledge_query"));
     }
     let encoded = s.text.encode(vec![input.query.clone()]).await?;
     let vector = pgvector::Vector::from(encoded.vectors[0].clone());
-    let limit = input.limit.unwrap_or(10).clamp(1, 30) as i64;
     let mut tx = s.db.pool.begin().await?;
     crate::adapters::ann::configure(&mut tx).await?;
-    let semantic:Vec<(Uuid,f64)>=sqlx::query_as("WITH candidates AS MATERIALIZED(SELECT e.chunk_id,(e.embedding<=>$2)::float8 AS distance FROM knowledge_embeddings e JOIN knowledge_chunks c ON c.owner_id=e.owner_id AND c.id=e.chunk_id JOIN knowledge_documents d ON d.owner_id=c.owner_id AND d.id=c.document_id WHERE e.owner_id=$1 AND ($3::text IS NULL OR d.source_kind=$3) AND ($4::timestamptz IS NULL OR d.occurred_at<=$4) AND NOT EXISTS(SELECT 1 FROM knowledge_dirty q WHERE q.owner_id=d.owner_id AND q.source_kind=d.source_kind AND q.source_id=d.source_id) ORDER BY e.embedding<=>$2 LIMIT 60) SELECT chunk_id,distance FROM candidates ORDER BY distance+0,chunk_id").bind(owner).bind(vector).bind(&input.source_kind).bind(input.before).fetch_all(&mut *tx).await?;
+    let semantic:Vec<(Uuid,f64)>=sqlx::query_as("WITH candidates AS MATERIALIZED(SELECT e.chunk_id,(e.embedding<=>$2)::float8 AS distance FROM knowledge_embeddings e JOIN knowledge_chunks c ON c.owner_id=e.owner_id AND c.id=e.chunk_id JOIN knowledge_documents d ON d.owner_id=c.owner_id AND d.id=c.document_id WHERE e.owner_id=$1 AND ($3::text IS NULL OR d.source_kind=$3) AND ($4::timestamptz IS NULL OR d.occurred_at<=$4) AND ($5::text[] IS NULL OR d.source_kind=ANY($5)) AND NOT EXISTS(SELECT 1 FROM knowledge_dirty q WHERE q.owner_id=d.owner_id AND q.source_kind=d.source_kind AND q.source_id=d.source_id) ORDER BY e.embedding<=>$2 LIMIT 60) SELECT chunk_id,distance FROM candidates ORDER BY distance+0,chunk_id").bind(owner).bind(vector).bind(&input.source_kind).bind(input.before).bind(&source_kinds).fetch_all(&mut *tx).await?;
     let literal = format!(
         "%{}%",
         input
@@ -72,7 +116,7 @@ pub async fn search(s: &Services, owner: Uuid, input: KnowledgeSearch) -> Result
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    let lexical:Vec<Uuid>=sqlx::query_scalar("SELECT c.id FROM knowledge_chunks c JOIN knowledge_documents d ON d.owner_id=c.owner_id AND d.id=c.document_id WHERE c.owner_id=$1 AND c.content ILIKE $2 AND ($3::text IS NULL OR d.source_kind=$3) AND ($4::timestamptz IS NULL OR d.occurred_at<=$4) AND NOT EXISTS(SELECT 1 FROM knowledge_dirty q WHERE q.owner_id=d.owner_id AND q.source_kind=d.source_kind AND q.source_id=d.source_id) ORDER BY d.occurred_at DESC,c.id LIMIT 60").bind(owner).bind(literal).bind(input.source_kind).bind(input.before).fetch_all(&mut *tx).await?;
+    let lexical:Vec<Uuid>=sqlx::query_scalar("SELECT c.id FROM knowledge_chunks c JOIN knowledge_documents d ON d.owner_id=c.owner_id AND d.id=c.document_id WHERE c.owner_id=$1 AND c.content ILIKE $2 AND ($3::text IS NULL OR d.source_kind=$3) AND ($4::timestamptz IS NULL OR d.occurred_at<=$4) AND ($5::text[] IS NULL OR d.source_kind=ANY($5)) AND NOT EXISTS(SELECT 1 FROM knowledge_dirty q WHERE q.owner_id=d.owner_id AND q.source_kind=d.source_kind AND q.source_id=d.source_id) ORDER BY d.occurred_at DESC,c.id LIMIT 60").bind(owner).bind(literal).bind(input.source_kind).bind(input.before).bind(&source_kinds).fetch_all(&mut *tx).await?;
     let mut ranks = std::collections::HashMap::<Uuid, f64>::new();
     for (i, (id, _)) in semantic.iter().enumerate() {
         *ranks.entry(*id).or_default() += 1. / (61 + i) as f64;
@@ -93,7 +137,7 @@ pub async fn search(s: &Services, owner: Uuid, input: KnowledgeSearch) -> Result
         let id: Uuid = serde_json::from_value(row["chunk_id"].clone()).unwrap();
         row["rrf_score"] = json!(ranked.iter().find(|v| v.0 == id).unwrap().1);
         items.push(row);
-        if items.len() >= limit as usize {
+        if items.len() >= limit {
             break;
         }
     }

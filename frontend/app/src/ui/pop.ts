@@ -8,6 +8,7 @@
 import { append, clear, debounce, h } from './dom'
 import { icon } from './icons'
 import { ApiError } from '../api/errors'
+import { markPopHosts, unmarkPopHosts, type HostLike, type PopHostMark, type StyleLike } from './stacking'
 
 export interface PopItem {
   label: string
@@ -54,11 +55,28 @@ export function anyPopOpen(): boolean {
   return open.size > 0
 }
 
+/** 弹层（sheet）在捕获阶段截走 Escape，菜单自己收不到；由弹层调这个把菜单收掉。 */
+export function closePops(): void {
+  closeAll()
+}
+
 export function popChip(config: PopConfig): Pop {
   const wrap = h('span.popwrap')
   const chip = h('span.chip', { role: 'button', tabIndex: 0 })
   let menu: HTMLElement | null = null
   let request = 0
+  let hosts: PopHostMark[] = []
+
+  // 菜单开着的这一会儿，把沿途开了层叠上下文的祖先抬到 `.pop` 够得着的层（见
+  // ui/stacking.ts）。只在开的时候算一次，关的时候按名单摘掉。
+  const lift = () => {
+    hosts = markPopHosts(wrap as unknown as HostLike, document.body as unknown as HostLike,
+      (node) => getComputedStyle(node as unknown as Element) as unknown as StyleLike)
+  }
+  const drop = () => {
+    unmarkPopHosts(hosts)
+    hosts = []
+  }
 
   const position = () => {
     if (!menu) return
@@ -74,8 +92,14 @@ export function popChip(config: PopConfig): Pop {
     menu.style.marginLeft = `${shift}px`
     const list = menu.querySelector<HTMLElement>('.pop-list')
     if (list) {
-      const top = list.getBoundingClientRect().top
-      list.style.maxHeight = `${Math.max(64, Math.min(300, bottom - top - 18))}px`
+      // 菜单默认往下开；全屏底部工具条里用 CSS 让它往上开（菜单底边在触发块之上），
+      // 那时可用高度要从菜单底边往上量，否则会按往下开的剩余空间把列表压扁。
+      const cap = parseFloat(getComputedStyle(menu).getPropertyValue('--pop-max')) || 300
+      const top = viewport?.offsetTop ?? 0
+      const rect = list.getBoundingClientRect()
+      const upward = bounds.bottom <= wrap.getBoundingClientRect().top + 1
+      const room = upward ? rect.bottom - top - 18 : bottom - rect.top - 18
+      list.style.maxHeight = `${Math.max(64, Math.min(cap, room))}px`
     }
   }
 
@@ -86,8 +110,10 @@ export function popChip(config: PopConfig): Pop {
     request += 1
     menu?.remove()
     menu = null
+    drop()
     open.delete(close)
     chip.classList.remove('open')
+    chip.setAttribute('aria-expanded', 'false')
   }
 
   const paint = () => {
@@ -95,7 +121,7 @@ export function popChip(config: PopConfig): Pop {
     chip.classList.toggle('on', config.active())
     chip.appendChild(document.createTextNode(config.label()))
     if (config.active() && config.onClear) {
-      const x = h('span.x', { title: '清除' }, icon('close'))
+      const x = h('button.x', { type: 'button', title: '清除', attrs: { 'aria-label': `清除${config.label()}` } }, icon('close'))
       x.addEventListener('click', (e) => {
         e.stopPropagation()
         close()
@@ -146,7 +172,7 @@ export function popChip(config: PopConfig): Pop {
         },
         h('span.chk', {}, icon('check')),
         item.label,
-        item.hint ? h('span.faint', { style: 'margin-left:8px', text: item.hint }) : null,
+        item.hint ? h('span.faint.hint', { text: item.hint }) : null,
         item.count !== null && item.count !== undefined
           ? h('span.faint', { style: 'margin-left:auto', text: String(item.count) })
           : null,
@@ -196,12 +222,14 @@ export function popChip(config: PopConfig): Pop {
     list.appendChild(h('div.ph', { text: '读取中…' }))
     void fill(list, '')
     wrap.appendChild(menu)
+    lift()
     position()
     window.addEventListener('resize', position)
     window.visualViewport?.addEventListener('resize', position)
     window.visualViewport?.addEventListener('scroll', position)
     open.add(close)
     chip.classList.add('open')
+    chip.setAttribute('aria-expanded', 'true')
   }
 
   chip.addEventListener('click', (e) => {
@@ -210,13 +238,15 @@ export function popChip(config: PopConfig): Pop {
     else show()
   })
   chip.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
+    if (e.target === chip && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault()
       if (menu) close()
       else show()
     }
   })
 
+  chip.setAttribute('aria-haspopup', 'true')
+  chip.setAttribute('aria-expanded', 'false')
   paint()
   wrap.appendChild(chip)
   return { node: wrap, close, refresh: paint }

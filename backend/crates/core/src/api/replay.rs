@@ -13,10 +13,15 @@ pub struct AttachmentLocation {
     #[serde(default = "usd_m")]
     pub market: String,
     pub interval: String,
-    pub start_at: DateTime<Utc>,
+    /// 手填时只给「最后一根的时间」，起点由 `bars_count`（缺省用几何数出来的
+    /// 根数）反推，所以这一格可以不给（§5.2 第 6 步）。
+    #[serde(default)]
+    pub start_at: Option<DateTime<Utc>>,
     pub end_at: DateTime<Utc>,
     pub bars_count: Option<i32>,
-    pub source: crate::market::HistorySource,
+    /// 手填时不给：服务端自己知道这段 K 线是从哪儿取来的。
+    #[serde(default)]
+    pub source: Option<crate::market::HistorySource>,
     /// 匹配分。线上一直是字符串，因为库里是 `numeric`，回显时走 `score::text`，
     /// 不让它路过 f64 掉精度。但前端把刚拿到的 `match.score` 原样回填时它是个
     /// JSON 数字，整个请求体会被 Json 提取器直接顶掉，报出来的只是一句

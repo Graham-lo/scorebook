@@ -1,13 +1,15 @@
 // Application shell: masthead, routing table and the global shortcuts.
 //
-// 顶栏分两条：上面一条是这个产品的主线（今天 / 记录 / 复盘 / 经验 / 找过去），
-// 下面一条是当前这一格内部的几页。没有页被删掉，每一页仍然是自己的地址，
-// 老链接照样打开同一屏。
+// 顶栏五格就是这个产品的主线：今天 / 记录 / 复盘 / 经验 / 找。分了子页的那三格
+// 底下再出一条子导航，子页写在地址的 `?` 后面，刷新和后退都回得去。
+// 窄屏上顶栏只剩品牌和齿轮，五格搬到底部标签栏，中间凸一颗「记一笔」。
 
+import { applyPrefs, motionOff } from './data/prefs'
 import { loadCapabilities } from './data/session'
-import { register, route, start } from './router'
+import { register, route, start, type Route } from './router'
 import { h, clear } from './ui/dom'
-import { orderPage, pressFeedback } from './ui/motion'
+import { paintDecor } from './ui/decor'
+import { orderPage, pressFeedback, prefersReducedMotion } from './ui/motion'
 import { icon } from './ui/icons'
 import { problem } from './ui/toast'
 import { homePage } from './features/home'
@@ -16,46 +18,28 @@ import { capturePage, openCapture } from './features/capture'
 import { callPage } from './features/call'
 import { relivePage } from './features/relive'
 import { searchPage } from './features/search'
-import { historyPage } from './features/history'
 import { reviewPage } from './features/review'
 import { archivePage } from './features/archive'
-import { tradesPage } from './features/trades'
-import { cyclePage } from './features/cycle'
-import { playbookPage } from './features/playbook'
-import { episodePage } from './features/episode'
+import { cyclePage } from './features/find/cycle'
 import { settingsPage } from './features/settings'
 import { statsPage } from './features/stats'
-import { recallPage } from './features/recall'
-import { chatPage } from './features/chat'
 
-/**
- * 这个产品只有一条主线，导航就照那条主线排。
- *
- * 主线写在 data/flow.ts 里，一条记录真实的走法是：
- *   记录判断 → 持续观察 → 查看结果 → 完成复盘 → 沉淀做法。
- * 前三步都发生在同一条记录身上，所以合成一个「记录」；第四步是「复盘」；
- * 第五步攒出来的东西是「经验」。「找过去」不在主线上——它是横着穿过所有
- * 记录的四种找法，所以单独一格，不再散落在「更多」里。
- *
- * 每一格底下的那几页是这一格内部的分工，跟着这一格一起出现，离开就收起来。
- * 上一版把这十一个入口平摊在顶栏和一个「更多」菜单里，看不出谁属于谁，也
- * 看不出先后。
- */
 interface Part {
-  id: string
   label: string
-  why: string
-  /** 这一页的详情页，高亮时算同一格。 */
-  also?: string[]
+  /** 完整的 hash，子页靠 `?` 后面那一格区分。 */
+  href: string
+  /** 这一项在当前地址下算不算选中。 */
+  on: (route: Route) => boolean
 }
 
 interface Section {
   id: string
   label: string
   iconName: string
-  /** 这一格在整条主线里回答哪个问题。窄屏上不显示。 */
-  line: string
+  href: string
   parts: Part[]
+  /** 这一格还认哪些页（详情页跟着它高亮）。 */
+  also?: string[]
 }
 
 const SECTIONS: Section[] = [
@@ -63,129 +47,153 @@ const SECTIONS: Section[] = [
     id: 'home',
     label: '今天',
     iconName: 'home',
-    line: '接着上次，现在该做哪一件事',
+    href: '#/',
     parts: [],
   },
   {
     id: 'find',
     label: '记录',
-    iconName: 'search',
-    line: '市场开口之前，你说过什么',
+    iconName: 'ledger',
+    href: '#/find',
+    also: ['call', 'relive', 'cycle', 'new'],
     parts: [
-      { id: 'find', label: '我的记录', why: '每一次判断的原话和当时那张图', also: ['call', 'new', 'relive'] },
-      { id: 'episode', label: '同一段行情', why: '同一个品种上前后连着的几次判断' },
-      { id: 'trades', label: '实盘账本', why: '钱实际怎么进出的，和想法分开记', also: ['cycle'] },
+      { label: '全部', href: '#/find', on: (r) => !r.query.get('by') },
+      { label: '按品种', href: '#/find?by=symbol', on: (r) => r.query.get('by') === 'symbol' },
+      { label: '成交', href: '#/find?by=fills', on: (r) => r.query.get('by') === 'fills' },
     ],
   },
   {
     id: 'review',
     label: '复盘',
     iconName: 'review',
-    line: '市场开口之后，回头给当时打分',
-    parts: [],
+    href: '#/review',
+    parts: [
+      { label: '等市场', href: '#/review?box=waiting', on: (r) => (r.query.get('box') ?? 'waiting') === 'waiting' },
+      { label: '判对错', href: '#/review?box=verdict', on: (r) => r.query.get('box') === 'verdict' },
+      { label: '写复盘', href: '#/review?box=write', on: (r) => r.query.get('box') === 'write' },
+    ],
   },
   {
     id: 'stats',
     label: '经验',
     iconName: 'chart',
-    line: '一条条记录攒下来，剩下的是这些',
+    href: '#/stats',
+    also: ['archive'],
     parts: [
-      { id: 'stats', label: '长期统计', why: '同一口径下，你的判断兑现了多少' },
-      { id: 'archive', label: '局面类别', why: '给反复出现的同一类局面起个名字' },
-      { id: 'playbook', label: '我的做法', why: '一类局面下的打法，和它改过几版' },
+      { label: '战绩', href: '#/stats', on: (r) => r.page === 'stats' && r.query.get('view') !== 'runs' },
+      { label: '局面', href: '#/archive', on: (r) => r.page === 'archive' },
+      { label: '统计', href: '#/stats?view=runs', on: (r) => r.page === 'stats' && r.query.get('view') === 'runs' },
     ],
   },
   {
-    id: 'recall',
-    label: '找过去',
-    iconName: 'q',
-    line: '四种找法，找回你说过和写过的东西',
-    parts: [
-      { id: 'recall', label: '按意思找', why: '用一句话找回相关的原话和复盘' },
-      { id: 'search', label: '按图找', why: '拿一张走势图找同类局面' },
-      { id: 'history', label: '公开历史', why: '按图搜索能搜到哪几段公开行情' },
-      { id: 'chat', label: '问过去的自己', why: '让模型读你的记录来回答' },
-    ],
+    id: 'search',
+    label: '找',
+    iconName: 'search',
+    href: '#/search',
+    parts: [],
   },
 ]
 
-/** 每一页属于哪一格，以及在那一格的条里高亮哪一项。 */
-const HOME_OF = new Map<string, { section: Section; part: Part | null }>()
+/** 每一页属于哪一格。 */
+const HOME_OF = new Map<string, Section>()
 for (const section of SECTIONS) {
-  HOME_OF.set(section.id, { section, part: section.parts.find((p) => p.id === section.id) ?? null })
-  for (const part of section.parts) {
-    HOME_OF.set(part.id, { section, part })
-    for (const extra of part.also ?? []) HOME_OF.set(extra, { section, part })
-  }
+  HOME_OF.set(section.id, section)
+  for (const extra of section.also ?? []) HOME_OF.set(extra, section)
+}
+
+/** document.title 里的那个页面名，逐字来自文案表。 */
+const PAGE_NAME: Record<string, string> = {
+  home: '今天',
+  find: '记录',
+  call: '记录',
+  cycle: '成交',
+  relive: '重温',
+  review: '复盘',
+  stats: '经验',
+  archive: '局面',
+  search: '找',
+  new: '记一笔',
+  settings: '设置',
 }
 
 function paintMasthead(): void {
-  const focus = document.getElementById('btnFocusSearch')
-  focus?.firstElementChild?.replaceWith(icon('search'))
   const capture = document.getElementById('btnCapture')
   capture?.firstElementChild?.replaceWith(icon('plus'))
   const settings = document.getElementById('navSettings')
   settings?.firstElementChild?.replaceWith(icon('gear'))
-
-  focus?.addEventListener('click', focusSearch)
   capture?.addEventListener('click', () => openCapture())
 }
 
-function paintNav(current: string): void {
+function paintNav(current: Route): void {
   const nav = document.getElementById('nav')
-  if (!nav) return
-  const here = HOME_OF.get(current)?.section ?? null
-  clear(nav)
-  for (const section of SECTIONS) {
-    nav.appendChild(
-      h(
-        'a',
-        { href: `#/${section.id}`, class: here === section ? 'active' : '' },
-        icon(section.iconName),
-        h('span.t', { text: section.label }),
-      ),
-    )
+  const here = HOME_OF.get(current.page) ?? null
+  if (nav) {
+    clear(nav)
+    for (const section of SECTIONS) {
+      nav.appendChild(
+        h(
+          'a',
+          { href: section.href, class: here === section ? 'active' : '', attrs: here === section ? { 'aria-current': 'page' } : {} },
+          icon(section.iconName),
+          h('span.t', { text: section.label }),
+        ),
+      )
+    }
   }
-  document.getElementById('navSettings')?.classList.toggle('active', current === 'settings')
+  document.getElementById('navSettings')?.classList.toggle('active', current.page === 'settings')
+  const settings = document.getElementById('navSettings')
+  if (current.page === 'settings') settings?.setAttribute('aria-current', 'page')
+  else settings?.removeAttribute('aria-current')
+  paintDecor()
+  document.title = `Trader Foresight · ${PAGE_NAME[current.page] ?? '今天'}`
   navIndicator()
-  paintSub(current)
+  paintSub(current, here)
+  paintTabbar(here)
 }
 
-/**
- * 第二条：这一格里面分了哪几页。
- *
- * 只有真的分了页的格子才出现这条，「今天」和「复盘」各自就是一页，不摆一条
- * 只有一个按钮的假导航。设置不属于任何一格，它一直在右上角那颗齿轮上。
- */
-function paintSub(current: string): void {
+/** 第二条：这一格里面分了哪几页。没分页的格子不摆一条假导航。 */
+function paintSub(current: Route, here: Section | null): void {
   const bar = document.getElementById('subnav')
   if (!bar) return
-  const at = HOME_OF.get(current)
   clear(bar)
-  if (!at || at.section.parts.length < 2) {
+  if (!here || here.parts.length < 2 || ['call', 'relive', 'cycle', 'new'].includes(current.page) || current.arg) {
     bar.hidden = true
     return
   }
   bar.hidden = false
   const inner = h('div.subin')
-  inner.appendChild(h('span.subline', { text: at.section.line }))
   const list = h('nav.subtabs')
-  for (const part of at.section.parts) {
+  for (const part of here.parts) {
     list.appendChild(
-      h(
-        'a',
-        {
-          href: `#/${part.id}`,
-          class: at.part === part ? 'on' : '',
-          title: part.why,
-        },
-        h('span.l', { text: part.label }),
-        h('span.w', { text: part.why }),
-      ),
+      h('a', { href: part.href, class: part.on(current) ? 'on' : '', attrs: part.on(current) ? { 'aria-current': 'page' } : {} }, h('span.l', { text: part.label })),
     )
   }
   inner.appendChild(list)
   bar.appendChild(inner)
+}
+
+/** 窄屏底部的五格 + 中间凸起的记一笔。宽屏上整条不画。 */
+function paintTabbar(here: Section | null): void {
+  const bar = document.getElementById('tabbar')
+  if (!bar) return
+  clear(bar)
+  const half = Math.ceil(SECTIONS.length / 2)
+  const put = (section: Section) => {
+    bar.appendChild(
+      h(
+        'a',
+        { href: section.href, class: here === section ? 'on' : '', attrs: here === section ? { 'aria-current': 'page' } : {} },
+        icon(section.iconName),
+        h('span', { text: section.label }),
+      ),
+    )
+  }
+  for (const section of SECTIONS.slice(0, half)) put(section)
+  const plus = h('button.tabplus', { type: 'button', title: '记一笔' }, icon('plus'))
+  plus.addEventListener('click', () => openCapture())
+  bar.appendChild(plus)
+  for (const section of SECTIONS.slice(half)) put(section)
+  bar.hidden = false
 }
 
 /** The teal pill that slides under the active tab. */
@@ -206,8 +214,9 @@ function navIndicator(): void {
   bar.style.setProperty('--io', '1')
 }
 
+/** ⌘K 和 `/`：到「找」页，并把光标放进那个输入框。 */
 function focusSearch(): void {
-  if (route().page !== 'find') location.hash = '#/find'
+  if (route().page !== 'search') location.hash = '#/search'
   window.setTimeout(() => {
     const input = document.getElementById('q') as HTMLInputElement | null
     input?.focus()
@@ -240,6 +249,15 @@ function shortcuts(): void {
     if (e.key === '/' && !typing(e.target) && !e.metaKey && !e.ctrlKey) {
       e.preventDefault()
       focusSearch()
+      return
+    }
+    // 详情页按 R 直接重温。输入框里不接管。
+    if ((e.key === 'r' || e.key === 'R') && !typing(e.target) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const here = route()
+      if (here.page === 'call' && here.arg) {
+        e.preventDefault()
+        location.hash = `#/relive/${here.arg.split('/')[0]}`
+      }
     }
   })
 }
@@ -250,29 +268,13 @@ register('new', capturePage)
 register('call', callPage)
 register('relive', relivePage)
 register('search', searchPage)
-register('history', historyPage)
 register('review', reviewPage)
 register('stats', statsPage)
-register('recall', recallPage)
-register('chat', chatPage)
 register('archive', archivePage)
-register('trades', tradesPage)
 register('cycle', cyclePage)
-register('playbook', playbookPage)
-register('episode', episodePage)
 register('settings', settingsPage)
 
-/**
- * 网页字体按屏幕挑着取。
- *
- * 拉丁那三款（Newsreader / Archivo / DM Mono）是这套界面的样子，一直要，
- * 但不放在 <head> 里挡着首屏——取不到也先用系统字排出来。
- *
- * 中文两款只在宽屏上取。Google 把 Noto Sans/Serif SC 按字切成一百多个分片，光是
- * 那张样式表就有 11 万字符，一页中文再挨个下载三四十个分片：手机走公网取、解析、
- * 每到一片重排一次，实测是这一页在手机上最贵的一笔。手机上换成系统自带的苹方和
- * 宋体——两版并排截图比过，这个字号下看不出区别，一个字节都不用下。
- */
+/** Lightweight Latin fonts load after the first frame; Chinese uses system fonts. */
 function webFonts(): void {
   const add = (href: string) => {
     const link = document.createElement('link')
@@ -280,16 +282,78 @@ function webFonts(): void {
     link.href = href
     document.head.appendChild(link)
   }
-  add('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..600&family=Archivo:wdth,wght@75..125,400..700&family=DM+Mono:wght@400;500&display=swap')
-  if (window.matchMedia('(min-width:900px) and (pointer:fine)').matches) {
-    add('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap')
-  }
+  add('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=DM+Mono:wght@400;500&display=swap')
+  // 中文的衬线和黑体只在宽屏上取：手机用系统字体，省流量也省电。
+  if (window.innerWidth > 860) add('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap')
 }
 
+/** 天空最底下那一层的星点：静静地闪。减弱动效或关掉动效时只画一次不动。 */
+function stars(): void {
+  const canvas = document.getElementById('stars') as HTMLCanvasElement | null
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  type Star = { x: number; y: number; r: number; p: number; s: number }
+  let list: Star[] = []
+  let w = 0
+  let h = 0
+  const size = () => {
+    const dpr = Math.min(2, window.devicePixelRatio || 1)
+    w = window.innerWidth
+    h = window.innerHeight
+    canvas.width = Math.floor(w * dpr)
+    canvas.height = Math.floor(h * dpr)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    const n = Math.min(160, Math.floor((w * h) / 9000))
+    list = Array.from({ length: n }, () => ({
+      x: Math.random() * w,
+      y: Math.random() * h,
+      r: 0.4 + Math.random() * 1.1,
+      p: Math.random() * Math.PI * 2,
+      s: 0.4 + Math.random() * 0.8,
+    }))
+  }
+  const still = () => prefersReducedMotion() || window.innerWidth <= 640
+  const paint = (t: number) => {
+    ctx.clearRect(0, 0, w, h)
+    ctx.fillStyle = '#EF8D2B'
+    for (const star of list) {
+      const a = still() ? 0.55 : 0.35 + 0.45 * (0.5 + 0.5 * Math.sin(star.p + (t / 1000) * star.s))
+      ctx.globalAlpha = a
+      ctx.beginPath()
+      ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.globalAlpha = 1
+  }
+  let raf = 0
+  const loop = (t: number) => {
+    paint(t)
+    if (!still() && !document.hidden) raf = requestAnimationFrame(loop)
+    else raf = 0
+  }
+  const kick = () => {
+    if (raf) cancelAnimationFrame(raf)
+    raf = 0
+    if (still() || document.hidden) paint(0)
+    else raf = requestAnimationFrame(loop)
+  }
+  size()
+  kick()
+  window.addEventListener('resize', () => {
+    size()
+    kick()
+  }, { passive: true })
+  document.addEventListener('visibilitychange', kick)
+  window.addEventListener('scorebook:prefs', kick)
+}
+
+applyPrefs()
 webFonts()
+stars()
 paintMasthead()
 shortcuts()
-pressFeedback()
+if (!motionOff()) pressFeedback()
 // iOS Safari 在滚动时收起地址栏也算一次 resize，一路滚一路发。指示器只跟宽度
 // 有关，所以宽度没变就不量——不然每一帧都要读两次 getBoundingClientRect，
 // 强制同步布局，手机滚起来又卡又烫。
@@ -315,12 +379,34 @@ async function boot(): Promise<void> {
   try {
     await loadCapabilities()
   } catch {
-    problem('连不上本机后端服务，页面里的内容都读不出来。确认后端在 127.0.0.1:8787 运行后刷新。')
+    problem('连不上本机服务')
   }
   start((current) => {
-    paintNav(current.page)
+    paintNav(current)
     const page = document.querySelector<HTMLElement>('.page')
-    if (page) orderPage(page)
+    if (page) {
+      const intros: Record<string, [string, string]> = {
+        find: ['交易记录', '每一条都锚在判断发生的那一刻。'],
+        review: ['回看你的判断', '市场先给答案，你再给结论。'],
+        stats: ['给直觉<em>记分</em>', '哪种感觉靠得住，数字自己会说。'],
+        archive: ['反复出现的局面', '同一类局面，看自己的打法有没有进步。'],
+        settings: ['偏好与数据', '连接、行情、导出，都在这里。'],
+      }
+      const intro = !current.arg && intros[current.page]
+      if (intro && !page.querySelector('.pagehead')) {
+        const head = h('header.pagehead.product-heading', {}, h('div.lead', {}, h('h1'), h('p.sub', { text: intro[1] })))
+        const title = head.querySelector('h1')!
+        const em = intro[0].match(/^(.*)<em>(.*)<\/em>(.*)$/)
+        if (em) {
+          title.append(em[1] ?? "", h("em", { text: em[2] ?? "" }), em[3] ?? "")
+        } else title.textContent = intro[0]
+        // 宽屏上标题跟着筛选一起住在左柱里；窄屏两栏是一列，位置和以前一样。
+        const lead = page.querySelector(':scope > .spread > .lead')
+        if (lead) lead.prepend(head)
+        else page.prepend(head)
+      }
+      orderPage(page)
+    }
   })
 }
 

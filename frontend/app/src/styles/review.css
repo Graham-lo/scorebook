@@ -1,10 +1,8 @@
 /* ============================================================
-   复盘：一个能安静写字的地方
+   复盘：三个筐一张清单，写字区在引导流程里
    ------------------------------------------------------------
-   左边是还欠着的几条，右边是写字区。写字区不套边框——纸就是纸，
-   提示和冲突长在它里面，不弹窗打断输入。
+   写字区不套边框——纸就是纸，提示和冲突长在它里面，不弹窗打断输入。
    ============================================================ */
-.review{display:grid;grid-template-columns:356px 1fr;gap:20px;align-items:start}
 .image-picker{display:flex;flex-direction:column;gap:10px;min-width:0}
 .panel>.image-picker{padding:0 22px 16px}
 .upload-images{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr));gap:12px}
@@ -13,32 +11,6 @@
 .upload-image figcaption{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;margin-top:8px;color:var(--ink3)}
 .upload-image figcaption>span{flex:1;min-width:0;overflow-wrap:anywhere}
 .review-shots{display:flex;flex-direction:column;gap:10px}
-.queue{
-  position:sticky;top:76px;max-height:calc(100vh - 100px);overflow:auto;background:var(--sheet);
-  border-radius:var(--r2);box-shadow:0 0 0 1px color-mix(in srgb,var(--rule) 72%,transparent),var(--shadow);
-}
-.queue .gh{
-  display:flex;align-items:center;gap:9px;padding:11px 16px;font-size:11.5px;font-weight:600;
-  letter-spacing:.11em;text-transform:uppercase;color:var(--ink3);border-top:1px solid var(--rule);
-  background:color-mix(in srgb,var(--sheet2) 60%,transparent);position:sticky;top:0;z-index:1;
-  backdrop-filter:blur(10px);
-}
-.queue .gh:first-child{border-top:0}
-.queue .gh .n{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--blue-text);letter-spacing:0}
-.qitem{
-  position:relative;display:flex;gap:12px;padding:13px 16px;width:100%;text-align:left;cursor:pointer;
-  border-top:1px solid var(--rule);transition:background var(--t2) var(--e);
-}
-.qitem::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--blue);transform:scaleY(0);transition:transform var(--t2) var(--e-out)}
-.qitem:hover{background:color-mix(in srgb,var(--blue-soft) 40%,transparent)}
-.qitem.on{background:var(--blue-soft)}
-.qitem.on::before{transform:scaleY(1)}
-.qitem .q{font-family:var(--serif);font-size:14.5px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.qitem .m{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11.5px;color:var(--ink3);margin-top:5px}
-/* 队列行底下那排小圆点是流程进度，不是装饰，所以给它留一行的呼吸。 */
-.qitem .flow.mini{margin-top:7px}
-.rpane{min-width:0;animation:rise .34s var(--e-out) both}
-
 /* 当时的图和现在的图并排 */
 .rimgs{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .rimgs .im{position:relative;border-radius:var(--r2);overflow:hidden;background:var(--board);box-shadow:0 0 0 1px var(--rule)}
@@ -80,24 +52,6 @@
 .progress-line{display:flex;align-items:center;gap:11px;padding:12px 15px;border-top:1px solid var(--rule);font-size:12px;color:var(--ink3)}
 .progress-line .bar{flex:1;height:4px;border-radius:2px;background:var(--sheet3);overflow:hidden}
 .progress-line .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--blue-bright));border-radius:2px;transition:width .6s var(--e-out)}
-
-/* ---------- 四个篮子 ---------- */
-.rvtabs{display:flex;gap:2px;margin-top:16px;position:relative;border-bottom:1px solid var(--rule);flex-wrap:wrap}
-.rvtab{position:relative;padding:9px 15px 11px;font-size:13.5px;font-weight:500;color:var(--ink3);transition:color var(--t2) var(--e)}
-.rvtab:hover{color:var(--ink2)}
-.rvtab.on{color:var(--blue-text);font-weight:600}
-.rvtab::after{
-  content:'';position:absolute;left:11px;right:11px;bottom:-1px;height:2px;border-radius:2px;
-  background:linear-gradient(90deg,var(--blue),var(--blue-bright));transform:scaleX(0);transform-origin:center;
-  transition:transform var(--t3) var(--e-spring);
-}
-.rvtab.on::after{transform:scaleX(1)}
-
-/* 「先放一放」那一条 */
-.rvsnooze{
-  display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:12px;padding-top:11px;
-  border-top:1px solid var(--rule);opacity:.55;transition:opacity var(--t2) var(--e);
-}
 
 /* ---------- 写字区 ---------- */
 .rvform{
@@ -142,7 +96,6 @@
 .doutline .faint{line-height:1.5}
 
 @media(prefers-reduced-motion:reduce){
-  .rvtab::after{transition:none}
   .dbody,.dbanner{animation:none}
   .dstate.saving::after{animation:none;opacity:.7}
 }
@@ -250,18 +203,6 @@ a.wstep:hover .wn{transform:translateY(-2px)}
   animation:wnPop .6s var(--e-spring) both;
 }
 .donetop .ic svg{width:26px;height:26px}
-.wizdone .dl{display:grid;grid-template-columns:96px 1fr;gap:12px;padding:13px 0;border-top:1px dashed var(--rule2)}
-.wizdone .dl:first-child{border-top:0}
-.wizdone .dl .k{
-  font-family:var(--mono);font-size:11px;letter-spacing:.13em;text-transform:uppercase;
-  color:var(--ink3);padding-top:4px;
-}
-.wizdone .dl .v{font-family:var(--serif);font-size:17px;line-height:1.62;color:var(--ink)}
-
-/* 记录详情里的「开始复盘」：只放一个入口，几步怎么走到了那边再说。 */
-.rvstart{display:flex;flex-direction:column;align-items:flex-start}
-/* 记录详情里那一版没有自己的纸，靠一条虚线和上面的复盘记录分开。 */
-.sec>.rvstart{padding-top:14px;border-top:1px dashed var(--rule2);width:100%}
 
 /* ============================================================
    引导式记录：一步一页地记下一次判断
@@ -285,3 +226,35 @@ a.wstep:hover .wn{transform:translateY(-2px)}
 .seg.big{padding:4px}
 .seg.big button{height:38px;padding:0 17px;font-size:14.5px}
 .capseg .tip{margin-top:10px;max-width:56ch}
+
+/* 记一笔里新出的几块：图上认出的品种、速记问号、把握滑杆、必选项的那一行。 */
+.cappanel .pin{position:relative}
+.cappanel .pin .qm{
+  position:absolute;right:30px;top:24px;
+  width:20px;height:20px;border-radius:50%;
+  border:1px solid var(--rule2);background:var(--sheet2);color:var(--ink3);
+  font:600 11px/1 var(--mono);cursor:help;
+  transition:color .16s var(--e),border-color .16s var(--e);
+}
+.cappanel .pin .qm:hover{color:var(--blue-text);border-color:var(--blue)}
+.guess{
+  display:flex;align-items:center;gap:10px;margin-top:10px;
+  font-size:13px;color:var(--ink2);
+  animation:fade .3s var(--e-out) both;
+}
+.confrow{display:flex;align-items:center;gap:12px}
+.confrow .range{
+  flex:1 1 auto;min-width:120px;height:4px;-webkit-appearance:none;appearance:none;
+  border-radius:999px;background:var(--rule2);cursor:pointer;
+}
+.confrow .range::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
+  background:var(--blue);border:2px solid var(--sheet);
+  box-shadow:0 1px 4px color-mix(in srgb,var(--ink) 22%,transparent);
+  transition:transform .14s var(--e-out);
+}
+.confrow .range:active::-webkit-slider-thumb{transform:scale(1.16)}
+.confrow .pct{min-width:48px;font-family:var(--mono);font-size:13px;color:var(--ink2)}
+.whyoff{flex:1 1 100%;margin:2px 0 0;font-size:12.5px;color:var(--ink3)}
+.seg.wrap{flex-wrap:wrap;border-radius:16px}
+.seg.wrap button{border-radius:13px}

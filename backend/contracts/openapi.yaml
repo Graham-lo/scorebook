@@ -5,7 +5,7 @@ components:
       properties:
         citations:
           items:
-            $ref: '#/components/schemas/Citation'
+            "$ref": "#/components/schemas/Citation"
           type: array
         inference:
           type: boolean
@@ -132,15 +132,12 @@ components:
         market:
           type: string
         score:
-          description: '匹配分。线上一直是字符串，因为库里是 `numeric`，回显时走 `score::text`，
-
+          description: |-
+            匹配分。线上一直是字符串，因为库里是 `numeric`，回显时走 `score::text`，
             不让它路过 f64 掉精度。但前端把刚拿到的 `match.score` 原样回填时它是个
-
             JSON 数字，整个请求体会被 Json 提取器直接顶掉，报出来的只是一句
-
             `invalid_request`——哪个字段错了都看不见。所以收的时候两种都认，数字按
-
-            它的十进制写法收下；发出去的仍然只有字符串一种形状。'
+            它的十进制写法收下；发出去的仍然只有字符串一种形状。
           type:
           - string
           - 'null'
@@ -150,18 +147,24 @@ components:
           - string
           - 'null'
         source:
-          $ref: '#/components/schemas/HistorySource'
+          oneOf:
+          - type: 'null'
+          - "$ref": "#/components/schemas/HistorySource"
+            description: 手填时不给：服务端自己知道这段 K 线是从哪儿取来的。
         start_at:
+          description: |-
+            手填时只给「最后一根的时间」，起点由 `bars_count`（缺省用几何数出来的
+            根数）反推，所以这一格可以不给（§5.2 第 6 步）。
           format: date-time
-          type: string
+          type:
+          - string
+          - 'null'
         symbol:
           type: string
       required:
       - symbol
       - interval
-      - start_at
       - end_at
-      - source
       type: object
     BackupConfiguration:
       additionalProperties: false
@@ -211,9 +214,9 @@ components:
           format: date-time
           type: string
         volume:
-          description: '成交量，与价格一样是 Decimal 字符串。缓存里的旧行和不带量的来源为 null，
-
-            判决从不读它，只有重温舞台的 VOL 副图画它。'
+          description: |-
+            成交量，与价格一样是 Decimal 字符串。缓存里的旧行和不带量的来源为 null，
+            判决从不读它，只有重温舞台的 VOL 副图画它。
           type:
           - string
           - 'null'
@@ -313,7 +316,7 @@ components:
         region:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/Region'
+          - "$ref": "#/components/schemas/Region"
       required:
       - attachment_id
       type: object
@@ -335,7 +338,7 @@ components:
           - string
           - 'null'
         source:
-          $ref: '#/components/schemas/HistorySource'
+          "$ref": "#/components/schemas/HistorySource"
         start_at:
           format: date-time
           type: string
@@ -364,30 +367,26 @@ components:
           - string
           - 'null'
         exclude:
-          description: '已经给人看过、人说了「不是」的那些候选，这一次不必再算一遍。
-
+          description: |-
+            已经给人看过、人说了「不是」的那些候选，这一次不必再算一遍。
 
             公开历史里是 `public_market.features` 的窗口 id，私有记录里是附件 id：
-
             结果条目自己带的那个 id 就是这里要写的东西。排除在取 top-N **之前**生效，
-
             否则排掉三条就只剩不足三条了。空的时候整个字段不出现在请求体里，行为、
-
-            指纹和契约都与从前一样。'
+            指纹和契约都与从前一样。
           items:
             format: uuid
             type: string
           type: array
         interval:
-          description: 'The screenshot interval: required under `same_interval`, and
-            must be null
-
-            under `any_interval`, where shape alone decides and the period is free.'
+          description: |-
+            The screenshot interval: required under `same_interval`, and must be null
+            under `any_interval`, where shape alone decides and the period is free.
           type:
           - string
           - 'null'
         interval_policy:
-          $ref: '#/components/schemas/IntervalPolicy'
+          "$ref": "#/components/schemas/IntervalPolicy"
         limit:
           minimum: 0
           type:
@@ -397,16 +396,24 @@ components:
           type:
           - string
           - 'null'
+        query_text:
+          description: |-
+            Optional private-record text retrieval, combined with the screenshot.
+            Trimmed; blank means image-only. At most 4096 UTF-8 bytes.
+            Nonempty text is unsupported for public market history.
+          type:
+          - string
+          - 'null'
         red_up:
           type: boolean
         region:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/Region'
+          - "$ref": "#/components/schemas/Region"
         reverse:
           type: boolean
         scope:
-          $ref: '#/components/schemas/ChartScope'
+          "$ref": "#/components/schemas/ChartScope"
         symbol:
           type:
           - string
@@ -417,22 +424,20 @@ components:
       type: object
     ChartSetup:
       additionalProperties: false
-      description: 'Which overlays the replay stage draws. The backend stores the
-        shape only and
-
+      description: |-
+        Which overlays the replay stage draws. The backend stores the shape only and
         never computes an indicator.
 
-
-        每个字段都有默认值，所以旧的 `{"ma":[],"ema":[]}` 依然能解出来；未知字段仍然拒收。'
+        每个字段都有默认值，所以旧的 `{"ma":[],"ema":[]}` 依然能解出来；未知字段仍然拒收。
       properties:
         atr:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/AtrSetup'
+          - "$ref": "#/components/schemas/AtrSetup"
         boll:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/BollSetup'
+          - "$ref": "#/components/schemas/BollSetup"
         ema:
           items:
             format: int32
@@ -448,15 +453,15 @@ components:
         macd:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/MacdSetup'
+          - "$ref": "#/components/schemas/MacdSetup"
         rsi:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/RsiSetup'
+          - "$ref": "#/components/schemas/RsiSetup"
         volume:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/VolumeSetup'
+          - "$ref": "#/components/schemas/VolumeSetup"
             description: 非 null 即表示要画 VOL 副图；`ma` 是 MAVOL 的周期。
       type: object
     ChatCancel:
@@ -482,7 +487,7 @@ components:
       properties:
         approved_actions:
           items:
-            $ref: '#/components/schemas/ApprovedAction'
+            "$ref": "#/components/schemas/ApprovedAction"
           type: array
         attachment_ids:
           items:
@@ -591,7 +596,7 @@ components:
           - 'null'
         criteria:
           items:
-            $ref: '#/components/schemas/Criteria'
+            "$ref": "#/components/schemas/Criteria"
           type: array
         instrument:
           type:
@@ -670,7 +675,7 @@ components:
           - string
           - 'null'
         template:
-          $ref: '#/components/schemas/Template'
+          "$ref": "#/components/schemas/Template"
         threshold_ratio:
           type:
           - string
@@ -678,7 +683,7 @@ components:
         trigger:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/Trigger'
+          - "$ref": "#/components/schemas/Trigger"
         version:
           type: string
       required:
@@ -800,7 +805,7 @@ components:
           type: string
         trades:
           items:
-            $ref: '#/components/schemas/ReviewTrade'
+            "$ref": "#/components/schemas/ReviewTrade"
           type: array
         vs_last:
           type:
@@ -881,7 +886,7 @@ components:
           - string
           - 'null'
         state:
-          $ref: '#/components/schemas/OutcomeState'
+          "$ref": "#/components/schemas/OutcomeState"
         trigger_at:
           format: date-time
           type:
@@ -903,7 +908,7 @@ components:
           - 'null'
         bars:
           items:
-            $ref: '#/components/schemas/Bar'
+            "$ref": "#/components/schemas/Bar"
           type: array
         base:
           type:
@@ -912,7 +917,7 @@ components:
         coverage_complete:
           type: boolean
         criteria:
-          $ref: '#/components/schemas/Criteria'
+          "$ref": "#/components/schemas/Criteria"
         end_price:
           type:
           - string
@@ -927,7 +932,7 @@ components:
           type: string
         trades:
           items:
-            $ref: '#/components/schemas/Trade'
+            "$ref": "#/components/schemas/Trade"
           type: array
       required:
       - criteria
@@ -971,7 +976,7 @@ components:
         format:
           type: string
         mapping:
-          $ref: '#/components/schemas/CsvMapping'
+          "$ref": "#/components/schemas/CsvMapping"
         start_at:
           format: date-time
           type: string
@@ -1053,7 +1058,7 @@ components:
           format: int64
           type: integer
         mapping:
-          $ref: '#/components/schemas/CsvMapping'
+          "$ref": "#/components/schemas/CsvMapping"
       required:
       - expected_generation
       - mapping
@@ -1089,7 +1094,7 @@ components:
           - string
           - 'null'
         position_side:
-          $ref: '#/components/schemas/PositionSide'
+          "$ref": "#/components/schemas/PositionSide"
         price:
           type: string
         quantity:
@@ -1101,7 +1106,7 @@ components:
         settlement_asset:
           type: string
         side:
-          $ref: '#/components/schemas/TradeSide'
+          "$ref": "#/components/schemas/TradeSide"
         symbol:
           type: string
         trade_id:
@@ -1135,7 +1140,7 @@ components:
         protocol:
           type: string
         region:
-          $ref: '#/components/schemas/Region'
+          "$ref": "#/components/schemas/Region"
         spacing_consistency:
           format: double
           type: number
@@ -1232,7 +1237,7 @@ components:
             type: string
           type: array
         source:
-          $ref: '#/components/schemas/HistorySource'
+          "$ref": "#/components/schemas/HistorySource"
         start_at:
           format: date-time
           type: string
@@ -1267,7 +1272,7 @@ components:
             type: string
           type: array
         source:
-          $ref: '#/components/schemas/HistorySource'
+          "$ref": "#/components/schemas/HistorySource"
         start_at:
           format: date-time
           type: string
@@ -1329,7 +1334,7 @@ components:
         region:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/Region'
+          - "$ref": "#/components/schemas/Region"
         symbol:
           type:
           - string
@@ -1359,7 +1364,7 @@ components:
           minimum: 0
           type: integer
         source:
-          $ref: '#/components/schemas/HistorySource'
+          "$ref": "#/components/schemas/HistorySource"
         start_at:
           format: date-time
           type: string
@@ -1490,7 +1495,7 @@ components:
           - string
           - 'null'
         template:
-          $ref: '#/components/schemas/Template'
+          "$ref": "#/components/schemas/Template"
         threshold_abs:
           type:
           - string
@@ -1498,22 +1503,21 @@ components:
         trigger:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/TriggerLevel'
+          - "$ref": "#/components/schemas/TriggerLevel"
       required:
       - template
       type: object
     LocateOverride:
       additionalProperties: false
-      description: '手动定位时按这张图指定品种：三张同板块对比图各归各的标的。
-
-        三项都可省，省掉的沿用记录本身的 instrument/market/timeframe。'
+      description: |-
+        手动定位时按这张图指定品种：三张同板块对比图各归各的标的。
+        三项都可省，省掉的沿用记录本身的 instrument/market/timeframe。
       properties:
         exclude:
-          description: '人已经看过并且说了「都不是」的那些候选窗口。累加的：第三轮要把前两轮
-
+          description: |-
+            人已经看过并且说了「都不是」的那些候选窗口。累加的：第三轮要把前两轮
             一共六条都写在这里。给了就意味着这一次不是原地重试——索引会沿时间轴再
-
-            往前推一段，拉没拉过的 K 线。不给就是从前那条自动定位的路，一格不变。'
+            往前推一段，拉没拉过的 K 线。不给就是从前那条自动定位的路，一格不变。
           items:
             format: uuid
             type: string
@@ -1578,13 +1582,30 @@ components:
           type: number
         direction_consistent:
           type: boolean
+        level:
+          description: 给前端的档位词来源，只回枚举值：`sure|likely|weak` 或 `很像|像|有点像` 对应的键。
+          type:
+          - string
+          - 'null'
         meaning:
           type: string
+        rarity:
+          description: 校准后的稀有度：同档位样本里低于此分的比例（§5.5-3）。
+          format: double
+          type:
+          - number
+          - 'null'
         reverse:
           type: boolean
         score:
           format: double
           type: number
+        z:
+          description: 本次比对分布里的 z 分数（§5.2 第 5 步）。
+          format: double
+          type:
+          - number
+          - 'null'
       required:
       - score
       - alignment_cost
@@ -1704,7 +1725,7 @@ components:
         evidence:
           type: string
         position_side:
-          $ref: '#/components/schemas/PositionSide'
+          "$ref": "#/components/schemas/PositionSide"
         quantity:
           description: Signed in BOTH mode, nonnegative for LONG/SHORT. Null means
             unknown opening position.
@@ -1733,7 +1754,7 @@ components:
     Preview:
       properties:
         criteria:
-          $ref: '#/components/schemas/Criteria'
+          "$ref": "#/components/schemas/Criteria"
         issues:
           items:
             type: string
@@ -1803,7 +1824,7 @@ components:
           type: string
         statement:
           items:
-            $ref: '#/components/schemas/AssetStatement'
+            "$ref": "#/components/schemas/AssetStatement"
           type: array
       required:
       - connection_id
@@ -1839,9 +1860,9 @@ components:
       type: object
     ReplayQuery:
       additionalProperties: false
-      description: '`GET /v1/calls/{id}/replay` 的查询串。`bars=none` 只要元数据：前端自己直连
-
-        币安拉 K 线，后端这一次既不取数也不写缓存。'
+      description: |-
+        `GET /v1/calls/{id}/replay` 的查询串。`bars=none` 只要元数据：前端自己直连
+        币安拉 K 线，后端这一次既不取数也不写缓存。
       properties:
         bars:
           type:
@@ -1884,7 +1905,7 @@ components:
           type: string
         trades:
           items:
-            $ref: '#/components/schemas/ReviewTrade'
+            "$ref": "#/components/schemas/ReviewTrade"
           type: array
         vs_last:
           type: string
@@ -2076,14 +2097,12 @@ components:
       type: object
     SceneSelection:
       additionalProperties: false
-      description: '换一张场景图，或把先前那一张重新指回来生效。
+      description: |-
+        换一张场景图，或把先前那一张重新指回来生效。
 
-
-        `attachment_id` 必须是 `kind=''scene''` 的附件：还没挂到这条记录上的会顺手挂上，
-
+        `attachment_id` 必须是 `kind='scene'` 的附件：还没挂到这条记录上的会顺手挂上，
         已经挂着的（包括已经被接替的那一张）直接重新生效。这条记录上其它在生效的
-
-        场景图链接一律置成已接替——一条记录的场景图本来就是单数的。'
+        场景图链接一律置成已接替——一条记录的场景图本来就是单数的。
       properties:
         attachment_id:
           format: uuid
@@ -2182,7 +2201,7 @@ components:
         region:
           oneOf:
           - type: 'null'
-          - $ref: '#/components/schemas/Region'
+          - "$ref": "#/components/schemas/Region"
         timeframe:
           description: Required selected screenshot interval.
           type: string
@@ -2257,7 +2276,7 @@ components:
             equivalence.'
           type: string
         filters:
-          $ref: '#/components/schemas/SampleFilter'
+          "$ref": "#/components/schemas/SampleFilter"
         grouping:
           description: episode_rule or call_rule; fixed before reading outcomes.
           type: string
@@ -2438,7 +2457,7 @@ components:
           format: uuid
           type: string
         dataset:
-          $ref: '#/components/schemas/ImportDataset'
+          "$ref": "#/components/schemas/ImportDataset"
         declared_complete:
           type: boolean
         end_at:
@@ -2446,14 +2465,14 @@ components:
           type: string
         fills:
           items:
-            $ref: '#/components/schemas/FillInput'
+            "$ref": "#/components/schemas/FillInput"
           type: array
         ledger_entries:
           items:
-            $ref: '#/components/schemas/LedgerEntryInput'
+            "$ref": "#/components/schemas/LedgerEntryInput"
           type: array
         source:
-          $ref: '#/components/schemas/ImportSource'
+          "$ref": "#/components/schemas/ImportSource"
         start_at:
           format: date-time
           type: string
@@ -2571,7 +2590,7 @@ info:
   version: 0.4.0
 openapi: 3.1.0
 paths:
-  /v1/account-ledger:
+  "/v1/account-ledger":
     get:
       operationId: get__v1_account-ledger
       parameters:
@@ -2683,7 +2702,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/attachments:
+  "/v1/attachments":
     post:
       operationId: post__v1_attachments
       parameters:
@@ -2762,7 +2781,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/attachments/{id}:
+  "/v1/attachments/{id}":
     get:
       operationId: get__v1_attachments__id_
       parameters:
@@ -2810,7 +2829,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AttachmentKindUpdate'
+              "$ref": "#/components/schemas/AttachmentKindUpdate"
         required: true
       responses:
         '200':
@@ -2874,7 +2893,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/attachments/{id}/index:
+  "/v1/attachments/{id}/index":
     post:
       operationId: post__v1_attachments__id__index
       parameters:
@@ -2894,7 +2913,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/IndexRequest'
+              "$ref": "#/components/schemas/IndexRequest"
         required: true
       responses:
         '200':
@@ -2943,7 +2962,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/attachments/{id}/locate:
+  "/v1/attachments/{id}/locate":
     get:
       operationId: get__v1_attachments__id__locate
       parameters:
@@ -2976,10 +2995,101 @@ paths:
                               format: uuid
                               type: string
                             result:
-                              additionalProperties: true
-                              type:
-                              - object
-                              - 'null'
+                              oneOf:
+                              - type: 'null'
+                              - additionalProperties: true
+                                properties:
+                                  anchors:
+                                    additionalProperties: true
+                                    type:
+                                    - object
+                                    - 'null'
+                                  attachment_id:
+                                    format: uuid
+                                    type: string
+                                  candidates:
+                                    items:
+                                      additionalProperties: true
+                                      properties:
+                                        bars_count:
+                                          type: integer
+                                        end_at:
+                                          format: date-time
+                                          type: string
+                                        interval:
+                                          type: string
+                                        market:
+                                          type: string
+                                        match:
+                                          properties:
+                                            level:
+                                              enum:
+                                              - sure
+                                              - likely
+                                              - weak
+                                              type: string
+                                            reverse:
+                                              type: boolean
+                                            score:
+                                              type: number
+                                            z:
+                                              type:
+                                              - number
+                                              - 'null'
+                                          type: object
+                                        start_at:
+                                          format: date-time
+                                          type: string
+                                        symbol:
+                                          type: string
+                                      required:
+                                      - symbol
+                                      - market
+                                      - interval
+                                      - start_at
+                                      - end_at
+                                      - match
+                                      type: object
+                                    type: array
+                                  method:
+                                    enum:
+                                    - extremes
+                                    - time_axis
+                                    - shape_sweep
+                                    -
+                                    type:
+                                    - string
+                                    - 'null'
+                                  min_margin:
+                                    type:
+                                    - number
+                                    - 'null'
+                                  min_score:
+                                    type:
+                                    - number
+                                    - 'null'
+                                  outcome:
+                                    enum:
+                                    - located
+                                    - candidates
+                                    - needs_manual
+                                    - already_located
+                                    - unreadable
+                                    type: string
+                                  reason:
+                                    type:
+                                    - string
+                                    - 'null'
+                                  search_run_id:
+                                    format: uuid
+                                    type:
+                                    - string
+                                    - 'null'
+                                required:
+                                - outcome
+                                - attachment_id
+                                - candidates
+                                type: object
                             status:
                               type: string
                           type:
@@ -3054,7 +3164,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/LocateOverride'
+              "$ref": "#/components/schemas/LocateOverride"
         required: false
       responses:
         '200':
@@ -3081,10 +3191,101 @@ paths:
                               format: uuid
                               type: string
                             result:
-                              additionalProperties: true
-                              type:
-                              - object
-                              - 'null'
+                              oneOf:
+                              - type: 'null'
+                              - additionalProperties: true
+                                properties:
+                                  anchors:
+                                    additionalProperties: true
+                                    type:
+                                    - object
+                                    - 'null'
+                                  attachment_id:
+                                    format: uuid
+                                    type: string
+                                  candidates:
+                                    items:
+                                      additionalProperties: true
+                                      properties:
+                                        bars_count:
+                                          type: integer
+                                        end_at:
+                                          format: date-time
+                                          type: string
+                                        interval:
+                                          type: string
+                                        market:
+                                          type: string
+                                        match:
+                                          properties:
+                                            level:
+                                              enum:
+                                              - sure
+                                              - likely
+                                              - weak
+                                              type: string
+                                            reverse:
+                                              type: boolean
+                                            score:
+                                              type: number
+                                            z:
+                                              type:
+                                              - number
+                                              - 'null'
+                                          type: object
+                                        start_at:
+                                          format: date-time
+                                          type: string
+                                        symbol:
+                                          type: string
+                                      required:
+                                      - symbol
+                                      - market
+                                      - interval
+                                      - start_at
+                                      - end_at
+                                      - match
+                                      type: object
+                                    type: array
+                                  method:
+                                    enum:
+                                    - extremes
+                                    - time_axis
+                                    - shape_sweep
+                                    -
+                                    type:
+                                    - string
+                                    - 'null'
+                                  min_margin:
+                                    type:
+                                    - number
+                                    - 'null'
+                                  min_score:
+                                    type:
+                                    - number
+                                    - 'null'
+                                  outcome:
+                                    enum:
+                                    - located
+                                    - candidates
+                                    - needs_manual
+                                    - already_located
+                                    - unreadable
+                                    type: string
+                                  reason:
+                                    type:
+                                    - string
+                                    - 'null'
+                                  search_run_id:
+                                    format: uuid
+                                    type:
+                                    - string
+                                    - 'null'
+                                required:
+                                - outcome
+                                - attachment_id
+                                - candidates
+                                type: object
                             status:
                               type: string
                           type:
@@ -3141,7 +3342,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/attachments/{id}/location:
+  "/v1/attachments/{id}/location":
     delete:
       operationId: delete__v1_attachments__id__location
       parameters:
@@ -3172,7 +3373,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AttachmentLocation'
+              "$ref": "#/components/schemas/AttachmentLocation"
         required: true
       responses:
         '200':
@@ -3184,6 +3385,11 @@ paths:
                     anyOf:
                     - additionalProperties: true
                       properties:
+                        anchor:
+                          additionalProperties: true
+                          type:
+                          - object
+                          - 'null'
                         attachment_id:
                           format: uuid
                           type: string
@@ -3201,6 +3407,50 @@ paths:
                           type: string
                         market:
                           type: string
+                        matched_by:
+                          description: auto | user
+                          type:
+                          - string
+                          - 'null'
+                        preview:
+                          additionalProperties: true
+                          properties:
+                            bars:
+                              items:
+                                additionalProperties: true
+                                type: object
+                              type: array
+                            bars_count:
+                              type: integer
+                            end_at:
+                              format: date-time
+                              type:
+                              - string
+                              - 'null'
+                            match:
+                              properties:
+                                level:
+                                  enum:
+                                  - sure
+                                  - likely
+                                  - weak
+                                  type: string
+                                reverse:
+                                  type: boolean
+                                score:
+                                  type: number
+                              type:
+                              - object
+                              - 'null'
+                            start_at:
+                              format: date-time
+                              type:
+                              - string
+                              - 'null'
+                          required:
+                          - bars
+                          - bars_count
+                          type: object
                         score:
                           type:
                           - string
@@ -3259,7 +3509,157 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/backups:
+  "/v1/attachments/{id}/location-preview":
+    post:
+      operationId: post__v1_attachments__id__location-preview
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/AttachmentLocation"
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  data:
+                    anyOf:
+                    - additionalProperties: true
+                      properties:
+                        anchor:
+                          additionalProperties: true
+                          type:
+                          - object
+                          - 'null'
+                        attachment_id:
+                          format: uuid
+                          type: string
+                        bars_count:
+                          type:
+                          - integer
+                          - 'null'
+                        confirmed_at:
+                          format: date-time
+                          type: string
+                        end_at:
+                          format: date-time
+                          type: string
+                        interval:
+                          type: string
+                        market:
+                          type: string
+                        matched_by:
+                          description: auto | user
+                          type:
+                          - string
+                          - 'null'
+                        preview:
+                          additionalProperties: true
+                          properties:
+                            bars:
+                              items:
+                                additionalProperties: true
+                                type: object
+                              type: array
+                            bars_count:
+                              type: integer
+                            end_at:
+                              format: date-time
+                              type:
+                              - string
+                              - 'null'
+                            match:
+                              properties:
+                                level:
+                                  enum:
+                                  - sure
+                                  - likely
+                                  - weak
+                                  type: string
+                                reverse:
+                                  type: boolean
+                                score:
+                                  type: number
+                              type:
+                              - object
+                              - 'null'
+                            start_at:
+                              format: date-time
+                              type:
+                              - string
+                              - 'null'
+                          required:
+                          - bars
+                          - bars_count
+                          type: object
+                        score:
+                          type:
+                          - string
+                          - 'null'
+                        search_run_id:
+                          format: uuid
+                          type:
+                          - string
+                          - 'null'
+                        source:
+                          type: string
+                        start_at:
+                          format: date-time
+                          type: string
+                        symbol:
+                          type: string
+                      required:
+                      - attachment_id
+                      - symbol
+                      - market
+                      - interval
+                      - start_at
+                      - end_at
+                      - source
+                      type: object
+                    - properties:
+                        deleted:
+                          const: true
+                      required:
+                      - deleted
+                      type: object
+                    - properties:
+                        expired:
+                          const: true
+                      required:
+                      - expired
+                      type: object
+                  meta:
+                    properties:
+                      api_version:
+                        const: v1
+                    required:
+                    - api_version
+                    type: object
+                required:
+                - data
+                - meta
+                type: object
+          description: Success
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+        '409':
+          description: Idempotency or revision conflict
+        '422':
+          description: Invalid input
+      x-required-permission: records.write
+  "/v1/backups":
     get:
       operationId: get__v1_backups
       parameters: []
@@ -3310,7 +3710,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/backups/configurations:
+  "/v1/backups/configurations":
     post:
       operationId: post__v1_backups_configurations
       parameters:
@@ -3324,7 +3724,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BackupConfiguration'
+              "$ref": "#/components/schemas/BackupConfiguration"
         required: true
       responses:
         '200':
@@ -3373,7 +3773,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/backups/configurations/{id}/initialize:
+  "/v1/backups/configurations/{id}/initialize":
     post:
       operationId: post__v1_backups_configurations__id__initialize
       parameters:
@@ -3387,7 +3787,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BackupInitialize'
+              "$ref": "#/components/schemas/BackupInitialize"
         required: true
       responses:
         '200':
@@ -3436,7 +3836,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/backups/configurations/{id}/runs:
+  "/v1/backups/configurations/{id}/runs":
     post:
       operationId: post__v1_backups_configurations__id__runs
       parameters:
@@ -3499,7 +3899,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/baseline-runs:
+  "/v1/baseline-runs":
     post:
       operationId: post__v1_baseline-runs
       parameters:
@@ -3513,7 +3913,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BaselineInput'
+              "$ref": "#/components/schemas/BaselineInput"
         required: true
       responses:
         '200':
@@ -3574,7 +3974,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/baseline-runs/{id}:
+  "/v1/baseline-runs/{id}":
     get:
       operationId: get__v1_baseline-runs__id_
       parameters:
@@ -3653,7 +4053,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/baseline-runs/{id}/samples:
+  "/v1/baseline-runs/{id}/samples":
     get:
       operationId: get__v1_baseline-runs__id__samples
       parameters:
@@ -3748,7 +4148,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/calls:
+  "/v1/calls":
     get:
       operationId: get__v1_calls
       parameters:
@@ -3870,7 +4270,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateCall'
+              "$ref": "#/components/schemas/CreateCall"
         required: true
       responses:
         '200':
@@ -3919,7 +4319,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/preview:
+  "/v1/calls/preview":
     post:
       operationId: post__v1_calls_preview
       parameters: []
@@ -3927,7 +4327,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TextInput'
+              "$ref": "#/components/schemas/TextInput"
         required: true
       responses:
         '200':
@@ -3976,7 +4376,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.compute
-  /v1/calls/{id}:
+  "/v1/calls/{id}":
     get:
       operationId: get__v1_calls__id_
       parameters:
@@ -4033,7 +4433,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/calls/{id}/attachments:
+  "/v1/calls/{id}/attachments":
     post:
       operationId: post__v1_calls__id__attachments
       parameters:
@@ -4053,7 +4453,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AttachmentLink'
+              "$ref": "#/components/schemas/AttachmentLink"
         required: true
       responses:
         '200':
@@ -4102,7 +4502,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/chart-setup:
+  "/v1/calls/{id}/chart-setup":
     put:
       operationId: put__v1_calls__id__chart-setup
       parameters:
@@ -4116,7 +4516,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChartSetup'
+              "$ref": "#/components/schemas/ChartSetup"
         required: true
       responses:
         '200':
@@ -4175,7 +4575,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/corrections:
+  "/v1/calls/{id}/corrections":
     post:
       operationId: post__v1_calls__id__corrections
       parameters:
@@ -4195,7 +4595,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Correction'
+              "$ref": "#/components/schemas/Correction"
         required: true
       responses:
         '200':
@@ -4244,7 +4644,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/history:
+  "/v1/calls/{id}/history":
     get:
       operationId: get__v1_calls__id__history
       parameters:
@@ -4323,7 +4723,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/calls/{id}/outcome-revisions:
+  "/v1/calls/{id}/outcome-revisions":
     post:
       operationId: post__v1_calls__id__outcome-revisions
       parameters:
@@ -4343,7 +4743,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RevisionRequest'
+              "$ref": "#/components/schemas/RevisionRequest"
         required: true
       responses:
         '200':
@@ -4392,7 +4792,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/replay:
+  "/v1/calls/{id}/replay":
     delete:
       operationId: delete__v1_calls__id__replay
       parameters:
@@ -4494,7 +4894,7 @@ paths:
                           - at
                           type: object
                         levels:
-                          $ref: '#/components/schemas/Levels'
+                          "$ref": "#/components/schemas/Levels"
                         locating:
                           properties:
                             job_id:
@@ -4533,6 +4933,69 @@ paths:
                           type: string
                         symbol:
                           type: string
+                        tracks:
+                          items:
+                            additionalProperties: true
+                            properties:
+                              attachment_id:
+                                format: uuid
+                                type:
+                                - string
+                                - 'null'
+                              bars:
+                                items:
+                                  additionalProperties: true
+                                  type: object
+                                type: array
+                              bars_included:
+                                type: boolean
+                              interval:
+                                type: string
+                              kind:
+                                type:
+                                - string
+                                - 'null'
+                              market:
+                                type: string
+                              matched_by:
+                                description: auto | user
+                                type:
+                                - string
+                                - 'null'
+                              primary:
+                                type: boolean
+                              source:
+                                type: string
+                              symbol:
+                                type: string
+                              window:
+                                additionalProperties: true
+                                properties:
+                                  bars_before:
+                                    type: integer
+                                  coverage_complete:
+                                    type: boolean
+                                  end_at:
+                                    format: date-time
+                                    type: string
+                                  start_at:
+                                    format: date-time
+                                    type: string
+                                  truncated:
+                                    type: boolean
+                                required:
+                                - start_at
+                                - end_at
+                                type: object
+                            required:
+                            - primary
+                            - symbol
+                            - market
+                            - interval
+                            - window
+                            - bars_included
+                            type: object
+                          type: array
                         window:
                           additionalProperties: true
                           properties:
@@ -4561,6 +5024,7 @@ paths:
                       - window
                       - judgment
                       - levels
+                      - tracks
                       - bars
                       - bars_included
                       - storage_policy
@@ -4598,7 +5062,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/calls/{id}/replays:
+  "/v1/calls/{id}/replays":
     post:
       operationId: post__v1_calls__id__replays
       parameters:
@@ -4618,7 +5082,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EvaluationInput'
+              "$ref": "#/components/schemas/EvaluationInput"
         required: true
       responses:
         '200':
@@ -4667,7 +5131,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/review-draft:
+  "/v1/calls/{id}/review-draft":
     get:
       operationId: get__v1_calls__id__review-draft
       parameters:
@@ -4743,7 +5207,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/DraftInput'
+              "$ref": "#/components/schemas/DraftInput"
         required: true
       responses:
         '200':
@@ -4792,7 +5256,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/review-draft/discard:
+  "/v1/calls/{id}/review-draft/discard":
     post:
       operationId: post__v1_calls__id__review-draft_discard
       parameters:
@@ -4812,7 +5276,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/DiscardDraft'
+              "$ref": "#/components/schemas/DiscardDraft"
         required: true
       responses:
         '200':
@@ -4861,7 +5325,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/review-draft/publish:
+  "/v1/calls/{id}/review-draft/publish":
     post:
       operationId: post__v1_calls__id__review-draft_publish
       parameters:
@@ -4881,7 +5345,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PublishDraft'
+              "$ref": "#/components/schemas/PublishDraft"
         required: true
       responses:
         '200':
@@ -4930,7 +5394,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/review-reminder:
+  "/v1/calls/{id}/review-reminder":
     post:
       operationId: post__v1_calls__id__review-reminder
       parameters:
@@ -4950,7 +5414,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SnoozeInput'
+              "$ref": "#/components/schemas/SnoozeInput"
         required: true
       responses:
         '200':
@@ -4999,7 +5463,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/revisions:
+  "/v1/calls/{id}/revisions":
     post:
       operationId: post__v1_calls__id__revisions
       parameters:
@@ -5019,7 +5483,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateCall'
+              "$ref": "#/components/schemas/CreateCall"
         required: true
       responses:
         '200':
@@ -5068,7 +5532,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/scene:
+  "/v1/calls/{id}/scene":
     put:
       operationId: put__v1_calls__id__scene
       parameters:
@@ -5082,7 +5546,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SceneSelection'
+              "$ref": "#/components/schemas/SceneSelection"
         required: true
       responses:
         '200':
@@ -5152,7 +5616,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/calls/{id}/void:
+  "/v1/calls/{id}/void":
     post:
       operationId: post__v1_calls__id__void
       parameters:
@@ -5172,7 +5636,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Change'
+              "$ref": "#/components/schemas/Change"
         required: true
       responses:
         '200':
@@ -5221,7 +5685,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/capabilities:
+  "/v1/capabilities":
     get:
       operationId: get__v1_capabilities
       parameters: []
@@ -5290,7 +5754,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/chart-analyses:
+  "/v1/chart-analyses":
     post:
       operationId: post__v1_chart-analyses
       parameters:
@@ -5304,7 +5768,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChartAnalysisInput'
+              "$ref": "#/components/schemas/ChartAnalysisInput"
         required: true
       responses:
         '200':
@@ -5322,7 +5786,7 @@ paths:
                         chart_type:
                           type: string
                         geometry:
-                          $ref: '#/components/schemas/GeometryQuality'
+                          "$ref": "#/components/schemas/GeometryQuality"
                         id:
                           format: uuid
                           type: string
@@ -5377,7 +5841,97 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/chart-search/runs:
+  "/v1/chart-analyses/outline":
+    post:
+      operationId: post__v1_chart-analyses_outline
+      parameters:
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          maxLength: 128
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/ChartAnalysisInput"
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                properties:
+                  data:
+                    anyOf:
+                    - additionalProperties: true
+                      properties:
+                        attachment_id:
+                          format: uuid
+                          type: string
+                        interval:
+                          type:
+                          - string
+                          - 'null'
+                        source:
+                          const: screenshot_contour
+                        storage_policy:
+                          const: ephemeral
+                        symbol:
+                          type:
+                          - string
+                          - 'null'
+                        values:
+                          items:
+                            maximum: 1
+                            minimum: 0
+                            type: number
+                          maxItems: 2000
+                          minItems: 16
+                          type: array
+                      required:
+                      - attachment_id
+                      - source
+                      - symbol
+                      - interval
+                      - values
+                      - storage_policy
+                      type: object
+                    - properties:
+                        deleted:
+                          const: true
+                      required:
+                      - deleted
+                      type: object
+                    - properties:
+                        expired:
+                          const: true
+                      required:
+                      - expired
+                      type: object
+                  meta:
+                    properties:
+                      api_version:
+                        const: v1
+                    required:
+                    - api_version
+                    type: object
+                required:
+                - data
+                - meta
+                type: object
+          description: Success
+        '401':
+          description: Authentication required
+        '404':
+          description: Not found for authenticated owner
+        '409':
+          description: Idempotency or revision conflict
+        '422':
+          description: Invalid input
+      x-required-permission: search.compute
+  "/v1/chart-search/runs":
     post:
       operationId: post__v1_chart-search_runs
       parameters:
@@ -5391,7 +5945,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChartSearchInput'
+              "$ref": "#/components/schemas/ChartSearchInput"
         required: true
       responses:
         '200':
@@ -5452,7 +6006,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/chart-search/runs/{id}:
+  "/v1/chart-search/runs/{id}":
     get:
       operationId: get__v1_chart-search_runs__id_
       parameters:
@@ -5488,6 +6042,60 @@ paths:
                           format: uuid
                           type: string
                         result:
+                          additionalProperties: true
+                          properties:
+                            items:
+                              items:
+                                additionalProperties: true
+                                properties:
+                                  bars_count:
+                                    type: integer
+                                  end_at:
+                                    format: date-time
+                                    type: string
+                                  interval:
+                                    type: string
+                                  market:
+                                    type: string
+                                  match:
+                                    properties:
+                                      direction_consistent:
+                                        type: boolean
+                                      level:
+                                        enum:
+                                        - sure
+                                        - likely
+                                        - weak
+                                        -
+                                        type:
+                                        - string
+                                        - 'null'
+                                      rarity:
+                                        type:
+                                        - number
+                                        - 'null'
+                                      reverse:
+                                        type: boolean
+                                      score:
+                                        type: number
+                                    type: object
+                                  start_at:
+                                    format: date-time
+                                    type: string
+                                  symbol:
+                                    type: string
+                                required:
+                                - match
+                                type: object
+                              type: array
+                            status:
+                              type: string
+                            verdict:
+                              enum:
+                              - found
+                              - weak
+                              - none
+                              type: string
                           type:
                           - object
                           - 'null'
@@ -5531,7 +6139,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/chart-search/runs/{id}/cancel:
+  "/v1/chart-search/runs/{id}/cancel":
     post:
       operationId: post__v1_chart-search_runs__id__cancel
       parameters:
@@ -5551,7 +6159,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SearchRunControl'
+              "$ref": "#/components/schemas/SearchRunControl"
         required: true
       responses:
         '200':
@@ -5612,7 +6220,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/chat/runs:
+  "/v1/chat/runs":
     post:
       operationId: post__v1_chat_runs
       parameters:
@@ -5626,7 +6234,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChatInput'
+              "$ref": "#/components/schemas/ChatInput"
         required: true
       responses:
         '200':
@@ -5687,7 +6295,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/chat/runs/{id}:
+  "/v1/chat/runs/{id}":
     get:
       operationId: get__v1_chat_runs__id_
       parameters:
@@ -5709,7 +6317,7 @@ paths:
                       properties:
                         answer:
                           items:
-                            $ref: '#/components/schemas/AnswerBlock'
+                            "$ref": "#/components/schemas/AnswerBlock"
                           type:
                           - array
                           - 'null'
@@ -5772,7 +6380,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/chat/runs/{id}/cancel:
+  "/v1/chat/runs/{id}/cancel":
     post:
       operationId: post__v1_chat_runs__id__cancel
       parameters:
@@ -5792,7 +6400,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChatCancel'
+              "$ref": "#/components/schemas/ChatCancel"
         required: true
       responses:
         '200':
@@ -5853,7 +6461,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/chat/runs/{id}/events:
+  "/v1/chat/runs/{id}/events":
     get:
       operationId: get__v1_chat_runs__id__events
       parameters:
@@ -5895,7 +6503,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/chat/runs/{id}/events/page:
+  "/v1/chat/runs/{id}/events/page":
     get:
       operationId: get__v1_chat_runs__id__events_page
       parameters:
@@ -5980,7 +6588,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/criteria:
+  "/v1/criteria":
     get:
       operationId: get__v1_criteria
       parameters: []
@@ -6031,7 +6639,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/deletions:
+  "/v1/deletions":
     post:
       operationId: post__v1_deletions
       parameters:
@@ -6045,7 +6653,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/DeleteConfirm'
+              "$ref": "#/components/schemas/DeleteConfirm"
         required: true
       responses:
         '200':
@@ -6094,7 +6702,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/deletions/preview:
+  "/v1/deletions/preview":
     post:
       operationId: post__v1_deletions_preview
       parameters: []
@@ -6102,7 +6710,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/DeletePreview'
+              "$ref": "#/components/schemas/DeletePreview"
         required: true
       responses:
         '200':
@@ -6151,7 +6759,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/episode-links:
+  "/v1/episode-links":
     post:
       operationId: post__v1_episode-links
       parameters:
@@ -6165,7 +6773,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EpisodeLink'
+              "$ref": "#/components/schemas/EpisodeLink"
         required: true
       responses:
         '200':
@@ -6214,7 +6822,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/episodes:
+  "/v1/episodes":
     get:
       operationId: get__v1_episodes
       parameters: []
@@ -6265,7 +6873,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/episodes/{id}:
+  "/v1/episodes/{id}":
     get:
       operationId: get__v1_episodes__id_
       parameters:
@@ -6322,7 +6930,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/episodes/{id}/review-context:
+  "/v1/episodes/{id}/review-context":
     get:
       operationId: get__v1_episodes__id__review-context
       parameters:
@@ -6379,7 +6987,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/episodes/{id}/reviews:
+  "/v1/episodes/{id}/reviews":
     post:
       operationId: post__v1_episodes__id__reviews
       parameters:
@@ -6399,7 +7007,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EpisodeReview'
+              "$ref": "#/components/schemas/EpisodeReview"
         required: true
       responses:
         '200':
@@ -6448,7 +7056,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/evaluations/preview:
+  "/v1/evaluations/preview":
     post:
       operationId: post__v1_evaluations_preview
       parameters: []
@@ -6456,7 +7064,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EvaluationInput'
+              "$ref": "#/components/schemas/EvaluationInput"
         required: true
       responses:
         '200':
@@ -6505,7 +7113,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.compute
-  /v1/events:
+  "/v1/events":
     get:
       operationId: get__v1_events
       parameters: []
@@ -6556,7 +7164,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/exchange-connections:
+  "/v1/exchange-connections":
     get:
       operationId: get__v1_exchange-connections
       parameters:
@@ -6644,7 +7252,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExchangeConnectionInput'
+              "$ref": "#/components/schemas/ExchangeConnectionInput"
         required: true
       responses:
         '200':
@@ -6695,7 +7303,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/exchange-connections/{id}/control:
+  "/v1/exchange-connections/{id}/control":
     post:
       operationId: post__v1_exchange-connections__id__control
       parameters:
@@ -6715,7 +7323,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ConnectionControl'
+              "$ref": "#/components/schemas/ConnectionControl"
         required: true
       responses:
         '200':
@@ -6764,7 +7372,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/exchange-exports:
+  "/v1/exchange-exports":
     post:
       operationId: post__v1_exchange-exports
       parameters:
@@ -6778,7 +7386,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExchangeExportInput'
+              "$ref": "#/components/schemas/ExchangeExportInput"
         required: true
       responses:
         '200':
@@ -6839,7 +7447,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/exchange-exports/{id}:
+  "/v1/exchange-exports/{id}":
     get:
       operationId: get__v1_exchange-exports__id_
       parameters:
@@ -6918,7 +7526,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/exchange-exports/{id}/mapping:
+  "/v1/exchange-exports/{id}/mapping":
     post:
       operationId: post__v1_exchange-exports__id__mapping
       parameters:
@@ -6938,7 +7546,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExportMappingUpdate'
+              "$ref": "#/components/schemas/ExportMappingUpdate"
         required: true
       responses:
         '200':
@@ -6987,7 +7595,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/exchange-exports/{id}/resolve:
+  "/v1/exchange-exports/{id}/resolve":
     post:
       operationId: post__v1_exchange-exports__id__resolve
       parameters:
@@ -7007,7 +7615,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExportResolve'
+              "$ref": "#/components/schemas/ExportResolve"
         required: true
       responses:
         '200':
@@ -7056,7 +7664,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/exchange-syncs:
+  "/v1/exchange-syncs":
     post:
       operationId: post__v1_exchange-syncs
       parameters:
@@ -7070,7 +7678,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExchangeSyncInput'
+              "$ref": "#/components/schemas/ExchangeSyncInput"
         required: true
       responses:
         '200':
@@ -7131,7 +7739,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/exchange-syncs/{id}:
+  "/v1/exchange-syncs/{id}":
     get:
       operationId: get__v1_exchange-syncs__id_
       parameters:
@@ -7210,7 +7818,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/execution-links:
+  "/v1/execution-links":
     post:
       operationId: post__v1_execution-links
       parameters:
@@ -7224,7 +7832,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExecutionLinkInput'
+              "$ref": "#/components/schemas/ExecutionLinkInput"
         required: true
       responses:
         '200':
@@ -7273,7 +7881,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/exports:
+  "/v1/exports":
     post:
       operationId: post__v1_exports
       parameters:
@@ -7330,7 +7938,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/exports/{id}/files/{name}:
+  "/v1/exports/{id}/files/{name}":
     get:
       operationId: get__v1_exports__id__files__name_
       parameters:
@@ -7363,7 +7971,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/exports/{id}/manifest:
+  "/v1/exports/{id}/manifest":
     get:
       operationId: get__v1_exports__id__manifest
       parameters:
@@ -7420,7 +8028,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/health:
+  "/v1/health":
     get:
       operationId: get__v1_health
       parameters: []
@@ -7472,7 +8080,7 @@ paths:
           description: Invalid input
       security: []
       x-required-permission: knowledge.read
-  /v1/history/archive-catalog:
+  "/v1/history/archive-catalog":
     post:
       operationId: post__v1_history_archive-catalog
       parameters:
@@ -7486,7 +8094,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ArchiveCatalogInput'
+              "$ref": "#/components/schemas/ArchiveCatalogInput"
         required: true
       responses:
         '200':
@@ -7535,7 +8143,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/catalog:
+  "/v1/history/catalog":
     get:
       operationId: get__v1_history_catalog
       parameters:
@@ -7616,7 +8224,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/history/catalog/refresh:
+  "/v1/history/catalog/refresh":
     post:
       operationId: post__v1_history_catalog_refresh
       parameters:
@@ -7673,7 +8281,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/coverage:
+  "/v1/history/coverage":
     get:
       operationId: get__v1_history_coverage
       parameters:
@@ -7768,7 +8376,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/history/indexes:
+  "/v1/history/indexes":
     get:
       operationId: get__v1_history_indexes
       parameters: []
@@ -7832,7 +8440,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HistoryIndexRequest'
+              "$ref": "#/components/schemas/HistoryIndexRequest"
         required: true
       responses:
         '200':
@@ -7881,7 +8489,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/indexes/{id}/revalidate:
+  "/v1/history/indexes/{id}/revalidate":
     post:
       operationId: post__v1_history_indexes__id__revalidate
       parameters:
@@ -7944,7 +8552,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/plans:
+  "/v1/history/plans":
     post:
       operationId: post__v1_history_plans
       parameters:
@@ -7958,7 +8566,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HistoryPlanRequest'
+              "$ref": "#/components/schemas/HistoryPlanRequest"
         required: true
       responses:
         '200':
@@ -8019,7 +8627,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/plans/estimate:
+  "/v1/history/plans/estimate":
     post:
       operationId: post__v1_history_plans_estimate
       parameters:
@@ -8033,7 +8641,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HistoryEstimateInput'
+              "$ref": "#/components/schemas/HistoryEstimateInput"
         required: true
       responses:
         '200':
@@ -8104,7 +8712,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/plans/{id}:
+  "/v1/history/plans/{id}":
     get:
       operationId: get__v1_history_plans__id_
       parameters:
@@ -8183,7 +8791,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/history/plans/{id}/control:
+  "/v1/history/plans/{id}/control":
     post:
       operationId: post__v1_history_plans__id__control
       parameters:
@@ -8203,7 +8811,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanControl'
+              "$ref": "#/components/schemas/PlanControl"
         required: true
       responses:
         '200':
@@ -8264,7 +8872,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/search:
+  "/v1/history/search":
     post:
       operationId: post__v1_history_search
       parameters:
@@ -8278,7 +8886,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HistorySearch'
+              "$ref": "#/components/schemas/HistorySearch"
         required: true
       responses:
         '200':
@@ -8327,7 +8935,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/history/subscriptions:
+  "/v1/history/subscriptions":
     post:
       operationId: post__v1_history_subscriptions
       parameters:
@@ -8341,7 +8949,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HistorySubscriptionInput'
+              "$ref": "#/components/schemas/HistorySubscriptionInput"
         required: true
       responses:
         '200':
@@ -8402,7 +9010,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/subscriptions/{id}:
+  "/v1/history/subscriptions/{id}":
     get:
       operationId: get__v1_history_subscriptions__id_
       parameters:
@@ -8481,7 +9089,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/history/subscriptions/{id}/budget:
+  "/v1/history/subscriptions/{id}/budget":
     post:
       operationId: post__v1_history_subscriptions__id__budget
       parameters:
@@ -8501,7 +9109,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SubscriptionBudget'
+              "$ref": "#/components/schemas/SubscriptionBudget"
         required: true
       responses:
         '200':
@@ -8562,7 +9170,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/history/subscriptions/{id}/control:
+  "/v1/history/subscriptions/{id}/control":
     post:
       operationId: post__v1_history_subscriptions__id__control
       parameters:
@@ -8582,7 +9190,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanControl'
+              "$ref": "#/components/schemas/PlanControl"
         required: true
       responses:
         '200':
@@ -8643,7 +9251,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: history.build
-  /v1/images/index:
+  "/v1/images/index":
     get:
       operationId: get__v1_images_index
       parameters: []
@@ -8750,7 +9358,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/imports:
+  "/v1/imports":
     get:
       operationId: get__v1_imports
       parameters:
@@ -8838,7 +9446,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TradeImportInput'
+              "$ref": "#/components/schemas/TradeImportInput"
         required: true
       responses:
         '200':
@@ -8887,7 +9495,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/imports/csv:
+  "/v1/imports/csv":
     post:
       operationId: post__v1_imports_csv
       parameters:
@@ -8901,7 +9509,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CsvImportInput'
+              "$ref": "#/components/schemas/CsvImportInput"
         required: true
       responses:
         '200':
@@ -8950,7 +9558,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/imports/{id}:
+  "/v1/imports/{id}":
     get:
       operationId: get__v1_imports__id_
       parameters:
@@ -9007,7 +9615,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/instruments:
+  "/v1/instruments":
     get:
       operationId: get__v1_instruments
       parameters: []
@@ -9058,7 +9666,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/jobs/{id}:
+  "/v1/jobs/{id}":
     get:
       operationId: get__v1_jobs__id_
       parameters:
@@ -9115,7 +9723,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/jobs/{id}/assessment-source:
+  "/v1/jobs/{id}/assessment-source":
     post:
       operationId: post__v1_jobs__id__assessment-source
       parameters:
@@ -9135,7 +9743,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AssessmentSourcePlan'
+              "$ref": "#/components/schemas/AssessmentSourcePlan"
         required: true
       responses:
         '200':
@@ -9184,7 +9792,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/jobs/{id}/retry:
+  "/v1/jobs/{id}/retry":
     post:
       operationId: post__v1_jobs__id__retry
       parameters:
@@ -9204,7 +9812,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RetryRequest'
+              "$ref": "#/components/schemas/RetryRequest"
         required: true
       responses:
         '200':
@@ -9253,7 +9861,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: maintenance
-  /v1/knowledge/index:
+  "/v1/knowledge/index":
     get:
       operationId: get__v1_knowledge_index
       parameters: []
@@ -9374,7 +9982,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/knowledge/search:
+  "/v1/knowledge/search":
     post:
       operationId: post__v1_knowledge_search
       parameters: []
@@ -9382,7 +9990,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/KnowledgeSearch'
+              "$ref": "#/components/schemas/KnowledgeSearch"
         required: true
       responses:
         '200':
@@ -9468,7 +10076,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/knowledge/source:
+  "/v1/knowledge/source":
     post:
       operationId: post__v1_knowledge_source
       parameters: []
@@ -9476,7 +10084,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SourceRequest'
+              "$ref": "#/components/schemas/SourceRequest"
         required: true
       responses:
         '200':
@@ -9542,7 +10150,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/knowledge/source/slice:
+  "/v1/knowledge/source/slice":
     post:
       operationId: post__v1_knowledge_source_slice
       parameters: []
@@ -9550,7 +10158,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SourceSliceRequest'
+              "$ref": "#/components/schemas/SourceSliceRequest"
         required: true
       responses:
         '200':
@@ -9627,7 +10235,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/knowledge/tools:
+  "/v1/knowledge/tools":
     get:
       operationId: get__v1_knowledge_tools
       parameters: []
@@ -9678,7 +10286,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/knowledge/tools/call:
+  "/v1/knowledge/tools/call":
     post:
       operationId: post__v1_knowledge_tools_call
       parameters: []
@@ -9686,7 +10294,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ToolCall'
+              "$ref": "#/components/schemas/ToolCall"
         required: true
       responses:
         '200':
@@ -9735,7 +10343,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/market/chart:
+  "/v1/market/chart":
     post:
       operationId: post__v1_market_chart
       parameters: []
@@ -9743,7 +10351,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChartRequest'
+              "$ref": "#/components/schemas/ChartRequest"
         required: true
       responses:
         '200':
@@ -9761,7 +10369,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.compute
-  /v1/market/data:
+  "/v1/market/data":
     post:
       operationId: post__v1_market_data
       parameters: []
@@ -9769,7 +10377,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChartRequest'
+              "$ref": "#/components/schemas/ChartRequest"
         required: true
       responses:
         '200':
@@ -9818,7 +10426,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.compute
-  /v1/playbooks:
+  "/v1/playbooks":
     get:
       operationId: get__v1_playbooks
       parameters: []
@@ -9882,7 +10490,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlaybookInput'
+              "$ref": "#/components/schemas/PlaybookInput"
         required: true
       responses:
         '200':
@@ -9931,7 +10539,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/playbooks/{id}/transitions:
+  "/v1/playbooks/{id}/transitions":
     post:
       operationId: post__v1_playbooks__id__transitions
       parameters:
@@ -9951,7 +10559,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlaybookTransition'
+              "$ref": "#/components/schemas/PlaybookTransition"
         required: true
       responses:
         '200':
@@ -10000,7 +10608,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/position-seeds:
+  "/v1/position-seeds":
     post:
       operationId: post__v1_position-seeds
       parameters:
@@ -10014,7 +10622,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PositionSeedInput'
+              "$ref": "#/components/schemas/PositionSeedInput"
         required: true
       responses:
         '200':
@@ -10063,7 +10671,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/ready:
+  "/v1/ready":
     get:
       operationId: get__v1_ready
       parameters: []
@@ -10115,7 +10723,7 @@ paths:
           description: Invalid input
       security: []
       x-required-permission: knowledge.read
-  /v1/reconciliations:
+  "/v1/reconciliations":
     post:
       operationId: post__v1_reconciliations
       parameters:
@@ -10129,7 +10737,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ReconciliationInput'
+              "$ref": "#/components/schemas/ReconciliationInput"
         required: true
       responses:
         '200':
@@ -10178,7 +10786,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/review-queue:
+  "/v1/review-queue":
     get:
       operationId: get__v1_review-queue
       parameters:
@@ -10251,7 +10859,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/reviews:
+  "/v1/reviews":
     post:
       operationId: post__v1_reviews
       parameters:
@@ -10265,7 +10873,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Review'
+              "$ref": "#/components/schemas/Review"
         required: true
       responses:
         '200':
@@ -10314,7 +10922,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/search:
+  "/v1/search":
     get:
       operationId: get__v1_search
       parameters:
@@ -10423,7 +11031,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/sessions:
+  "/v1/sessions":
     post:
       operationId: post__v1_sessions
       parameters: []
@@ -10431,7 +11039,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SessionInput'
+              "$ref": "#/components/schemas/SessionInput"
         required: true
       responses:
         '200':
@@ -10480,7 +11088,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/sessions/{id}/revoke:
+  "/v1/sessions/{id}/revoke":
     post:
       operationId: post__v1_sessions__id__revoke
       parameters:
@@ -10537,7 +11145,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/sets/resolve:
+  "/v1/sets/resolve":
     post:
       operationId: post__v1_sets_resolve
       parameters:
@@ -10551,7 +11159,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SetInput'
+              "$ref": "#/components/schemas/SetInput"
         required: true
       responses:
         '200':
@@ -10600,7 +11208,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/sets/{id}:
+  "/v1/sets/{id}":
     get:
       operationId: get__v1_sets__id_
       parameters:
@@ -10657,7 +11265,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/similarity/feedback:
+  "/v1/similarity/feedback":
     post:
       operationId: post__v1_similarity_feedback
       parameters:
@@ -10671,7 +11279,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SimilarityFeedback'
+              "$ref": "#/components/schemas/SimilarityFeedback"
         required: true
       responses:
         '200':
@@ -10720,7 +11328,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/similarity/search:
+  "/v1/similarity/search":
     post:
       operationId: post__v1_similarity_search
       parameters:
@@ -10734,7 +11342,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SimilarityQuery'
+              "$ref": "#/components/schemas/SimilarityQuery"
         required: true
       responses:
         '200':
@@ -10783,7 +11391,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/similarity/sessions/{id}:
+  "/v1/similarity/sessions/{id}":
     get:
       operationId: get__v1_similarity_sessions__id_
       parameters:
@@ -10840,7 +11448,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/similarity/sessions/{id}/save:
+  "/v1/similarity/sessions/{id}/save":
     post:
       operationId: post__v1_similarity_sessions__id__save
       parameters:
@@ -10903,7 +11511,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: search.save
-  /v1/statistics/runs:
+  "/v1/statistics/runs":
     post:
       operationId: post__v1_statistics_runs
       parameters:
@@ -10917,7 +11525,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/StatisticsInput'
+              "$ref": "#/components/schemas/StatisticsInput"
         required: true
       responses:
         '200':
@@ -10978,7 +11586,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/statistics/runs/{id}:
+  "/v1/statistics/runs/{id}":
     get:
       operationId: get__v1_statistics_runs__id_
       parameters:
@@ -11057,7 +11665,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/statistics/runs/{id}/groups:
+  "/v1/statistics/runs/{id}/groups":
     get:
       operationId: get__v1_statistics_runs__id__groups
       parameters:
@@ -11130,7 +11738,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/statistics/runs/{id}/members:
+  "/v1/statistics/runs/{id}/members":
     get:
       operationId: get__v1_statistics_runs__id__members
       parameters:
@@ -11225,7 +11833,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/tags:
+  "/v1/tags":
     get:
       operationId: get__v1_tags
       parameters: []
@@ -11289,7 +11897,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TagInput'
+              "$ref": "#/components/schemas/TagInput"
         required: true
       responses:
         '200':
@@ -11338,7 +11946,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/tags/links:
+  "/v1/tags/links":
     post:
       operationId: post__v1_tags_links
       parameters:
@@ -11352,7 +11960,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TagLink'
+              "$ref": "#/components/schemas/TagLink"
         required: true
       responses:
         '200':
@@ -11401,7 +12009,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/tags/{id}/revisions:
+  "/v1/tags/{id}/revisions":
     post:
       operationId: post__v1_tags__id__revisions
       parameters:
@@ -11421,7 +12029,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TagRevision'
+              "$ref": "#/components/schemas/TagRevision"
         required: true
       responses:
         '200':
@@ -11470,7 +12078,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: records.write
-  /v1/trade-cycles:
+  "/v1/trade-cycles":
     get:
       operationId: get__v1_trade-cycles
       parameters:
@@ -11582,7 +12190,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/trade-cycles/{id}:
+  "/v1/trade-cycles/{id}":
     get:
       operationId: get__v1_trade-cycles__id_
       parameters:
@@ -11680,7 +12288,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/trades:
+  "/v1/trades":
     get:
       operationId: get__v1_trades
       parameters:
@@ -11792,7 +12400,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/verdict-requests:
+  "/v1/verdict-requests":
     get:
       operationId: get__v1_verdict-requests
       parameters:
@@ -11867,7 +12475,7 @@ paths:
         '422':
           description: Invalid input
       x-required-permission: knowledge.read
-  /v1/verdicts:
+  "/v1/verdicts":
     post:
       operationId: post__v1_verdicts
       parameters:
@@ -11881,7 +12489,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/VerdictInput'
+              "$ref": "#/components/schemas/VerdictInput"
         required: true
       responses:
         '200':

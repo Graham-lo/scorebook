@@ -21,7 +21,11 @@ const SINE = new Uint32Array(64)
 for (let i = 0; i < 64; i += 1) SINE[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296)
 
 export function md5Hex(text: string): string {
-  const bytes = new TextEncoder().encode(text)
+  return md5Bytes(new TextEncoder().encode(text))
+}
+
+/** Non-security fingerprint; uploads still use server SHA-256 for authoritative identity. */
+export function md5Bytes(bytes: Uint8Array): string {
   const size = bytes.length
   const blocks = ((size + 8) >> 6) + 1
   const padded = new Uint8Array(blocks * 64)

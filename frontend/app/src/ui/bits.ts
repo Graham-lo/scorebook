@@ -10,14 +10,14 @@ import { h, highlight } from './dom'
 import { icon } from './icons'
 import { attachmentImage } from './media'
 
+/** 方向就写成字：看多 / 看空 / 观望。L 和 S 是后端的写法，不给人看。 */
 export function stanceBadge(stance: Stance | null | undefined, soft = false): HTMLElement {
   if (!stance || stance === 'unknown') {
-    return h('span.stance.soft', { title: '没写方向', text: '·' })
+    return h('span.stance.soft', { text: STANCES.unknown })
   }
   return h('span', {
-    class: ['stance', stance === 'L' ? 'L' : '', soft ? 'soft' : ''],
-    title: STANCES[stance] ?? stance,
-    text: stance,
+    class: ['stance', stance === 'L' ? 'L' : '', stance === 'S' ? 'S' : '', soft ? 'soft' : ''],
+    text: STANCES[stance] ?? stance,
   })
 }
 
@@ -28,7 +28,7 @@ export function stamp(state: OutcomeState, large = false): HTMLElement {
 
 /** Shown while the record's outcome is still being read from the server. */
 export function stampPlaceholder(): HTMLElement {
-  return h('span.stamp.flat', { text: '读取中' })
+  return h('span.stamp.flat', { text: '正在加载' })
 }
 
 export function critHL(criteria: Criteria | null): HTMLElement {
@@ -54,7 +54,8 @@ export function dateColumn(iso: string): HTMLElement {
  */
 export function thumb(id: Uuid | null, alt: string, extra = ''): HTMLElement {
   if (!id) {
-    return h('div', { class: ['thumb', 'none', extra] }, '没有现场图')
+    // 没图就是一格空位，不写字——列表里一行没有图是常事，不需要解释。
+    return h('div', { class: ['thumb', 'none', extra] })
   }
   // 92×64 的一格，按显示尺寸解一张小的就够；完整的那张在记录详情里看。
   return attachmentImage(id, { alt, className: `thumb ${extra}`.trim(), maxWidth: 200 })
@@ -98,16 +99,19 @@ export function button(
   return node
 }
 
-/** Identity of a picture: the field traders must never have to guess. */
-export const ATTACHMENT_IDENTITY: Record<string, { label: string; tip: string }> = {
-  // 「原图 / 补图」被误解过：原图听起来像「没压缩的那张」，补图听起来像「补拍的同一张」。
-  // 这两张的区别其实只有一个——拍下来的是哪个时间点，所以就照时间叫。
-  scene: { label: '当时', tip: '你记录判断那一刻传的截图，原样保留，没有被改过。' },
-  supplement: { label: '后来', tip: '复盘时补上的后续走势，不是你当时看到的画面。' },
-  reference: { label: '参考图', tip: '附带的参考材料，不是当时的现场。' },
-  query: { label: '查询图', tip: '用来找相似走势的那张图。' },
+/**
+ * 一张图的身份，就是截图卡角上那个词。
+ *
+ * 「当时 / 之后 / 参考」说的是这张图拍的是哪个时间点——这是看图的人唯一需要
+ * 知道的事，不再配一段解释。
+ */
+export const ATTACHMENT_IDENTITY: Record<string, string> = {
+  scene: '当时',
+  supplement: '之后',
+  reference: '参考',
+  query: '这张图',
 }
 
 export function identityLabel(attachment: Attachment): string {
-  return ATTACHMENT_IDENTITY[attachment.kind]?.label ?? '图片'
+  return ATTACHMENT_IDENTITY[attachment.kind] ?? '图'
 }

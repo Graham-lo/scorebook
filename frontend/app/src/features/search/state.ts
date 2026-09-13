@@ -1,235 +1,127 @@
-// 这一页在两次造访之间记住的东西。
+// 「找」这一页在两次造访之间记住的东西。
 //
-// 检索页的状态活在模块里而不是 DOM 里：去准备一段历史、去看某条记录，回来时
-// 图、框、周期、范围和任务引用保存到本标签页会话；刷新后 GET 同一次任务恢复。
+// 状态活在模块里而不是 DOM 里：点开一条记录再回来，输入框里的话、给过的那张
+// 图、认出来的品种周期和这一次的检索都还在，不用重问一遍。
 //
-// 它被拆成这几块，各自住在自己的文件里：
+// 它被拆成这几块：
 //
-//   state.ts      这里：查询条件、查询图与框、范围选择、这次检索的编号、否决集合
-//   image-pane.ts 查询图与框，以及换图
-//   controls.ts   配色、周期、品种筛选、方向，和「开始搜索」
-//   analysis.ts   先认一下这张图
-//   run.ts        起检索、读进度、停手
-//   results.ts    结果分发：还在跑、停手了、没做完、最终结果
-//   hits.ts       一条命中长什么样（公开历史的片段 / 自己的记录）
-//   scope.ts      两条路各自的前提：截图算过特征没有 / 能搜到哪些公开历史
+//   state.ts  这里：输入、那张图、认图结果、两条检索各自的进度
+//   run.ts    起检索、读进度（我的记录里 / 币安历史里 各一条）
+//   hits.ts   一条结果长什么样
+//   score.ts  很像 / 像 / 有点像
 
 import type { ChartAnalysis, ChartSearchRun, SearchScope } from '../../api/chart'
-import { Latest, WriteAction } from '../../api/http'
-import type { Market, Region, Uuid } from '../../api/types'
-import type { ChartView } from '../../ui/media'
-import { ANY_PERIOD, QueryPeriod } from './query-period'
-import { CHECKPOINT_KEY, readCheckpoint } from './checkpoint'
+import { WriteAction } from '../../api/http'
+import type { KnowledgeHit } from '../../api/knowledge'
+import type { Instrument, TagRecord, Uuid } from '../../api/types'
 
-/** 后端只收 1…30 条。 */
-export const MAX_HITS = 30
-export const HIT_CHOICES = [3, 5, 10]
-/** 否决集合一次最多报 100 条，再多后端回 `chart_exclude_too_many`。 */
-export const MAX_EXCLUDE = 100
+/** 一条检索：起了没有、跑到哪儿了、成没成。 */
+export interface RunSlot {
+  readonly scope: SearchScope
+  runId: Uuid | null
+  run: ChartSearchRun | null
+  /** 这一次没起来或者没做完。 */
+  failed: boolean
+  exclude: Uuid[]
+  page: number
+  /** 重来一次就加一，迟到的回包认不出自己那一轮就不再往界面上写。 */
+  version: number
+  readonly action: WriteAction
+}
 
-/** 还在自己往下走的状态：等它就行，没有人要做的事。 */
+function slot(scope: SearchScope): RunSlot {
+  return { scope, runId: null, run: null, failed: false, exclude: [], page: 0, version: 0, action: new WriteAction() }
+}
+
+export interface SearchState {
+  /** 输入框里现在写着什么。 */
+  text: string
+  /** 已经按这句话找过了。 */
+  asked: string
+  onlyMine: boolean
+  limit: 3 | 5 | 10
+
+  /** 给过的那张图。已定位或等待人工确认的 K 线图长期保留。 */
+  queryId: Uuid | null
+  imageVersion: number
+  queryName: string
+  analysis: ChartAnalysis | null
+  /** 认过了，但这张图上没有 K 线。 */
+  unreadable: boolean
+  recognitionError: boolean
+  /** 认出来的，或者人自己点的那个周期。 */
+  interval: string | null
+
+  /** 文字那一半。null 是还没找过。 */
+  words: KnowledgeHit[] | null
+  tags: TagRecord[]
+  symbols: Instrument[]
+  textBusy: boolean
+  textError: string | null
+  pendingSources: number
+
+  mine: RunSlot
+  market: RunSlot
+}
+
+export const state: SearchState = {
+  text: '',
+  asked: '',
+  onlyMine: false,
+  limit: 5,
+  queryId: null,
+  imageVersion: 0,
+  queryName: '',
+  analysis: null,
+  unreadable: false,
+  recognitionError: false,
+  interval: null,
+  words: null,
+  tags: [],
+  symbols: [],
+  textBusy: false,
+  textError: null,
+  pendingSources: 0,
+  mine: slot('private'),
+  market: slot('binance_history'),
+}
+
+/** 换了图，上一张认出来的东西和上一次的检索都不算数了。 */
+export function forgetImage(): void {
+  state.imageVersion += 1
+  state.queryId = null
+  state.queryName = ''
+  state.analysis = null
+  state.unreadable = false
+  state.recognitionError = false
+  state.interval = null
+  forgetRuns()
+}
+
+export function forgetRuns(): void {
+  for (const run of [state.mine, state.market]) {
+    run.version += 1
+    run.runId = null
+    run.run = null
+    run.failed = false
+    run.exclude = []
+    run.page = 0
+  }
+}
+
+export function forgetText(): void {
+  state.asked = ''
+  state.words = null
+  state.tags = []
+  state.symbols = []
+  state.textBusy = false
+  state.textError = null
+  state.pendingSources = 0
+}
+
+/** 还在自己往下走的检索：等它就行，没有人要做的事。 */
 const MOVING = ['queued', 'running', 'retry_wait']
 
 export function moving(status: string): boolean {
   return MOVING.includes(status)
-}
-
-/** What the page is holding onto between visits, so a query survives a detour. */
-export interface SearchState {
-  scope: SearchScope
-  queryId: Uuid | null
-  queryName: string
-  region: Region | null
-  /** 图上是不是红涨绿跌。默认按绿涨红跌读，读反了 K 线的方向就全反了。 */
-  redUp: boolean
-  analysis: ChartAnalysis | null
-  analysisFor: string | null
-  symbol: string | null
-  market: Market | null
-  /** 反向匹配：把走势上下翻过来比。默认关闭。 */
-  reverse: boolean
-  limit: number
-  runId: Uuid | null
-  run: ChartSearchRun | null
-  submitting: boolean
-}
-
-export const state: SearchState = {
-  scope: 'private',
-  queryId: null,
-  queryName: '',
-  region: null,
-  redUp: false,
-  analysis: null,
-  analysisFor: null,
-  symbol: null,
-  market: null,
-  reverse: false,
-  limit: 3,
-  runId: null,
-  run: null,
-  submitting: false,
-}
-
-export const period = new QueryPeriod()
-export const uploadAction = new WriteAction()
-export const analyzeAction = new WriteAction()
-export const searchAction = new WriteAction()
-export const cancelAction = new WriteAction()
-export const reindexAction = new WriteAction()
-export const lane = new Latest()
-export let searchVersion = 0
-let runFingerprint = ''
-const submissionListeners = new Set<() => void>()
-export function onSubmissionSettled(listener: () => void): () => void {
-  submissionListeners.add(listener)
-  return () => { submissionListeners.delete(listener) }
-}
-export function finishSubmission(): void {
-  state.submitting = false
-  for (const listener of submissionListeners) listener()
-}
-
-/**
- * 问的是哪件事。条数不算在内——「最多 3 条」改成 5 条，问题没变，只是想多看几个。
- */
-function questionFingerprint(): string {
-  return JSON.stringify([state.queryId, state.scope, state.region, period.value, state.symbol, state.market, state.redUp, state.reverse])
-}
-
-export function queryFingerprint(): string {
-  return JSON.stringify([questionFingerprint(), state.limit])
-}
-
-/* ------------------------------------------------------ 人说过「都不是」的 */
-
-// 人看过并且否掉的那几条，按问题累加。
-//
-// 「都不是」要是只把同一次检索再跑一遍，请求体逐字节相同，拿回来的也就是同样
-// 那几条；人已经看过并且说了不是，这件事得让后端知道。所以每按一次就把这一屏
-// 并进来，整份随 `exclude` 发出去：第三轮报的是前两轮一共六条。
-//
-// 这一页跟重温不一样，候选池横跨很多合约和周期，把看过的排掉就已经换来另外一
-// 批真正不同的东西了——第四到第六条是别的币，不是同一个币旁边挪了几根 K 线。
-// 所以这里只做排除，不去动索引的范围。
-const rejected = new Set<Uuid>()
-/** 这份否决是对着哪个问题说的。问题一变，它就作废。 */
-let rejectedFor = ''
-
-/**
- * 否掉的是「这几条 BTC 的窗口」，不是「所有检索结果」。
- *
- * 换图、换范围、换品种市场周期，问的就是另一件事，旧的否决不该跟过来。读之前先
- * 对一次，免得某条路径忘了调 `syncQuery` 就把上一个问题的否决发了出去。
- *
- * 对的是问题的指纹，不是查询的指纹：两者只差一个「一次要几条」。人说了不是的那
- * 几个窗口，不会因为他把 3 条改成 5 条就重新变成没看过——跟着查询指纹走的话，改
- * 一下条数否决就清空了，刚否掉的那几条转眼又回到眼前，正是这颗按钮要治的毛病。
- */
-function freshen(): void {
-  if (rejectedFor && rejectedFor !== questionFingerprint()) forgetRejected()
-}
-
-/** 这一次要报给后端的那一份。空的时候调用方整个字段都不该写。 */
-export function rejectedExcludes(): Uuid[] {
-  freshen()
-  return [...rejected]
-}
-
-export function rejectedCount(): number {
-  freshen()
-  return rejected.size
-}
-
-/** 这一屏人看过了，都不是。累加，不是替换。 */
-export function rejectAll(ids: Uuid[]): void {
-  freshen()
-  for (const id of ids) rejected.add(id)
-  rejectedFor = questionFingerprint()
-}
-
-export function forgetRejected(): void {
-  rejected.clear()
-  rejectedFor = ''
-}
-
-/**
- * 再否下去就超过后端一次收得下的条数了。
- *
- * 按这一屏的条数先算一遍：到了上限还摆着按钮，按下去只会换回一个 422，不如
- * 当场说清楚为什么按不动。
- */
-export function rejectionFull(more = 0): boolean {
-  return rejectedCount() + more > MAX_EXCLUDE
-}
-export function persistSearch(): void {
-  try {
-    if (!state.queryId) { sessionStorage.removeItem(CHECKPOINT_KEY); return }
-    const { queryId, queryName, scope, region, symbol, market, redUp, reverse, limit, runId } = state
-    sessionStorage.setItem(CHECKPOINT_KEY, JSON.stringify({ queryId, queryName, scope, region, interval: period.value, symbol, market, redUp, reverse, limit, runId }))
-  } catch { /* Storage may be disabled; live browsing still works. */ }
-}
-export function restoreSearch(): void {
-  if (state.queryId) return
-  try {
-    const saved = readCheckpoint(sessionStorage.getItem(CHECKPOINT_KEY))
-    if (!saved) return
-    const { interval, ...settings } = saved
-    Object.assign(state, settings)
-    if (interval === ANY_PERIOD) period.selectAny()
-    else if (interval) period.select(interval)
-    else period.reset()
-    runFingerprint = state.runId ? queryFingerprint() : ''
-  } catch { /* No stored session. */ }
-}
-export function rememberRun(id: string): void {
-  state.runId = id
-  runFingerprint = queryFingerprint()
-  persistSearch()
-}
-export function syncQuery(): void {
-  if (runFingerprint && runFingerprint !== queryFingerprint()) forgetRun()
-  // 问题变了，上一个问题的否决也一起作废：界面这一轮就该看不见它的条数了。
-  freshen()
-  persistSearch()
-}
-
-/** 换了图、换了框、换了范围，上一次的结果就不是这次问的答案了。 */
-export function forgetRun(): void {
-  searchVersion += 1
-  lane.cancel()
-  state.runId = null
-  state.run = null
-  runFingerprint = ''
-  persistSearch()
-}
-
-/** 图或者框一变，上一次认图说的就不是这一块的事了。 */
-export function forgetAnalysis(): void {
-  state.analysis = null
-  state.analysisFor = null
-}
-
-/**
- * 这一页在跑的时候，各个模块共用的那点东西。都从这里拿，模块之间就不用互相
- * 导入——否则「结果里的重试按钮」和「起检索」会绕成一个环。
- */
-export interface SearchCtx {
-  /** 人还在这一页上吗。离开之后任何迟到的回包都不许再往界面上写。 */
-  alive(): boolean
-  /** 登记一个离开时要关掉的东西：定时器、轮询、还没画完的图。 */
-  onLeave(stop: () => void): void
-  /** 会在离开这一页时立刻醒过来的等待，免得轮询卡在一个永远不 resolve 的 await 上。 */
-  sleep(ms: number): Promise<void>
-  /** 要一张登记过的行情图；离开这一页时统一取消。 */
-  chart(): ChartView
-  /** 重画结果之前，把上一批图都停掉。 */
-  dropCharts(): void
-  repaintQuery(): void
-  repaintControls(): void
-  repaintResults(): void
-  runSearch(): void
-  stopSearch(): void
-  /** 结果那一栏。起检索时要先把「正在安排」写进去。 */
-  resultPane: HTMLElement
 }

@@ -1,8 +1,8 @@
 // 分组 —— 同一条规则、同一个品种算一组。价位不一样就是两组，后端不会替你把
 // 「差不多的位置」合并；这是口径里最要紧的一条，也是这一页能被信任的原因。
 //
-// 一组展开之后是它的成员：这一组到底由哪几条记录组成，哪几条不算数、为什么不算
-// 数。比例的分母摆在成员表里，点开就能对。
+// 一组展开之后是它的样本：这一组到底由哪几条记录组成，哪几条不算数、为什么不算
+// 数。比例的分母摆在样本里，点开就能对。
 
 import { groups as fetchGroups, members, type GroupMetric, type Member } from '../../api/statistics'
 import type { OutcomeState, Uuid } from '../../api/types'
@@ -12,7 +12,7 @@ import { stateLook } from '../../data/outcome'
 import { dateTime, shortDate } from '../../data/time'
 import { clear, h } from '../../ui/dom'
 import { stagger } from '../../ui/motion'
-import { note, spinner } from '../../ui/states'
+import { empty, note, spinner } from '../../ui/states'
 import type { RunView } from './index'
 import { exclusionText, kv, share, shortSignature, type Live } from './shared'
 
@@ -42,11 +42,10 @@ export function groupsSheet(live: Live): {
         clear(foot)
       }
       right.textContent = ''
-      if (!rows.firstChild) {
-        rows.appendChild(h('div.tip', { text: '数完之后，这里按规则一组一组地列出来。' }))
-      }
+      node.hidden = true
       return
     }
+    node.hidden = false
     if (shownRun === run.id) return
     shownRun = run.id
     clear(rows)
@@ -54,11 +53,7 @@ export function groupsSheet(live: Live): {
     const stats = run.stats
     right.textContent = `${stats.group_count} 组`
     if (!stats.groups.length) {
-      rows.appendChild(
-        h('div.tip', {
-          text: '这一份里没有任何一组：符合条件的记录要么都不算数，要么还没有结论。上面的「不算数的」写着为什么。',
-        }),
-      )
+      rows.appendChild(empty({ title: '没有分组' }))
       return
     }
     stagger(stats.groups.map((group) => rows.appendChild(groupRow(run.id, group, live))))
@@ -80,7 +75,7 @@ export function groupsSheet(live: Live): {
               })
               .catch((error: unknown) => {
                 foot.appendChild(
-                  note('warn', error instanceof Error ? error.message : '这一页读不到。'),
+                  note('warn', error instanceof Error ? error.message : '没读出来'),
                 )
               })
               .finally(() => {
@@ -91,12 +86,6 @@ export function groupsSheet(live: Live): {
       }) as HTMLButtonElement
       foot.appendChild(more)
     }
-    foot.appendChild(
-      h('div.tip', {
-        style: 'margin-top:8px',
-        text: '分母是「有结论的条数」，也就是兑现加未兑现。观察中、未触发、没写标准、数据不足都不进分母，也不算失败。',
-      }),
-    )
   }
 
   return { node, paint }
@@ -142,10 +131,7 @@ function headLine(group: GroupMetric): HTMLElement {
   line.appendChild(h('span.faint', { text: `${group.representative_count} 条代表` }))
   if (group.recheck) {
     line.appendChild(
-      h('span.tag.warn', {
-        text: '最近变差了',
-        title: '最近十条的兑现比例，比这一组整体低 20 个百分点以上。这是提醒你再看一眼，不是结论。',
-      }),
+      h('span.tag.warn', { text: '最近变差了' }),
     )
   }
   return line
@@ -169,7 +155,7 @@ function subLine(group: GroupMetric): string {
       `触发落在 ${days.length} 天里（${shortDate(first?.day ?? null)} — ${shortDate(last?.day ?? null)}）`,
     )
   }
-  return bits.length ? bits.join(' · ') : '这一组还没有可算的结论。'
+  return bits.length ? bits.join(' · ') : '还没有结论'
 }
 
 async function loadMembers(
@@ -179,7 +165,7 @@ async function loadMembers(
   live: Live,
 ): Promise<void> {
   clear(pane)
-  pane.appendChild(spinner('正在把这一组的成员读出来…'))
+  pane.appendChild(spinner('正在加载'))
   let cursor: number | null = null
   let described = false
   const list = h('div')
@@ -205,12 +191,12 @@ async function loadMembers(
     if (cursor !== null) {
       const more = h('button.btn.sm.ghost', {
         type: 'button',
-        text: '再看一些成员',
+        text: '再看一些样本',
         on: {
           click: () => {
             more.disabled = true
             void step().catch((error: unknown) => {
-              foot.appendChild(note('warn', error instanceof Error ? error.message : '读不到。'))
+              foot.appendChild(note('warn', error instanceof Error ? error.message : '没读出来'))
             })
           },
         },
@@ -227,13 +213,13 @@ async function loadMembers(
     pane.appendChild(
       note(
         'warn',
-        error instanceof Error ? error.message : '这一组的成员读不出来，稍后再试。',
+        error instanceof Error ? error.message : '没读出来',
       ),
     )
   }
 }
 
-/** 这一组到底是哪一条规则。名字是从成员身上读出来的，不是从哈希猜的。 */
+/** 这一组到底是哪一条规则。名字是从样本身上读出来的，不是从哈希猜的。 */
 function ruleCard(member: Member, group: GroupMetric): HTMLElement {
   const c = member.body.criteria
   const what = summary(c)
@@ -242,7 +228,7 @@ function ruleCard(member: Member, group: GroupMetric): HTMLElement {
     ['市场', member.body.market ?? '没写'] as const,
   ]
   if (member.body.timeframe) rows.push(['周期', member.body.timeframe] as const)
-  rows.push(['有结论的', `${group.denominator} 条，其中兑现 ${group.numerator} 条`] as const)
+  rows.push(['有结论的', `${group.denominator} 条 · 兑现 ${group.numerator} 条`] as const)
   return h(
     'div.inset',
     { style: 'margin-bottom:12px' },
@@ -258,13 +244,13 @@ function memberRow(member: Member): HTMLElement {
   marks.appendChild(h('span', { class: `stamp flat ${look.stamp}`, text: look.label }))
   if (member.representative) {
     marks.appendChild(
-      h('span.tag', { text: '代表', title: '同一段行情、同一条规则里，进分母的就是这一条。' }),
+      h('span.tag', { text: '代表' }),
     )
   }
   if (!member.eligible) {
     marks.appendChild(h('span.tag.warn', { text: '不算数' }))
   } else if (!member.selected) {
-    marks.appendChild(h('span.tag', { text: '被下场筛掉' }))
+    marks.appendChild(h('span.tag', { text: '被结果筛掉' }))
   }
   const why = member.eligible ? '' : exclusionText(member.exclusion_reason)
   return h(
@@ -277,10 +263,7 @@ function memberRow(member: Member): HTMLElement {
       marks,
       why ? h('div.tip', { style: 'margin-top:4px', text: why }) : null,
       member.processing_state && member.processing_state !== 'absent'
-        ? h('div.tip', {
-            style: 'margin-top:4px',
-            text: `结论还没落定，停在「${member.processing_state}」。`,
-          })
+        ? h('div.tip', { style: 'margin-top:4px', text: '还在算' })
         : null,
     ),
     h('div.d', { text: `#${member.ordinal}`, title: `记录于 ${dateTime(member.submitted_at)}` }),

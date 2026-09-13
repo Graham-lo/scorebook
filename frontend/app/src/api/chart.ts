@@ -38,10 +38,25 @@ export interface GeometryQuality {
   limitations: string[]
 }
 
+/** 图上认出来的一条指标。旧后端没有这一片，整片缺失当空数组。 */
+export interface RecognizedIndicator {
+  /** MACD / MAVOL / EMA / BOLL / RSI / KDJ / MA / VOL / 持仓量 */
+  name: string
+  parameters: number[]
+  source: 'visible_text' | string
+  /** user_default：参数不是从图上读的，是按用户默认给的 */
+  parameter_source: 'user_default' | 'visible_text' | string
+}
+
 export interface RecognizedChart {
   /** 认出来才有；认不出就是 null，不猜。 */
   symbol: string | null
   interval: string | null
+  /** 锚定定位读出来的那一段时间。旧后端没有这两格，界面上就写「？」。 */
+  start_at?: Instant | null
+  end_at?: Instant | null
+  /** 图上认出来的指标。旧后端没有这一格 → undefined，当空数组。 */
+  indicators?: RecognizedIndicator[]
   auto_accept_confidence_threshold: number
   precision_validated: boolean
   unknown_fields_are_not_inferred: boolean
@@ -66,6 +81,20 @@ export interface ChartAnalysisInput {
   red_up?: boolean
 }
 
+export interface ChartOutline {
+  attachment_id: Uuid
+  source: 'screenshot_contour'
+  symbol: string | null
+  interval: string | null
+  values: number[]
+  storage_policy: 'ephemeral'
+}
+
+/** Read-only display contour, held only for the comparison view. */
+export function outline(input: ChartAnalysisInput, opts: RequestOptions = {}): Promise<ChartOutline> {
+  return postJson<ChartOutline>('/v1/chart-analyses/outline', input, opts)
+}
+
 export function analyze(
   input: ChartAnalysisInput,
   idempotencyKey: string,
@@ -82,6 +111,8 @@ export type SearchScope = 'private' | 'binance_history'
 export interface ChartSearchInput {
   attachment_id: Uuid
   scope: SearchScope
+  /** Private records: combine the chart with this semantic/keyword query. */
+  query_text?: string
   region?: Region
   /** 只对公开历史有意义；私库按记录自己的品种筛。 */
   symbol?: string
@@ -130,6 +161,13 @@ export interface MatchScore {
   reverse: boolean
   /** 后端自报的口径：结构相似，不是概率。 */
   meaning: string
+  /**
+   * 后端校准之后给的那个词。新后端才有；没有就按 `score` 自己分档，见 ./score。
+   * `none` 表示这一条不该说成像。
+   */
+  level?: string | null
+  /** 同档位样本里低于这个分的比例。只用来定词，不显示。 */
+  rarity?: number | null
 }
 
 interface CandidateCommon {
@@ -158,6 +196,7 @@ export interface HistoryCandidate extends CandidateCommon {
 
 /** 自己复盘库里的一张截图。 */
 export interface PrivateCandidate extends CandidateCommon {
+  text_match?: { source_kind: string; source_id: Uuid; source_version: string; excerpt: string }
   attachment_id: Uuid
   call_id: Uuid
   group_id: string
@@ -201,6 +240,9 @@ export interface ProvisionalResult {
 
 /** 最终结果。到这一步才做完来源哈希核验和几何精排。 */
 export interface FinalResult {
+  /** Frozen verified ranking for local pagination; no new search on page changes. */
+  ranked_items?: SearchCandidate[]
+  pagination?: string
   /** 不限周期时是 null；旧检索也可能没有这个字段。 */
   interval?: string | null
   interval_policy?: 'same_interval_only' | 'any_interval'

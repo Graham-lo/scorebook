@@ -1,0 +1,228 @@
+/* ============================================================
+   宽屏（≥1181px）
+   ------------------------------------------------------------
+   1180 及以下这一档一个字都不改：下面所有排版规则都关在
+   min-width 的查询里，只有中性的基础声明在外面，且不改变窄屏的样子。
+
+   1181–1439：顶栏和页面铺满，两栏语法生效，左柱窄一点。
+   ≥1440：三栏详情、首页三列、时间标尺出现。
+   ≥1720：正文上限放宽到 1440，卡片墙到四列。
+   ============================================================ */
+
+/* ---------- 两栏语法（窄屏就是一列，和现在一样） ---------- */
+.spread{display:grid;grid-template-columns:minmax(0,1fr);gap:0}
+.spread>.lead{display:flex;flex-direction:column;min-width:0}
+.spread>.bulk{min-width:0}
+.spread>.lead>.ornament{display:none;pointer-events:none}
+.spread>.lead>.counts,.spread>.lead>.anchors{display:none}
+/* 窄屏时这两行按钮靠右，和原来一样；宽屏进了左柱就靠左（下面那档改）。 */
+.row.snooze{justify-content:flex-end;margin-bottom:12px}
+.row.newact{justify-content:flex-end}
+/* ---------- 首页：窄屏保持原样 ---------- */
+.hero-l{display:contents}
+.today-hero .hero-l>*{position:relative}
+.greet .g{display:none}
+.sundial{display:none;pointer-events:none}
+/* 「最近」搬进了 today-cols，这两条把原来的 26px 间距照原样补回来。 */
+.today-cols>.recent-sec{grid-column:1/-1;margin-top:8px}
+@media(max-width:860px){.today-cols>.recent-sec{margin-top:12px}}
+
+.detailwrap{display:grid;grid-template-columns:minmax(0,1fr);gap:0}
+.detailwrap>.rail,.detailwrap>.aside{display:none}
+.wiz>.wizside{display:none}
+/* 没进宽屏这一档时，这层壳子当不存在，向导和现在一模一样。 */
+.wiz>.wizmain{display:contents}
+
+/* 这几层壳子是为了排版加的，入场动画要落到里面那些块上，
+   不然窄屏会从「一件件进来」变成「整页一起进来」。 */
+.page>.spread,.page>.detailwrap{animation:none}
+.page>.spread>.lead>*,.page>.spread>.bulk>*,
+.page>.detailwrap>*{
+  animation:enterUp .56s var(--e-out) both;animation-delay:calc(var(--i,0)*46ms);
+}
+@media (prefers-reduced-motion:reduce){
+  .page>.spread>.lead>*,.page>.spread>.bulk>*,
+  .page>.detailwrap>*{animation:none}
+}
+
+/* ---------- 天上的装饰：窄屏不画，关掉动效也不画 ---------- */
+.sun-disc,.horizon,.tick-rail,.dawnline,.spread>.lead>.ornament{display:none;pointer-events:none}
+:root[data-motion="off"] .sun-disc,:root[data-motion="off"] .horizon,
+:root[data-motion="off"] .tick-rail,:root[data-motion="off"] .dawnline,
+:root[data-motion="off"] .ornament,:root[data-motion="off"] .sundial{display:none!important}
+/* 日晷没了就把首页头卡还原成一列，不留一块空白。 */
+:root[data-motion="off"] .today-hero{display:flex!important;flex-direction:column}
+:root[data-motion="off"] .today-hero .hero-l{display:contents}
+@media (prefers-reduced-motion:reduce){
+  .sun-disc,.horizon,.tick-rail,.dawnline,.ornament,.sundial{display:none!important}
+  .today-hero{display:flex!important;flex-direction:column}
+  .today-hero .hero-l{display:contents}
+}
+
+@media(min-width:1181px){
+  /* ---------- 顶栏、子导航、页面：铺满 ---------- */
+  .mast{position:relative;max-width:none;padding:0 var(--gutter)}
+  .mast .tabs{position:absolute;left:50%;transform:translateX(-50%)}
+  .subin{max-width:none;padding:0 var(--gutter)}
+  .page,.page.wide{max-width:none;padding:34px var(--gutter) calc(120px + env(safe-area-inset-bottom))}
+
+  /* ---------- 天上的装饰 ---------- */
+  .sun-disc{
+    display:block;position:absolute;right:calc(var(--gutter) + 6vw);top:-120px;width:min(34vw,520px);aspect-ratio:1;border-radius:50%;
+    background:radial-gradient(circle at 50% 50%,rgba(255,231,168,.95) 0%,rgba(255,216,196,.55) 38%,transparent 66%);
+    filter:blur(6px);animation:breathe 9s var(--e-io) infinite;opacity:.9;
+  }
+  .horizon{display:block;position:absolute;left:0;right:0;top:min(58vh,620px);height:1px;background:linear-gradient(90deg,transparent 0%,rgba(194,116,16,.35) 30%,rgba(107,99,246,.28) 62%,transparent 100%)}
+  .horizon::after{content:'';position:absolute;left:0;right:0;top:-24px;height:48px;background:linear-gradient(180deg,transparent,rgba(255,231,168,.35) 50%,transparent);filter:blur(10px)}
+  .dawnline{display:block;position:absolute;left:0;right:0;top:64px;height:360px;opacity:.55}
+  .dawnline svg{width:100%;height:100%}
+  .dawnline path{fill:none;stroke:url(#dawnGrad);stroke-width:1.6;stroke-linecap:round;stroke-dasharray:3000;stroke-dashoffset:3000;animation:drawIn 2.2s var(--e-out) .3s forwards}
+  .dawnline .area{fill:url(#dawnArea);stroke:none;stroke-dasharray:none;animation:fade 1.6s var(--e-out) .9s both}
+  .dawnline circle{fill:var(--gold-lo);animation:pop .5s var(--es) 2.3s both}
+
+  /* ---------- 两栏 ---------- */
+  .spread{grid-template-columns:var(--lcol) minmax(0,var(--cmax));gap:0 var(--gap);align-items:start}
+  .spread>.lead{position:sticky;top:132px;gap:20px}
+  .spread>.lead>.pagehead{display:block;margin:0}
+  .spread>.lead>.pagehead h1{font-size:clamp(34px,3vw,48px);line-height:1.08;letter-spacing:-.02em}
+  .spread>.lead>.pagehead .sub{max-width:30ch;font-size:14.5px}
+  .spread>.lead>.counts{display:flex}
+  .spread>.lead>.ornament{display:block;width:180px;height:44px;opacity:.7}
+  .spread>.lead>.ornament path{fill:none;stroke:var(--gold-lo);stroke-width:1.5;stroke-linecap:round;stroke-dasharray:400;stroke-dashoffset:400;animation:drawIn 1.6s var(--e-out) .5s forwards}
+  .spread>.lead>.counts{display:flex;gap:22px;padding-top:14px;border-top:1px solid var(--line2)}
+  .spread>.lead>.counts div{display:flex;flex-direction:column;gap:2px}
+  .spread>.lead>.counts b{font-family:var(--serif);font-size:26px;font-weight:600;letter-spacing:-.02em}
+  .spread>.lead>.counts span{font-size:11.5px;color:var(--ink3);font-weight:700}
+  .spread>.lead>.filters{margin-bottom:0}
+
+  /* 空状态不跟着正文一起拉宽，一句话不需要 1300px。 */
+  .spread>.bulk .empty{max-width:760px}
+  .spread>.bulk *:has(>.empty:only-child){max-width:760px}
+
+  /* 记录：筛选搬到左柱，表格占满右边 */
+  .page[data-page=find] .spread>.lead .filters{max-width:340px;flex-wrap:wrap;gap:8px}
+
+  /* 复盘：三只箱子在左柱竖着排 */
+  .page[data-page=review] .spread>.lead .boxes{grid-template-columns:1fr;gap:12px}
+  .page[data-page=review] .spread>.lead .boxes .box{padding:18px 20px}
+  .page[data-page=review] .spread>.lead .row.snooze{justify-content:flex-start;margin:0}
+
+  /* 找：标题在左柱，输入框和结果占满右栏 */
+  .page[data-page=search] .spread>.lead>.pagehead{display:block;margin:0}
+  .page[data-page=search] .findwrap{margin-top:0}
+
+  /* 设置：左柱是两条锚点 */
+  .page[data-page=settings] .spread>.lead .anchors{display:flex;flex-direction:column;gap:6px}
+  .page[data-page=settings] .spread>.lead .anchors button{
+    display:flex;align-items:center;height:36px;padding:0 14px;border:0;border-radius:99px;background:none;
+    font:inherit;font-size:13.5px;font-weight:700;color:var(--ink3);text-align:left;cursor:pointer;
+    transition:background var(--t2),color var(--t2);
+  }
+  .page[data-page=settings] .spread>.lead .anchors button:hover{background:var(--tint);color:var(--ink)}
+  .page[data-page=settings] .spread>.lead .anchors button.on{color:var(--gold);background:var(--gold-soft)}
+  .page[data-page=settings] .spread>.bulk>.stack{max-width:900px}
+  .page[data-page=settings] .setgroup{scroll-margin-top:120px}
+
+  /* 经验·局面：新建按钮在左柱里靠左 */
+  .page[data-page=archive] .spread>.lead .row.newact{justify-content:flex-start}
+
+  /* 经验·统计：右边两列 */
+  .page[data-page=stats] .spread>.lead .runpick{display:flex;flex-direction:column;gap:12px}
+
+  /* ---------- 首页 ---------- */
+  .today{grid-template-columns:minmax(0,1.5fr) minmax(320px,.78fr);gap:22px}
+  .today-hero{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:18px 28px;padding:32px 36px 28px}
+  .today-hero .hero-l{display:flex;flex-direction:column;gap:18px;min-width:0;position:relative}
+  .today-hero .greet{display:flex;align-items:baseline;gap:14px}
+  .today-hero .greet .g{display:inline;font-family:var(--serif);font-size:20px;font-weight:600;color:var(--ink2);letter-spacing:normal;text-transform:none}
+  .today-hero .sundial{display:flex;position:relative;align-self:end;flex-direction:column;gap:6px;align-items:flex-end}
+  .sundial svg{width:260px;height:150px;overflow:visible}
+  .sundial .arc{fill:none;stroke:var(--line2);stroke-width:1.5;stroke-dasharray:3 6}
+  .sundial .lit{fill:none;stroke:url(#dawnGrad);stroke-width:2.2;stroke-linecap:round;stroke-dasharray:420;stroke-dashoffset:calc(420 - var(--k,.4)*420);transition:stroke-dashoffset 1.4s var(--e-out)}
+  .sundial .ground{stroke:var(--line2);stroke-width:1}
+  .sundial .tk{stroke:var(--line3);stroke-width:1}
+  .sundial .sun{fill:url(#sunGrad);filter:drop-shadow(0 6px 14px rgba(239,141,43,.55));animation:breathe 4s var(--e-io) infinite}
+  .sundial .t{font-family:var(--mono);font-size:12px;fill:var(--ink3)}
+  .sundial .hh{font-family:var(--serif);font-size:15px;font-weight:600;fill:var(--ink)}
+  .today-cols{grid-template-columns:1fr 1fr;column-gap:22px;row-gap:26px}
+  .today-cols>.recent-sec{grid-column:1/-1;margin-top:0}
+
+  /* ---------- 记录详情：左边进度轨，右边事实 ---------- */
+  .detailwrap{grid-template-columns:180px minmax(0,1fr);gap:0 var(--gap);align-items:start}
+  .detailwrap>.crumb,.detailwrap>.callhead{grid-column:1/-1}
+  .detailwrap>.rail{display:flex;position:sticky;top:132px;flex-direction:column;padding-left:18px}
+  .detailwrap>.rail::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--line2);border-radius:2px}
+  .detailwrap>.rail::after{content:'';position:absolute;left:5px;top:6px;width:2px;height:var(--fp,0%);background:linear-gradient(180deg,var(--gold-hi),var(--gold-lo));border-radius:2px;transform-origin:top;animation:growY 1.2s var(--e-out) .4s both}
+  .rail a{position:relative;display:flex;flex-direction:column;gap:2px;padding:10px 0 18px;font-size:13.5px;font-weight:800;color:var(--ink3)}
+  .rail a::before{content:'';position:absolute;left:-18px;top:14px;width:12px;height:12px;border-radius:50%;background:var(--sheet);box-shadow:inset 0 0 0 2px var(--line3)}
+  .rail a.done{color:var(--ink2)}
+  .rail a.done::before{background:var(--gold-lo);box-shadow:0 0 0 3px var(--gold-soft)}
+  .rail a.on{color:var(--ink)}
+  .rail a.on::before{background:var(--ink);box-shadow:0 0 0 3px var(--tint2)}
+  .rail a small{font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--ink4)}
+  .detailwrap>.detail{min-width:0}
+  /* 宽屏上那条横着的五步流程交给左边的竖轨，不画两遍。 */
+  .detailwrap .callhead .flow{display:none}
+
+  /* ---------- 引导式复盘：左柱是这一条的摘要 ---------- */
+  .page[data-page=new],.page[data-page=review]:has(.wiz){max-width:none}
+  .page[data-page=new] .cappanel{max-width:1040px}
+
+  /* ---------- 卡片墙 ---------- */
+  .tagwall{grid-template-columns:repeat(auto-fill,minmax(252px,1fr))}
+  .fhits{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+}
+
+@media(min-width:1440px){
+  .tick-rail{
+    display:flex;position:absolute;left:18px;top:120px;bottom:120px;width:36px;flex-direction:column;justify-content:space-between;
+    font-family:var(--mono);font-size:10px;color:var(--ink4);letter-spacing:.06em;
+  }
+  .tick-rail::before{content:'';position:absolute;left:8px;top:0;bottom:0;width:1px;background:linear-gradient(180deg,transparent,var(--line3) 12%,var(--line3) 88%,transparent)}
+  .tick-rail span{position:relative;padding-left:16px;line-height:1}
+  .tick-rail span::before{content:'';position:absolute;left:5px;top:4px;width:7px;height:1px;background:var(--line3)}
+  .tick-rail span.now{color:var(--gold);font-weight:500}
+  .tick-rail span.now::before{width:10px;height:2px;background:var(--gold-lo);top:3.5px;left:4px;box-shadow:0 0 0 3px var(--gold-soft)}
+
+  .today-cols{grid-template-columns:1fr 1fr 1fr}
+  .today-cols>.recent-sec{grid-column:auto}
+  .detailwrap{grid-template-columns:200px minmax(0,var(--cmax)) 340px}
+  .detailwrap>.aside{display:flex;position:sticky;top:132px;flex-direction:column;gap:14px;min-width:0}
+  .aside .card{padding:18px 22px;border-radius:var(--r2);background:var(--sheet);box-shadow:var(--shadow)}
+  .aside .card+.card{margin:0}
+  .aside .fl{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px}
+  .aside .fl .k{font-size:12px;color:var(--ink3);font-weight:700}
+  .aside .fl .v{font-family:var(--serif);font-size:18px;font-weight:600;margin-top:2px}
+  .aside .ctags{display:flex;gap:8px;flex-wrap:wrap}
+  .aside .chead-act{display:flex}
+  .aside .chead-act .btn{width:100%;justify-content:center}
+  .fhits{grid-template-columns:repeat(3,minmax(0,1fr))}
+
+  /* ---------- 引导式复盘：左柱是这一条的摘要 ---------- */
+  .wiz.wide{display:grid;grid-template-columns:var(--lcol) minmax(0,860px);gap:0 var(--gap);align-items:start;max-width:calc(var(--lcol) + var(--gap) + 860px);margin:0 auto}
+  .wiz.wide>.wizside{display:flex;position:sticky;top:132px;flex-direction:column;gap:14px;min-width:0}
+  .wiz.wide>.wizmain{display:flex;flex-direction:column;min-width:0}
+  .wizside>.stance,.wizside>.stile{align-self:flex-start}
+  .wizside .wsym{font-family:var(--serif);font-size:30px;line-height:1.15;letter-spacing:-.02em;color:var(--ink)}
+  .wizside .wmeta{font-family:var(--mono);font-size:12px;color:var(--ink3)}
+  .wizside .quote{font-size:18px;line-height:1.55}
+}
+
+/* 1440–1599：三栏详情刚好放得下，两边收窄一点，段落标题那列也收窄，
+   这样三张 200px 的小图能排成一行，不会两张加一张。 */
+@media(min-width:1440px) and (max-width:1599px){
+  .detailwrap{grid-template-columns:180px minmax(0,var(--cmax)) 300px}
+  .detailwrap .stage-sec{grid-template-columns:90px minmax(0,1fr);gap:0 20px}
+}
+
+@media(min-width:1600px){
+  .page[data-page=stats] .bulk.two-up{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+  .page[data-page=stats] .bulk.two-up>*{margin-top:0}
+  .page[data-page=stats] .bulk.two-up>.sheet.full{grid-column:1/-1}
+}
+
+@media(min-width:1720px){
+  :root{--cmax:1440px}
+  .fhits{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .tagwall{grid-template-columns:repeat(4,minmax(0,1fr))}
+}

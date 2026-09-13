@@ -354,20 +354,48 @@ pub async fn upload(
     if captured_at.is_some_and(|x| x > Utc::now()) {
         return Err(Error::bad("future_capture_time"));
     }
-    let body = json!({"digest":crate::adapters::db::hash_bytes(&bytes),"kind":kind,"captured_at":captured_at});
+    let hash = crate::adapters::db::hash_bytes(&bytes);
+    let body = json!({"digest":hash,"kind":kind,"captured_at":captured_at});
+    // Reserve crash-cleanup metadata before holding a write connection. A burst
+    // of identical uploads must not exhaust the pool waiting for a second one.
     let id = Uuid::new_v4();
-    let size = bytes.len();
     sqlx::query("INSERT INTO storage_objects(owner_id,id,state) VALUES($1,$2,'pending')")
         .bind(owner)
         .bind(id)
         .execute(&s.db.pool)
         .await?;
-    let meta = s.images.publish(owner, id, bytes).await?;
     let (mut tx, cached) = s.db.write(owner, "attachments.upload", key, &body).await?;
     if let Some(v) = cached {
-        let _ = s.images.remove(owner, id).await;
+        sqlx::query("DELETE FROM storage_objects WHERE owner_id=$1 AND id=$2 AND state='pending'")
+            .bind(owner)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         return Ok(v);
     }
+    // Serialize identical content before decoding, publishing or scheduling work.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,14))")
+        .bind(format!("{owner}:{hash}"))
+        .execute(&mut *tx)
+        .await?;
+    let existing: Option<Value> = sqlx::query_scalar("SELECT (to_jsonb(a)-'owner_id')||jsonb_build_object('capture_time_proven',false,'deduplicated',true) FROM attachments a WHERE owner_id=$1 AND sha256=$2 AND kind=$3 ORDER BY uploaded_at,id LIMIT 1")
+        .bind(owner).bind(&hash).bind(&kind).fetch_optional(&mut *tx).await?;
+    if let Some(v) = existing {
+        sqlx::query("DELETE FROM storage_objects WHERE owner_id=$1 AND id=$2 AND state='pending'")
+            .bind(owner)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        let attachment = serde_json::from_value(v["id"].clone())
+            .map_err(|_| Error::bad("invalid_attachment"))?;
+        super::locate::enqueue_upload(&mut tx, owner, attachment).await?;
+        Database::finish(&mut tx, owner, "attachments.upload", key, &body, &v).await?;
+        tx.commit().await?;
+        return Ok(v);
+    }
+    let size = bytes.len();
+    let meta = s.images.publish(owner, id, bytes).await?;
     let object=sqlx::query("UPDATE storage_objects SET state='ready',updated_at=now() WHERE owner_id=$1 AND id=$2 AND state='pending'").bind(owner).bind(id).execute(&mut *tx).await?;
     if object.rows_affected() != 1 {
         let _ = s.images.remove(owner, id).await;
@@ -394,6 +422,7 @@ pub async fn upload(
         )
         .await?;
     }
+    super::locate::enqueue_upload(&mut tx, owner, id).await?;
     let v = json!({"id":id,"sha256":meta.digest,"mime":meta.mime,"width":meta.width,"height":meta.height,"kind":kind,"captured_at":captured_at,"capture_time_proven":false});
     Database::finish(&mut tx, owner, "attachments.upload", key, &body, &v).await?;
     tx.commit().await?;

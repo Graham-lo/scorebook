@@ -1,19 +1,10 @@
-// 长期统计 —— 在一套定死的规则和一段定死的历史里，把已经发生过的事数清楚。
+// 统计 —— 在一套定死的规则和一段定死的历史里，把已经发生过的事数清楚。
 //
-// 这一页只做一件事：数。它不预测，也不排名。屏幕上的每一个数字都能追到成员表里
-// 具体的几条记录，追不到的数字这里就不显示。
+// 一次统计对应一份冻结下来的样本：分组、样本、参照、待你定全都挂在同一个编号上；
+// 换口径就新建一份，原来那份原样留着。屏幕上的每一个数字都能追到样本里具体的几
+// 条记录，追不到的数字这里就不显示。
 //
-// 三件事要拎清楚：
-//
-//   快照  一次统计对应一份冻结下来的成员表。分组、成员、参照基准、待裁决全都挂
-//         在同一个编号上；换口径就重新数一份，原来那份原样留着。
-//   比例  `realization_rate` 是「这一组里判定为兑现的，占有结论的多少」。它是对
-//         过去的计数，不是胜率，也不是下一次的概率，页面上不改名。
-//   裁决  后端只会在某一组攒够 20 条新结论时提醒一句，不带倾向。认不认这条证据
-//         是人按下去的事，模型不替人按。
-//
-// 挑过结果的统计（只看某几种下场）能看，但它的比例没有分母上的意义，后端也不会
-// 为它排待裁决——这一点页面上直说。
+// 「战绩」那一屏不走这套 run 机制，它直接从记录列表算，见 ./record.ts。
 
 import { awake } from '../../ui/awake'
 import { WriteAction } from '../../api/http'
@@ -31,10 +22,11 @@ import { INTERVALS, MARKET_LABELS } from '../../data/session'
 import * as store from '../../data/stats'
 import { dateTime } from '../../data/time'
 import { clear, h } from '../../ui/dom'
-import { empty, note, spinner } from '../../ui/states'
+import { empty, jobLine, note, spinner } from '../../ui/states'
 import { problem, toast } from '../../ui/toast'
 import { baselineSheet } from './baseline'
 import { groupsSheet } from './groups'
+import { recordView } from './record'
 import { STALLED, STATE_COLORS, STATE_LABELS, kv, whyStopped, type Live } from './shared'
 import { verdictSheet } from './verdicts'
 
@@ -47,7 +39,16 @@ export interface RunView {
   error: string | null
 }
 
-export function statsPage(host: HTMLElement, arg: string): () => void {
+export function statsPage(
+  host: HTMLElement,
+  arg: string,
+  query: URLSearchParams,
+): () => void {
+  if (query.get('view') !== 'runs' && !/^[0-9a-f-]{36}$/i.test(arg)) return recordView(host)
+  return runsView(host, arg)
+}
+
+function runsView(host: HTMLElement, arg: string): () => void {
   let alive = true
   const timers = new Set<number>()
   const live: Live = {
@@ -86,10 +87,7 @@ export function statsPage(host: HTMLElement, arg: string): () => void {
         if (STALLED.has(run.job.status)) return
       } catch (error) {
         if (!live.alive()) return
-        view = {
-          run: null,
-          error: error instanceof Error ? error.message : '读不到这一份统计。',
-        }
+        view = { run: null, error: error instanceof Error ? error.message : '没读出来' }
         paintAll()
         return
       }
@@ -109,14 +107,14 @@ export function statsPage(host: HTMLElement, arg: string): () => void {
     return section.node
   }
 
+  const build = buildSheet(select)
+  const overview = mount(overviewSheet())
+  overview.classList.add('full')
   host.append(
-    headSheet(),
-    mount(runSheet(select)),
-    mount(buildSheet(select)),
-    mount(overviewSheet()),
-    mount(groupsSheet(live)),
-    mount(baselineSheet(live)),
-    verdictSheet(live),
+    h('div.spread', {},
+      h('div.lead', {}, mount(runSheet(select, () => build.focus()))),
+      h('div.bulk.two-up', {}, mount(build), overview, mount(groupsSheet(live)), mount(baselineSheet(live)), verdictSheet(live)),
+    ),
   )
 
   const current = store.current()
@@ -130,40 +128,18 @@ export function statsPage(host: HTMLElement, arg: string): () => void {
   }
 }
 
-/* --------------------------------------------------------------- 抬头 */
-
-function headSheet(): HTMLElement {
-  return h(
-    'div.sheet.pad',
-    {},
-    h('h1.h1', { text: '长期统计' }),
-    h('div.tip', {
-      style: 'margin-top:6px;max-width:64ch',
-      text: '数的是已经发生过的事：在一套定死的规则、一段定死的历史里，你的判断分别落到了哪一种下场。这里不预测下一次。',
-    }),
-    h('div.tip', {
-      style: 'margin-top:6px;max-width:64ch',
-      text: '一次统计对应一份冻结下来的成员表。翻页、看某一组的成员、算参照基准，用的都是同一份；想换口径就重新数一份，原来那份原样留着。',
-    }),
-    h('div.tip', {
-      style: 'margin-top:6px;max-width:64ch',
-      text: '「兑现比例」是这一组里判定为兑现的条数，除以有结论的条数。它是一个计数，不是胜率，也不是下一次会怎么样的概率。',
-    }),
-  )
-}
-
 /* ------------------------------------------------- 现在看的是哪一份 */
 
-function runSheet(select: (id: Uuid | null) => void): {
-  node: HTMLElement
-  paint: (view: RunView) => void
-} {
+function runSheet(
+  select: (id: Uuid | null) => void,
+  openBuild: () => void,
+): { node: HTMLElement; paint: (view: RunView) => void } {
   const body = h('div', { style: 'padding:4px 18px 16px' })
   const right = h('span.faint', { style: 'margin-left:auto' })
   const node = h(
     'div.sheet',
-    { style: 'margin-top:18px' },
-    h('div.sh', {}, h('span.eyebrow.noline', { text: '这一份统计' }), right),
+    {},
+    h('div.sh', {}, h('span.eyebrow.noline', { text: '统计' }), right),
     body,
   )
 
@@ -174,8 +150,12 @@ function runSheet(select: (id: Uuid | null) => void): {
       right.textContent = ''
       body.appendChild(
         empty({
-          title: '还没有数过',
-          tip: '在下面挑一段历史和一套口径，数出来的那一份会一直挂在这一页上。',
+          title: '还没有统计',
+          action: h('button.btn.sm.primary', {
+            type: 'button',
+            text: '新建统计',
+            on: { click: () => openBuild() },
+          }),
         }),
       )
       return
@@ -191,34 +171,18 @@ function runSheet(select: (id: Uuid | null) => void): {
     const run = view.run
     if (!run) {
       right.textContent = ''
-      body.appendChild(spinner('正在读这一份统计…'))
+      body.appendChild(spinner('正在加载'))
       return
     }
     const f = run.definition.filters
-    right.textContent = run.status === 'ready' ? '已经数完' : '正在数'
+    right.textContent = run.status === 'ready' ? '算完了' : '还在算'
     body.appendChild(h('div.h2', { text: run.definition.name }))
-    body.appendChild(
-      h('div.tip', {
-        style: 'margin-top:4px',
-        text:
-          run.definition.grouping === 'episode_rule'
-            ? '同一段行情里重复的判断只算一条，取最早的那一条当代表。'
-            : '每一条判断各算一次，同一段行情里说过几次就是几次。',
-      }),
-    )
-    body.appendChild(
-      h('div', { style: 'margin-top:10px' }, kv(definitionRows(f, run))),
-    )
+    body.appendChild(h('div', { style: 'margin-top:10px' }, kv(definitionRows(f, run))))
     if (run.status !== 'ready') {
       body.appendChild(h('div', { style: 'margin-top:10px' }, buildingLine(run)))
     }
     body.appendChild(
-      h(
-        'div.acts',
-        { style: 'margin-top:12px' },
-        pickOther(select),
-        forgetBtn(run.id, select),
-      ),
+      h('div.acts', { style: 'margin-top:12px' }, pickOther(select), forgetBtn(run.id, select)),
     )
   }
 
@@ -234,7 +198,7 @@ function pickOther(select: (id: Uuid | null) => void): HTMLElement {
       h('button.btn.sm.ghost', {
         type: 'button',
         text: entry.name,
-        title: `${dateTime(entry.started_at)} 数的那一份`,
+        title: dateTime(entry.started_at),
         on: { click: () => select(entry.id) },
       }),
     )
@@ -246,7 +210,6 @@ function forgetBtn(id: Uuid, select: (id: Uuid | null) => void): HTMLElement {
   return h('button.btn.sm.ghost', {
     type: 'button',
     text: '不看这份了',
-    title: '只是把这台机器上记的编号去掉，后端那份快照原样留着。',
     on: {
       click: () => {
         store.forget(id)
@@ -259,7 +222,10 @@ function forgetBtn(id: Uuid, select: (id: Uuid | null) => void): HTMLElement {
 function definitionRows(f: SampleFilter, run: StatisticsRun): (readonly [string, string])[] {
   const rows: (readonly [string, string])[] = []
   if (f.start_at || f.end_at) {
-    rows.push(['记录时间', `${f.start_at ? dateTime(f.start_at) : '最早'} — ${f.end_at ? dateTime(f.end_at) : '现在'}`] as const)
+    rows.push([
+      '记录时间',
+      `${f.start_at ? dateTime(f.start_at) : '最早'} — ${f.end_at ? dateTime(f.end_at) : '现在'}`,
+    ] as const)
   }
   if (f.instrument) rows.push(['品种', f.instrument] as const)
   if (f.market) rows.push(['市场', MARKET_LABELS[f.market as Market] ?? f.market] as const)
@@ -269,12 +235,12 @@ function definitionRows(f: SampleFilter, run: StatisticsRun): (readonly [string,
   if (f.source_entry) rows.push(['来源', f.source_entry] as const)
   if (f.adoption) rows.push(['是否照做', ADOPTIONS[f.adoption] ?? f.adoption] as const)
   if (f.result_states?.length) {
-    rows.push([
-      '只看下场',
-      f.result_states.map((s) => STATE_LABELS[s] ?? s).join('、'),
-    ] as const)
+    rows.push(['只看结果', f.result_states.map((s) => STATE_LABELS[s] ?? s).join('、')] as const)
   }
-  rows.push(['口径', '绝对价位各算各的 · 自然小时 · 只认当前正式结论'] as const)
+  rows.push([
+    '分组',
+    run.definition.grouping === 'episode_rule' ? '同一段只算一次' : '每条各算一次',
+  ] as const)
   if (run.source_snapshot_at) rows.push(['冻结于', dateTime(run.source_snapshot_at)] as const)
   return rows
 }
@@ -288,18 +254,11 @@ const ADOPTIONS: Record<string, string> = {
 
 function buildingLine(run: StatisticsRun): HTMLElement {
   const status = run.job.status as JobStatus
-  if (STALLED.has(status)) {
-    return note(
-      'warn',
-      whyStopped(run.job.error_code, '这次统计停下来了，等人处理之后才会继续。'),
-    )
-  }
-  return spinner(
-    run.status === 'queued' ? '正在冻结这一份成员表…' : '成员表已经冻住，正在一组一组地数…',
-  )
+  if (STALLED.has(status)) return note('warn', whyStopped(run.job.error_code, '停下来了'))
+  return jobLine('还在算')
 }
 
-/* --------------------------------------------------------- 数一份新的 */
+/* ----------------------------------------------------------- 新建统计 */
 
 interface Draft {
   name: string
@@ -318,12 +277,13 @@ interface Draft {
 function buildSheet(select: (id: Uuid | null) => void): {
   node: HTMLElement
   paint: (view: RunView) => void
+  focus: () => void
 } {
   const body = h('div', { style: 'padding:4px 18px 16px' })
   const node = h(
     'div.sheet',
     { style: 'margin-top:18px' },
-    h('div.sh', {}, h('span.eyebrow.noline', { text: '数一份新的' })),
+    h('div.sh', {}, h('span.eyebrow.noline', { text: '新建统计' })),
     body,
   )
 
@@ -342,7 +302,7 @@ function buildSheet(select: (id: Uuid | null) => void): {
   }
 
   const name = h('input.input', {
-    placeholder: '给这一份起个名字，比如「今年的 BTC 一小时」',
+    placeholder: '起个名字',
     on: {
       input: (e) => {
         draft.name = (e.target as HTMLInputElement).value
@@ -366,7 +326,7 @@ function buildSheet(select: (id: Uuid | null) => void): {
     },
   }) as HTMLInputElement
   const instrument = h('input.input', {
-    placeholder: '不填就是所有品种',
+    placeholder: '不限',
     on: {
       input: (e) => {
         draft.instrument = (e.target as HTMLInputElement).value.trim().toUpperCase()
@@ -429,7 +389,6 @@ function buildSheet(select: (id: Uuid | null) => void): {
   paintGrouping()
 
   const stateRow = h('div.filters')
-  const stateWarn = h('div.tip', { style: 'margin-top:6px' })
   const paintStates = () => {
     clear(stateRow)
     for (const state of RESULT_STATES) {
@@ -448,9 +407,6 @@ function buildSheet(select: (id: Uuid | null) => void): {
         }),
       )
     }
-    stateWarn.textContent = draft.states.size
-      ? '挑了下场之后，这一份只是「把这几种记录挑出来看看」：分母已经被挑过，比例不再有意义，后端也不会为它排待裁决。'
-      : '不挑就是六种下场全都数进去。这样数出来的比例才有分母上的意义。'
   }
   paintStates()
 
@@ -462,7 +418,7 @@ function buildSheet(select: (id: Uuid | null) => void): {
 
   async function submit(): Promise<void> {
     if (!draft.name.trim()) {
-      problem('先给这一份起个名字，过两个月你才认得出它数的是什么。')
+      problem('先起个名字')
       name.focus()
       return
     }
@@ -477,7 +433,7 @@ function buildSheet(select: (id: Uuid | null) => void): {
     if (draft.adoption) filters.adoption = draft.adoption as SampleFilter['adoption']
     if (draft.states.size) filters.result_states = [...draft.states]
     if (filters.start_at && filters.end_at && filters.start_at >= filters.end_at) {
-      problem('开始时间要早于结束时间。')
+      problem('起要早于止')
       return
     }
     const input: StatisticsInput = {
@@ -500,9 +456,9 @@ function buildSheet(select: (id: Uuid | null) => void): {
         baseline_id: null,
       })
       select(started.statistics_run_id)
-      toast('开始数了。成员表冻好之后，下面的数字就是这一份的。')
+      toast('开始数了')
     } catch (error) {
-      problem(error instanceof Error ? error.message : '这一份没有开始，请再试一次。')
+      problem(error instanceof Error ? error.message : '没保存上，再试一次')
     } finally {
       go.disabled = false
     }
@@ -513,8 +469,8 @@ function buildSheet(select: (id: Uuid | null) => void): {
     h(
       'div.grid2',
       { style: 'margin-top:10px' },
-      h('div.field', {}, h('label', { text: '记录时间从' }), from),
-      h('div.field', {}, h('label', { text: '到' }), to),
+      h('div.field', {}, h('label', { text: '起' }), from),
+      h('div.field', {}, h('label', { text: '止' }), to),
     ),
     h('div.field', { style: 'margin-top:10px' }, h('label', { text: '品种' }), instrument),
     chips(
@@ -552,24 +508,26 @@ function buildSheet(select: (id: Uuid | null) => void): {
       },
     ),
     chips(
-      '是否照着做了',
+      '是否照做',
       Object.entries(ADOPTIONS).map(([key, label]) => [key, label] as const),
       () => draft.adoption,
       (v) => {
         draft.adoption = v
       },
     ),
-    h('div.field', { style: 'margin-top:10px' }, h('label', { text: '同一段行情里说过好几次' }), grouping),
-    h('div.field', { style: 'margin-top:10px' }, h('label', { text: '只看某几种下场' }), stateRow, stateWarn),
-    h(
-      'div.tip',
-      { style: 'margin-top:10px' },
-      '口径是定死的：绝对价位各算各的（3.5 万和 3.6 万不会被算成同一条规则）、按自然小时算时限、只认当前的正式结论，试算不算数。',
-    ),
+    h('div.field', { style: 'margin-top:10px' }, h('label', { text: '分组' }), grouping),
+    h('div.field', { style: 'margin-top:10px' }, h('label', { text: '只看某几种结果' }), stateRow),
     h('div.acts', { style: 'margin-top:12px' }, go),
   )
 
-  return { node, paint: () => {} }
+  return {
+    node,
+    paint: () => {},
+    focus: () => {
+      node.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      name.focus({ preventScroll: true })
+    },
+  }
 }
 
 /* ------------------------------------------------------------ 总览 */
@@ -587,12 +545,13 @@ function overviewSheet(): { node: HTMLElement; paint: (view: RunView) => void } 
     clear(body)
     const run = view.run
     if (!run) {
-      body.appendChild(h('div.tip', { text: '先挑一份统计，或者数一份新的。' }))
+      node.hidden = true
       return
     }
+    node.hidden = false
     const stats = run.stats
     if (run.status !== 'ready' || !stats) {
-      body.appendChild(h('div.tip', { text: '数完之前不给中间数字——半份统计比没有统计更容易骗人。' }))
+      body.appendChild(jobLine('还在算'))
       return
     }
     const c = stats.counts
@@ -603,53 +562,27 @@ function overviewSheet(): { node: HTMLElement; paint: (view: RunView) => void } 
       ['行情段数', String(c.episode_count)],
       ['计入的代表', String(c.representative_count)],
       ['不算数的', String(c.excluded_count)],
-      ['被下场筛掉的', String(c.result_filter_excluded_count)],
+      ['被结果筛掉的', String(c.result_filter_excluded_count)],
     ]
     for (const [k, v] of cells) {
       grid.appendChild(h('div.stat', {}, h('span.k', { text: k }), h('span.v', { text: v })))
     }
     body.appendChild(grid)
 
-    body.appendChild(h('div.eyebrow', { style: 'margin-top:16px', text: '六种下场' }))
+    body.appendChild(h('div.eyebrow', { style: 'margin-top:16px', text: '六种结果' }))
     body.appendChild(sixBar(stats.states))
 
-    const processing = Object.entries(stats.processing_states).filter(
-      ([key, n]) => key !== 'absent' && n > 0,
-    )
-    if (processing.length) {
-      body.appendChild(
-        h('div.tip', {
-          style: 'margin-top:12px',
-          text: `还有 ${processing.map(([key, n]) => `${n} 条停在「${key}」`).join('，')}——这些条目已经在成员表里，只是结论还没落定。`,
-        }),
-      )
-    }
+    const running = Object.entries(stats.processing_states)
+      .filter(([key, n]) => key !== 'absent' && n > 0)
+      .reduce((sum, [, n]) => sum + n, 0)
 
     body.appendChild(
       h('div', { style: 'margin-top:14px' }, kv([
-        ['分组数', `${stats.group_count}${stats.groups_complete ? '' : '（还没列完，下面可以翻）'}`] as const,
+        ['分组数', String(stats.group_count)] as const,
         ['作废的', String(c.voided_count)] as const,
-        [
-          '挑没挑过下场',
-          stats.selection === 'unconditioned' ? '没有挑过，六种下场全在里面' : '挑过下场，比例不作数',
-        ] as const,
+        ...(running ? [['还在算', `${running} 条`] as const] : []),
       ])),
     )
-
-    body.appendChild(
-      note(
-        'info',
-        '后端没有给置信区间，理由是同一段行情里的多条判断彼此不独立——套一个区间公式只会给出一个看着精确、其实站不住的数。所以这里只有计数和比例。',
-      ),
-    )
-    if (stats.selection === 'result_conditioned') {
-      body.appendChild(
-        note(
-          'warn',
-          '这一份是挑过下场的：分母已经被挑走了一部分，下面的比例只能当作「这几种记录长什么样」，不能当作这套规则的兑现率。后端也不会为它排待裁决。',
-        ),
-      )
-    }
   }
 
   return { node, paint }

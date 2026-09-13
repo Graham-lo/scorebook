@@ -159,10 +159,10 @@ fn candidate(score: f64, hours_ago: i64) -> Value {
 }
 
 #[tokio::test]
-async fn publishing_a_review_queues_exactly_one_automatic_match() {
+async fn upload_queues_once_and_publishing_review_does_not_repeat_it() {
     let (s, o, _tmp) = setup().await;
     let (call, attachment) = record(&s, o, "one").await;
-    assert_eq!(locate_jobs(&s, o).await, 0);
+    assert_eq!(locate_jobs(&s, o).await, 1);
 
     knowledge::review(&s, o, "review-1", review_of(call))
         .await
@@ -175,8 +175,8 @@ async fn publishing_a_review_queues_exactly_one_automatic_match() {
             .await
             .unwrap();
     assert_eq!(body["attachment_id"], json!(attachment));
-    assert_eq!(body["call_id"], json!(call));
-    assert_eq!(body["trigger"], "review_published");
+    assert!(body["call_id"].is_null());
+    assert_eq!(body["trigger"], "upload");
 
     // The same submission again is the cached idempotent write, and a genuinely
     // second review of the same record still cannot add a second attempt: the
@@ -341,20 +341,21 @@ async fn a_match_builds_the_window_index_around_the_judgment_moment_once() {
         .unwrap();
     assert_eq!(built["built"], true);
     assert_eq!(built["stride_bars"], 1);
-    assert_eq!(built["windows"], json!([64, 128, 256]));
+    assert_eq!(built["windows"], json!([64, 96, 128, 192, 256]));
     assert_eq!(built["raw_market_storage"], "none");
     assert_eq!(built["range"]["start_at"], json!(start));
     assert_eq!(built["range"]["end_at"], json!(end));
     assert_eq!(built["range"]["bars"], 768);
 
-    // One stride-1 pass per window size: 705 + 641 + 513 windows.
+    // One stride-1 pass per window size: 705 + 673 + 641 + 577 + 513 windows
+    // （96 和 192 两档是 §5.5-1 加的，为的是截图上数出来的根数能落在更近的档位上）。
     let (features, segments) = index_rows(&s, start, end).await;
-    assert_eq!(built["feature_rows"], json!(1859));
-    assert_eq!(features, 1859);
-    assert_eq!(segments, 3);
+    assert_eq!(built["feature_rows"], json!(3109));
+    assert_eq!(features, 3109);
+    assert_eq!(segments, 5);
     let sizes:Vec<i32>=sqlx::query_scalar("SELECT DISTINCT bars_count FROM public_market.features WHERE symbol='ETHUSDT' AND timeframe='1h' AND start_at>=$1 AND end_at<=$2 ORDER BY 1")
         .bind(start).bind(end).fetch_all(&s.db.pool).await.unwrap();
-    assert_eq!(sizes, vec![64, 128, 256]);
+    assert_eq!(sizes, vec![64, 96, 128, 192, 256]);
 
     // Asked for again: already covered, so nothing is fetched and nothing is
     // written a second time.
@@ -628,7 +629,7 @@ async fn pushing_back_stops_at_the_limit_and_at_the_listing_date() {
 
     // 八段全都有人建过了（直接写覆盖记录，省掉八轮真的建索引）：再往前没有段
     // 可推，报 range_exhausted，一根 K 线都不拉。
-    for window_bars in [64, 128, 256] {
+    for window_bars in scorebook::application::history::LOCATE_WINDOWS {
         let id = Uuid::new_v4();
         let body = json!({"market":"usd_m","symbol":"EXHAUSTUSDT","interval":"1h","window_bars":window_bars});
         sqlx::query("INSERT INTO public_market.generations(id,request_hash,body,status,published_at) VALUES($1,$2,$3,'ready',now())")
@@ -723,6 +724,13 @@ impl MarketDataProvider for Listed {
 async fn a_screenshot_can_name_its_own_instrument_for_the_match() {
     let (s, o, _tmp) = setup().await;
     let (call, attachment) = record(&s, o, "over").await;
+    sqlx::query(
+        "UPDATE jobs SET status='succeeded' WHERE owner_id=$1 AND kind='attachment.locate'",
+    )
+    .bind(o)
+    .execute(&s.db.pool)
+    .await
+    .unwrap();
 
     // 不指定就还是记录自己的三元组，一个字节都没变。
     let plain = locate::request(&s, o, attachment, "plain-1", Default::default())
@@ -836,7 +844,7 @@ async fn an_unusable_override_is_refused_before_anything_is_queued() {
             code
         );
     }
-    assert_eq!(locate_jobs(&s, o).await, 0);
+    assert_eq!(locate_jobs(&s, o).await, 1);
     // 空的一格等于没给，照旧走记录本身。
     let blank = locate::request(
         &s,
@@ -855,6 +863,13 @@ async fn an_unusable_override_is_refused_before_anything_is_queued() {
 async fn the_worker_searches_the_instrument_the_screenshot_named() {
     let (s, o, _tmp) = setup().await;
     let (call, attachment) = record(&s, o, "worker").await;
+    sqlx::query(
+        "UPDATE jobs SET status='succeeded' WHERE owner_id=$1 AND kind='attachment.locate'",
+    )
+    .bind(o)
+    .execute(&s.db.pool)
+    .await
+    .unwrap();
     locate::request(
         &s,
         o,
@@ -887,7 +902,7 @@ async fn the_worker_searches_the_instrument_the_screenshot_named() {
     .fetch_one(&s.db.pool)
     .await
     .unwrap();
-    assert_eq!(mine, 1859);
+    assert_eq!(mine, 3109);
 
     // 已经钉住的图直接回显钉住的那份，顺带说清这次用的是哪三样。
     let now = Utc::now();
@@ -926,7 +941,7 @@ async fn the_automatic_match_still_follows_the_record() {
             .fetch_one(&s.db.pool)
             .await
             .unwrap();
-    assert_eq!(body["trigger"], "review_published");
+    assert_eq!(body["trigger"], "upload");
     assert!(body["symbol"].is_null());
     let seen = locate::get(&s, o, attachment).await.unwrap();
     assert_eq!(seen["symbol"], "ETHUSDT");
@@ -943,7 +958,7 @@ async fn a_job_only_outranks_the_screenshot_where_someone_actually_chose() {
     // 这张图自己写着 SOLUSDT / 4h，记录写的是 ETHUSDT / 1h。OCR 的结果本来就记在
     // attachment_reads 里，这里直接摆一行，测的是排序而不是识别。
     sqlx::query(
-        "INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval) VALUES($1,$2,'SOLUSDT','4h')",
+        "INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval,recognition_version) VALUES($1,$2,'SOLUSDT','4h',2)",
     )
     .bind(o)
     .bind(attachment)
@@ -1021,4 +1036,168 @@ async fn a_job_only_outranks_the_screenshot_where_someone_actually_chose() {
     let seen = locate::get(&s, o, attachment).await.unwrap();
     assert_eq!(seen["symbol"], "SKHYUSDT");
     assert_eq!(seen["interval"], "4h");
+}
+
+#[tokio::test]
+async fn repeated_content_reuses_upload_jobs_and_permanent_locations_across_purposes() {
+    let (s, owner, _tmp) = setup().await;
+    // More simultaneous uploads than pool connections: one file/job, no pool starvation.
+    let mut uploads = tokio::task::JoinSet::new();
+    for i in 0..16 {
+        let service = s.clone();
+        uploads.spawn(async move {
+            calls::upload(
+                &service,
+                owner,
+                &format!("renamed-{i}"),
+                png(),
+                "scene".into(),
+                None,
+            )
+            .await
+        });
+    }
+    let one = uploads.join_next().await.unwrap().unwrap().unwrap();
+    while let Some(next) = uploads.join_next().await {
+        assert_eq!(one["id"], next.unwrap().unwrap()["id"]);
+    }
+    let objects: i64 = sqlx::query_scalar("SELECT count(*) FROM storage_objects WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(objects, 1);
+    assert_eq!(locate_jobs(&s, owner).await, 1);
+    let original: Uuid = serde_json::from_value(one["id"].clone()).unwrap();
+    let reference = calls::upload(&s, owner, "as-reference", png(), "reference".into(), None)
+        .await
+        .unwrap();
+    let other: Uuid = serde_json::from_value(reference["id"].clone()).unwrap();
+    assert_ne!(original, other); // Purpose remains separate; the expensive work is shared.
+    assert_eq!(locate_jobs(&s, owner).await, 1);
+    let a = locate::get(&s, owner, original).await.unwrap();
+    let b = locate::get(&s, owner, other).await.unwrap();
+    assert_eq!(a["job"]["id"], b["job"]["id"]);
+    assert_eq!(a["job"]["status"], "queued");
+    let before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM screenshot_ocr_cache WHERE owner_id=$1")
+            .bind(owner)
+            .fetch_one(&s.db.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, 0); // Reading a queued status must not launch an OCR subprocess.
+    let end = Utc::now() - Duration::hours(2);
+    let input = json!({"symbol":"ETHUSDT","market":"usd_m","interval":"1h","start_at":end-Duration::hours(64),"end_at":end,"source":"rest"});
+    replay::put_location(
+        &s,
+        owner,
+        other,
+        Some("confirm-alias"),
+        serde_json::from_value(input).unwrap(),
+    )
+    .await
+    .unwrap();
+    let saved = locate::get(&s, owner, original).await.unwrap();
+    assert_eq!(saved["location"]["symbol"], "ETHUSDT");
+    assert_eq!(saved["location"]["matched_by"], "user");
+    let query = calls::upload(&s, owner, "later-query", png(), "query".into(), None)
+        .await
+        .unwrap();
+    let query_id = serde_json::from_value(query["id"].clone()).unwrap();
+    assert_eq!(
+        locate::get(&s, owner, query_id).await.unwrap()["location"]["end_at"],
+        saved["location"]["end_at"]
+    );
+    assert_eq!(locate_jobs(&s, owner).await, 1);
+    let job = claim_locate(&s, owner).await;
+    assert_eq!(
+        locate::run(&s, &job).await.unwrap()["outcome"],
+        "already_located"
+    );
+    let (foreign, _) = s.db.create_user("other-image-owner").await.unwrap();
+    let isolated = calls::upload(&s, foreign, "same-bytes", png(), "scene".into(), None)
+        .await
+        .unwrap();
+    assert_ne!(isolated["id"], one["id"]);
+    let foreign_id = serde_json::from_value(isolated["id"].clone()).unwrap();
+    assert!(locate::get(&s, foreign, foreign_id).await.unwrap()["location"].is_null());
+    assert_eq!(locate_jobs(&s, foreign).await, 1);
+    assert!(locate::get(&s, foreign, original).await.is_err());
+}
+
+#[tokio::test]
+async fn standalone_upload_accepts_manual_calibration_and_never_auto_retries_uncertainty() {
+    let (s, owner, _tmp) = setup().await;
+    let shot = calls::upload(&s, owner, "standalone", png(), "supplement".into(), None)
+        .await
+        .unwrap();
+    let attachment = serde_json::from_value(shot["id"].clone()).unwrap();
+    sqlx::query("UPDATE jobs SET status='succeeded',result=$2 WHERE owner_id=$1 AND kind='attachment.locate'")
+        .bind(owner).bind(json!({"outcome":"needs_manual","candidates":[]})).execute(&s.db.pool).await.unwrap();
+    let repeated = calls::upload(&s, owner, "same-again", png(), "supplement".into(), None)
+        .await
+        .unwrap();
+    assert_eq!(repeated["id"], shot["id"]);
+    assert_eq!(locate_jobs(&s, owner).await, 1);
+    let chosen = locate::request(
+        &s,
+        owner,
+        attachment,
+        "manual-standalone",
+        over(json!({"symbol":"ETHUSDT","market":"usd_m","interval":"4h"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(chosen["symbol"], "ETHUSDT");
+    assert_eq!(chosen["interval"], "4h");
+    assert_eq!(locate_jobs(&s, owner).await, 2);
+}
+
+#[tokio::test]
+async fn query_pins_and_unconfirmed_candidates_survive_temporary_image_cleanup() {
+    let (s, owner, _tmp) = setup().await;
+    let mut ids = Vec::new();
+    for value in [90, 150, 210] {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            64,
+            image::Rgb([value, value, value]),
+        ))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+        let id = Uuid::new_v4();
+        let bytes = png.into_inner();
+        let meta = s.images.publish(owner, id, bytes.clone()).await.unwrap();
+        sqlx::query("INSERT INTO attachments(id,owner_id,sha256,mime,size,width,height,kind,uploaded_at) VALUES($1,$2,$3,$4,$5,64,64,'query',now()-interval '48 hours')")
+            .bind(id).bind(owner).bind(meta.digest).bind(meta.mime).bind(bytes.len() as i64).execute(&s.db.pool).await.unwrap();
+        let mut tx = s.db.pool.begin().await.unwrap();
+        jobs::enqueue_tx(
+            &mut tx,
+            owner,
+            locate::KIND,
+            &id.to_string(),
+            json!({"attachment_id":id,"trigger":"upload"}),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        ids.push(id);
+    }
+    sqlx::query("UPDATE jobs SET status='succeeded',result=$2 WHERE owner_id=$1 AND kind='attachment.locate'")
+        .bind(owner).bind(json!({"outcome":"unreadable"})).execute(&s.db.pool).await.unwrap();
+    sqlx::query("UPDATE jobs SET result=$3 WHERE owner_id=$1 AND body->>'attachment_id'=$2 AND kind='attachment.locate'")
+        .bind(owner).bind(ids[1].to_string()).bind(json!({"outcome":"candidates","candidates":[candidate(0.64,2)]})).execute(&s.db.pool).await.unwrap();
+    let end = Utc::now() - Duration::hours(2);
+    replay::put_location(&s,owner,ids[0],Some("pin-query"),serde_json::from_value(json!({"symbol":"ETHUSDT","market":"usd_m","interval":"1h","start_at":end-Duration::hours(64),"end_at":end,"source":"rest"})).unwrap()).await.unwrap();
+    scorebook::application::gc::owner(&s, owner).await.unwrap();
+    let remaining: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM attachments WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_all(&s.db.pool)
+        .await
+        .unwrap();
+    assert!(remaining.contains(&ids[0]));
+    assert!(remaining.contains(&ids[1]));
+    assert!(!remaining.contains(&ids[2]));
+    assert!(locate::get(&s, owner, ids[0]).await.unwrap()["location"].is_object());
 }

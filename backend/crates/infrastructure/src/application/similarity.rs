@@ -25,10 +25,47 @@ pub async fn embed_mode(
     model: &str,
     persist: bool,
 ) -> Result<(Vector, Value, String)> {
+    embed_selected(s, owner, id, region, model, (persist, None)).await
+}
+
+pub const CHART_VISUAL_CROP: &str = "chart-pane-v1";
+
+/// Rebuild a separate, versioned crop of the original; never mix old whole-image
+/// vectors with queries that contain only the candlestick pane.
+pub async fn embed_chart_visual(
+    s: &Services,
+    owner: Uuid,
+    id: Uuid,
+) -> Result<(Vector, Value, String)> {
+    let input = serde_json::from_value(json!({"attachment_id":id}))
+        .map_err(|_| Error::bad("invalid_request"))?;
+    let read = super::chart_search::anchored(s, owner, &input).await?;
+    embed_selected(
+        s,
+        owner,
+        id,
+        Some(read.geometry.quality.region),
+        "dinov2-small-v1",
+        (true, Some(CHART_VISUAL_CROP)),
+    )
+    .await
+}
+
+async fn embed_selected(
+    s: &Services,
+    owner: Uuid,
+    id: Uuid,
+    region: Option<Region>,
+    model: &str,
+    (persist, profile): (bool, Option<&str>),
+) -> Result<(Vector, Value, String)> {
     crate::adapters::ann::space(model)?;
-    let rh = digest(&region);
+    let rh = match profile {
+        Some(profile) => digest(&json!({"crop_profile":profile,"region":region})),
+        None => digest(&region),
+    };
     // 裁剪出来的区域向量只说明那一块算过，代表不了整张原图，索引状态因此只认整图。
-    let whole_image = region.is_none();
+    let whole_image = region.is_none() || profile.is_some();
     let region_json = json!(region);
     let existing=sqlx::query("SELECT embedding,quality FROM image_embeddings WHERE owner_id=$1 AND attachment_id=$2 AND model_id=$3 AND region_hash=$4").bind(owner).bind(id).bind(model).bind(&rh).fetch_optional(&s.db.pool).await?;
     if let Some(r) = existing {
@@ -43,13 +80,29 @@ pub async fn embed_mode(
         .ok_or_else(Error::not_found)?;
     let expected: String = original.get("sha256");
     let kind: String = original.get("kind");
-    let loader = s.clone();
-    let selected = model.to_string();
-    let f = s
-        .vision
-        .singleflight(
-            format!("{owner}:{id}:{rh}:{selected}:{expected}"),
-            async move {
+    let mut tx = s.db.pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))")
+        .bind(owner.to_string())
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,16))")
+        .bind(format!("{owner}:{expected}:{rh}:{model}"))
+        .execute(&mut *tx)
+        .await?;
+    let shared = sqlx::query("SELECT e.embedding,e.quality FROM image_embeddings e JOIN attachments a ON a.owner_id=e.owner_id AND a.id=e.attachment_id WHERE e.owner_id=$1 AND a.sha256=$2 AND e.model_id=$3 AND e.region_hash=$4 LIMIT 1")
+        .bind(owner).bind(&expected).bind(model).bind(&rh).fetch_optional(&mut *tx).await?;
+    let mut f = if let Some(row) = shared {
+        let vector: Vector = row.get("embedding");
+        crate::adapters::vision::Features {
+            vector: vector.to_vec(),
+            quality: row.get("quality"),
+            model_id: model.into(),
+        }
+    } else {
+        let loader = s.clone();
+        let selected = model.to_string();
+        s.vision
+            .singleflight(format!("{owner}:{rh}:{selected}:{expected}"), async move {
                 loader
                     .vision
                     .stream_extract(
@@ -59,18 +112,16 @@ pub async fn embed_mode(
                         &expected,
                     )
                     .await
-            },
-        )
-        .await?;
+            })
+            .await?
+    };
+    if let Some(profile) = profile {
+        f.quality["crop_profile"] = json!(profile);
+    }
     let vector = Vector::from(f.vector);
     if !persist {
         return Ok((vector, f.quality, rh));
     }
-    let mut tx = s.db.pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))")
-        .bind(owner.to_string())
-        .execute(&mut *tx)
-        .await?;
     sqlx::query("INSERT INTO embedding_models(id,dimension,metadata) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(&f.model_id).bind(vector.as_slice().len()as i32).bind(&f.quality).execute(&mut *tx).await?;
     // A model ID has immutable weights/preprocessing; adapter verifies identity.
     sqlx::query("INSERT INTO image_embeddings(id,owner_id,attachment_id,model_id,region,region_hash,embedding,quality) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING").bind(Uuid::new_v4()).bind(owner).bind(id).bind(model).bind(region_json).bind(&rh).bind(&vector).bind(&f.quality).execute(&mut *tx).await?;

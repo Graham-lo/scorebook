@@ -262,6 +262,7 @@ impl Facade {
             Action::ChartAnalyze => {
                 app::chart_search::analyze(s, owner, key()?, parse(payload)?).await
             }
+            Action::ChartOutline => app::chart_search::outline(s, owner, parse(payload)?).await,
             Action::ChartSearchCreate => {
                 app::chart_search::create(s, owner, key()?, parse(payload)?).await
             }
@@ -366,6 +367,7 @@ impl Facade {
             Action::SearchSave => app::search_sessions::save(s, owner, id()?, key()?).await,
             Action::SearchGet => app::search_sessions::get(s, owner, id()?).await,
             Action::MarketData => app::market::data(s, &parse(payload)?).await,
+            Action::MarketBounds => app::market::bounds(s, &parse(payload)?).await,
             Action::MarketChart => Ok(json!({"svg":app::market::svg(s,&parse(payload)?).await?})),
             Action::HistoryCoverage => app::history::coverage(s, parse(payload)?).await,
             Action::HistoryIndex => app::history::request(s, owner, key()?, parse(payload)?).await,
@@ -387,6 +389,9 @@ impl Facade {
             Action::AttachmentLocationPut => {
                 app::replay::put_location(s, owner, id()?, optional_key.as_deref(), parse(payload)?)
                     .await
+            }
+            Action::AttachmentLocationPreview => {
+                app::replay::preview_location(s, owner, id()?, parse(payload)?).await
             }
             Action::AttachmentLocationDelete => {
                 app::replay::delete_location(s, owner, id()?, optional_key.as_deref()).await

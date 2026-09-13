@@ -8,12 +8,7 @@ use scorebook_core::api::replay::AttachmentKindUpdate;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-/// 改附件用途。上传时定错了不必重传：同板块对比图本来就该是 reference，
-/// 只是上传的那一刻还没人知道。
-///
-/// 这里只改 `attachments.kind` 一列：已经钉住的位置不动（那是图自己的事实，
-/// 与它派什么用场无关），改成 scene 也不会引出一次自动定位（自动定位只发生在
-/// 复盘发布那一刻，且只发生一次）。
+/// 用途独立于图片内容；上传已排过自动定位，改用途不重复计算或清除位置。
 pub async fn set_kind(
     s: &Services,
     owner: Uuid,
@@ -64,7 +59,11 @@ pub async fn index(s: &Services, owner: Uuid, id: Uuid, key: &str, model: &str) 
         &mut tx,
         owner,
         "embed",
-        &format!("{id}:{model}"),
+        &if model == "dinov2-small-v1" {
+            format!("{id}:{model}:{}", super::similarity::CHART_VISUAL_CROP)
+        } else {
+            format!("{id}:{model}")
+        },
         body.clone(),
     )
     .await?;

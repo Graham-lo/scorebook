@@ -901,3 +901,50 @@ async fn attachment_kind_can_be_corrected_after_upload() {
         .is_err()
     );
 }
+
+#[tokio::test]
+async fn location_preview_is_owner_scoped_and_does_not_pin_or_change_preferences() {
+    let (s, owner, _, _tmp) = setup().await;
+    let s = s.with_market(Recorder::new());
+    let uploaded = calls::upload(&s, owner, "preview-image", png(), "scene".into(), None)
+        .await
+        .unwrap();
+    let attachment: Uuid = serde_json::from_value(uploaded["id"].clone()).unwrap();
+    let input = json!({"symbol":"BTCUSDT","market":"usd_m","interval":"1h",
+        "end_at":"2026-09-09T13:00:00Z","bars_count":109});
+    let result = replay::preview_location(
+        &s,
+        owner,
+        attachment,
+        serde_json::from_value(input.clone()).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["start_at"], "2026-09-05T00:00:00Z");
+    assert_eq!(result["preview"]["bars"].as_array().unwrap().len(), 109);
+    assert!(result.get("confirmed_at").is_none());
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM attachment_locations WHERE owner_id=$1")
+            .bind(owner)
+            .fetch_one(&s.db.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    let prefs: i64 = sqlx::query_scalar("SELECT count(*) FROM user_preferences WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(&s.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(prefs, 0);
+    let (other, _) = s.db.create_user("preview-other").await.unwrap();
+    assert!(
+        replay::preview_location(
+            &s,
+            other,
+            attachment,
+            serde_json::from_value(input).unwrap()
+        )
+        .await
+        .is_err()
+    );
+}

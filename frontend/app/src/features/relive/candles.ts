@@ -76,6 +76,11 @@ export interface StageBand {
 
 export interface CandlesOptions {
   bars: Bar[]
+  /**
+   * 窗口开头之前的那一段，只参与指标计算：不画、不计入逐根播放。没有它 MA256
+   * 这种长周期在窗口的前 255 根上是空的。
+   */
+  lead?: Bar[]
   interval: string
   levels?: LevelLine[]
   marks?: StageMark[]
@@ -103,12 +108,15 @@ export interface CandleStage {
   playing: () => boolean
   shown: () => number
   setSetup: (setup: ChartSetup | null) => void
+  /** 补上窗口之前那一段，指标重算一遍。 */
+  setLead: (bars: Bar[]) => void
   setMarks: (marks: StageMark[], bands?: StageBand[]) => void
   zoom: (range: { from: number; to: number } | null) => void
   /** 把某一根摆到屏幕中间，顺带把缩放定住。span 是这一屏铺多少根。 */
   focus: (index: number, span?: number) => void
   /** 放开手动缩放，回到跟着播放头走。 */
   resetView: () => void
+  zoomBy: (factor: number) => void
   /** 时间落在第几根上；早于第一根返回 0，晚于最后一根返回最后一根。 */
   indexAt: (iso: string | null | undefined) => number
   destroy: () => void
@@ -197,7 +205,7 @@ function ticks(min: number, max: number, count = 5): number[] {
 
 export function createCandles(options: CandlesOptions): CandleStage {
   const id = `rlvclip${(seq += 1)}`
-  const bars: Num[] = options.bars.map((bar: Bar) => ({
+  const toNum = (bar: Bar): Num => ({
     start: new Date(bar.start).getTime(),
     end: new Date(bar.end).getTime(),
     open: toNumber(bar.open),
@@ -206,8 +214,16 @@ export function createCandles(options: CandlesOptions): CandleStage {
     close: toNumber(bar.close),
     volume: toVolume(bar.volume),
     iso: bar.start,
-  }))
+  })
+  const bars: Num[] = options.bars.map(toNum)
   const closes = bars.map((b) => b.close)
+  /**
+   * 窗口之前那一段。指标先在「前置 + 窗口」这条长数组上算，再把前置那一截切
+   * 掉——画出来的还是窗口里那几根，位置一根不差，只是起头的值是收敛过的。
+   */
+  let leadBars: Num[] = (options.lead ?? []).map(toNum)
+  const withLead = (values: number[]) => (leadBars.length ? [...leadBars.map((b) => b.close), ...values] : values)
+  const trim = <T>(line: T[]): T[] => (leadBars.length ? line.slice(leadBars.length) : line)
   const hasVolume = bars.some((b) => b.volume !== null)
   let levels = options.levels ?? []
   let marks = options.marks ?? []
@@ -389,29 +405,29 @@ export function createCandles(options: CandlesOptions): CandleStage {
       indLayer.appendChild(line)
       series.push({ node: line, values, name })
     }
-    setup.ma.slice(0, 8).forEach((n, i) => add(sma(closes, n), `ma m${i % 3}`, `MA${n}`))
-    setup.ema.slice(0, 8).forEach((n, i) => add(ema(closes, n), `ema m${i % 3}`, `EMA${n}`))
+    setup.ma.slice(0, 8).forEach((n, i) => add(trim(sma(withLead(closes), n)), `ma m${i % 3}`, `MA${n}`))
+    setup.ema.slice(0, 8).forEach((n, i) => add(trim(ema(withLead(closes), n)), `ema m${i % 3}`, `EMA${n}`))
     if (setup.boll) {
       const k = Number(setup.boll.k)
       const width = Number.isFinite(k) ? k : 2
-      const b = boll(closes, setup.boll.n, width)
-      add(b.upper, 'bb', `BOLL上`)
-      add(b.mid, 'bb mid', `BOLL中`)
-      add(b.lower, 'bb', `BOLL下`)
+      const b = boll(withLead(closes), setup.boll.n, width)
+      add(trim(b.upper), 'bb', `BOLL上`)
+      add(trim(b.mid), 'bb mid', `BOLL中`)
+      add(trim(b.lower), 'bb', `BOLL下`)
     }
 
     if (setup.volume) {
       const mas = setup.volume.ma.slice(0, 6)
       // 量的 MA 复用 sma：缺量的位置按 0 参与平均会把线拉下去，所以缺量整段就
       // 不画副图，只留一句话。
-      const vols = bars.map((b) => b.volume ?? 0)
+      const vols = [...leadBars.map((b) => b.volume ?? 0), ...bars.map((b) => b.volume ?? 0)]
       addPane({
         kind: 'vol',
         title: mas.length ? `VOL  MA${mas.join('/')}` : 'VOL',
         cls: 'rlv-pvol',
         note: hasVolume ? null : '这一段没有成交量',
         lines: hasVolume
-          ? mas.map((n, i) => ({ values: sma(vols, n), name: `MAVOL${n}`, cls: `mavol m${i % 3}` }))
+          ? mas.map((n, i) => ({ values: trim(sma(vols, n)), name: `MAVOL${n}`, cls: `mavol m${i % 3}` }))
           : [],
         cell: hasVolume
           ? (i) => {
@@ -446,7 +462,8 @@ export function createCandles(options: CandlesOptions): CandleStage {
 
     if (setup.macd) {
       const { fast, slow, signal } = setup.macd
-      const m = macdLines(closes, fast, slow, signal)
+      const full = macdLines(withLead(closes), fast, slow, signal)
+      const m = { dif: trim(full.dif), dea: trim(full.dea), hist: trim(full.hist) }
       addPane({
         kind: 'macd',
         title: `MACD(${fast},${slow},${signal})`,
@@ -495,7 +512,7 @@ export function createCandles(options: CandlesOptions): CandleStage {
 
     if (setup.rsi) {
       const n = setup.rsi.n
-      const values = rsiLine(closes, n)
+      const values = trim(rsiLine(withLead(closes), n))
       addPane({
         kind: 'rsi',
         title: `RSI(${n})`,
@@ -512,7 +529,7 @@ export function createCandles(options: CandlesOptions): CandleStage {
 
     if (setup.atr) {
       const n = setup.atr.n
-      const values = atrLine(bars, n)
+      const values = trim(atrLine(leadBars.length ? [...leadBars, ...bars] : bars, n))
       addPane({
         kind: 'atr',
         title: `ATR(${n})`,
@@ -979,7 +996,7 @@ export function createCandles(options: CandlesOptions): CandleStage {
   function step(now: number): void {
     if (!running) return
     if (!last) last = now
-    const dt = (now - last) / 1000
+    const dt = Math.min(now - last, 250) / 1000
     last = now
     if (now < holdUntil) {
       raf = requestAnimationFrame(step)
@@ -1014,16 +1031,6 @@ export function createCandles(options: CandlesOptions): CandleStage {
 
   function play(speed = 1): void {
     rate = speed
-    if (prefersReducedMotion()) {
-      showUpTo(bars.length - 1)
-      for (const mark of marks) {
-        if (fired.has(mark.id)) continue
-        fired.add(mark.id)
-        options.onMark?.(mark)
-      }
-      options.onEnd?.()
-      return
-    }
     if (running) return
     if (shown >= bars.length) return
     last = 0
@@ -1041,6 +1048,9 @@ export function createCandles(options: CandlesOptions): CandleStage {
     last = 0
     node.classList.remove('playing')
   }
+
+  const onVisibility = () => { if (document.hidden) pause() }
+  document.addEventListener('visibilitychange', onVisibility)
 
   /* ------------------------------------------------------------ 十字线 */
 
@@ -1134,7 +1144,7 @@ export function createCandles(options: CandlesOptions): CandleStage {
   /* -------------------------------------------------- 缩放 / 平移 */
 
   function setView(from: number, span: number): void {
-    const size = Math.max(8, Math.min(bars.length, Math.round(span)))
+    const size = Math.min(bars.length, Math.max(8, Math.round(span)))
     const start = Math.max(0, Math.min(Math.max(0, bars.length - size), Math.round(from)))
     fixedView = { from: start, to: start + size - 1 }
     layout()
@@ -1160,6 +1170,9 @@ export function createCandles(options: CandlesOptions): CandleStage {
   }
 
   let drag: { x: number; from: number; span: number; moved: boolean } | null = null
+  const pointers = new Map<number, { x: number; y: number }>()
+  let pinch: { distance: number; span: number; anchor: number } | null = null
+  const pair = () => [...pointers.values()].slice(0, 2)
 
   function panFrom(e: PointerEvent): void {
     if (!drag) return
@@ -1170,13 +1183,25 @@ export function createCandles(options: CandlesOptions): CandleStage {
   }
 
   const onMove = (e: PointerEvent) => {
-    if (drag && (e.buttons & 1) === 1) {
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pinch && pointers.size >= 2) {
+      const [a, b] = pair()
+      if (!a || !b) return
+      const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))
+      const span = Math.min(bars.length, Math.max(8, pinch.span * pinch.distance / distance))
+      const ratio = Math.max(0, Math.min(1, ((a.x + b.x) / 2 - plate.getBoundingClientRect().left) / plotWidth()))
+      setView(pinch.anchor - ratio * span, span)
+      hideCross()
+      return
+    }
+    if (drag && pointers.has(e.pointerId)) {
       panFrom(e)
       node.classList.add('grabbing')
     }
     showCross(e.clientX, e.clientY)
   }
   const onLeave = () => {
+    if (pointers.size) return
     drag = null
     node.classList.remove('grabbing')
     hideCross()
@@ -1187,18 +1212,39 @@ export function createCandles(options: CandlesOptions): CandleStage {
     // 标注气泡上的按钮要能点，别把点击当成拖动。
     if (e.target instanceof Element && e.target.closest('button')) return
     if (e.button !== 0 && e.pointerType === 'mouse') return
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    node.setPointerCapture(e.pointerId)
     const v = currentView()
+    if (pointers.size === 2) {
+      const [a, b] = pair()
+      if (a && b) {
+        const ratio = Math.max(0, Math.min(1, ((a.x + b.x) / 2 - plate.getBoundingClientRect().left) / plotWidth()))
+        pinch = { distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), span: v.to - v.from + 1, anchor: v.from + ratio * (v.to - v.from + 1) }
+      }
+      drag = null
+      return
+    }
     drag = { x: e.clientX, from: v.from, span: v.to - v.from + 1, moved: false }
   }
-  const onUp = () => {
+  const onUp = (e: PointerEvent) => {
+    pointers.delete(e.pointerId)
+    if (node.hasPointerCapture(e.pointerId)) node.releasePointerCapture(e.pointerId)
+    pinch = null
     drag = null
+    const remaining = pair()[0]
+    if (remaining) {
+      const v = currentView()
+      drag = { x: remaining.x, from: v.from, span: v.to - v.from + 1, moved: false }
+    }
     node.classList.remove('grabbing')
   }
   node.addEventListener('pointermove', onMove)
   node.addEventListener('pointerleave', onLeave)
   node.addEventListener('pointerdown', onDown)
   node.addEventListener('pointerup', onUp)
-  node.addEventListener('pointercancel', onLeave)
+  node.addEventListener('pointercancel', onUp)
+  const onDoubleClick = () => { fixedView = null; layout() }
+  node.addEventListener('dblclick', onDoubleClick)
   node.addEventListener('wheel', onWheel, { passive: false })
 
   /* ------------------------------------------------------------ 尺寸 */
@@ -1248,6 +1294,10 @@ export function createCandles(options: CandlesOptions): CandleStage {
       setup = next
       buildSeries()
     },
+    setLead: (next) => {
+      leadBars = next.map(toNum)
+      buildSeries()
+    },
     setMarks: (nextMarks, nextBands) => {
       marks = nextMarks
       if (nextBands) bands = nextBands
@@ -1267,15 +1317,22 @@ export function createCandles(options: CandlesOptions): CandleStage {
       fixedView = null
       layout()
     },
+    zoomBy: (factor) => {
+      const v = currentView()
+      const size = Math.min(bars.length, Math.max(8, (v.to - v.from + 1) * factor))
+      setView((v.from + v.to + 1 - size) / 2, size)
+    },
     indexAt,
     destroy: () => {
       pause()
+      document.removeEventListener('visibilitychange', onVisibility)
       observer.disconnect()
       node.removeEventListener('pointermove', onMove)
       node.removeEventListener('pointerleave', onLeave)
       node.removeEventListener('pointerdown', onDown)
       node.removeEventListener('pointerup', onUp)
-      node.removeEventListener('pointercancel', onLeave)
+      node.removeEventListener('pointercancel', onUp)
+      node.removeEventListener('dblclick', onDoubleClick)
       node.removeEventListener('wheel', onWheel)
       node.remove()
     },

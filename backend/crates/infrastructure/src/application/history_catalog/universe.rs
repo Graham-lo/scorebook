@@ -46,6 +46,9 @@ struct Scope {
     market: String,
     interval: String,
     top: usize,
+    /// 这一轮只建哪几档窗口。不给就是 `LOCATE_WINDOWS` 全档；补建 96/192 时给
+    /// `{"windows":[96,192]}`，已经建好的那三档连覆盖记录都不用去查（§5.5-1）。
+    windows: Vec<usize>,
 }
 
 fn scope_of(body: &Value) -> Result<Scope> {
@@ -55,6 +58,27 @@ fn scope_of(body: &Value) -> Result<Scope> {
         .ok_or_else(|| Error::bad("invalid_universe_job"))?
         .to_string();
     let top = body["top"].as_u64().unwrap_or(200) as usize;
+    let windows: Vec<usize> = match body["windows"].as_array() {
+        Some(v) => {
+            let asked: Vec<usize> = v
+                .iter()
+                .filter_map(|w| w.as_u64())
+                .map(|w| w as usize)
+                .collect();
+            if asked.is_empty()
+                || asked
+                    .iter()
+                    .any(|w| !super::super::history::LOCATE_WINDOWS.contains(w))
+            {
+                return Err(Error::bad("invalid_universe_windows"));
+            }
+            super::super::history::LOCATE_WINDOWS
+                .into_iter()
+                .filter(|w| asked.contains(w))
+                .collect()
+        }
+        None => super::super::history::LOCATE_WINDOWS.to_vec(),
+    };
     archives::archive_prefix(&market, "monthly")?;
     super::super::history::interval_of(&interval)?;
     if !(1..=1000).contains(&top) {
@@ -64,6 +88,7 @@ fn scope_of(body: &Value) -> Result<Scope> {
         market,
         interval,
         top,
+        windows,
     })
 }
 
@@ -322,8 +347,10 @@ async fn build_unit(
     let iv = super::super::history::interval_of(&scope.interval)?;
     let span = iv.bars_between(unit.start, unit.end);
     // 一段太短就放不下大窗口。这不是失败，是这段范围本来就切不出 256 根的窗口。
-    let needed: Vec<usize> = super::super::history::LOCATE_WINDOWS
-        .into_iter()
+    let needed: Vec<usize> = scope
+        .windows
+        .iter()
+        .copied()
         .filter(|w| span >= *w as i64)
         .collect();
     if needed.is_empty() {
@@ -525,7 +552,7 @@ pub async fn step(s: &Services, j: &Job) -> Result<Value> {
                "symbols":symbols.len(),"units_built":tally.built,"units_skipped":tally.skipped,
                "units_failed":tally.failed,"months_downloaded":tally.months,"feature_rows":tally.rows,
                "failures":tally.failures,"source":"binance_monthly_archive","raw_market_storage":"none",
-               "windows":super::super::history::LOCATE_WINDOWS,"stride_bars":STRIDE}),
+               "windows":scope.windows,"stride_bars":STRIDE}),
     )
 }
 

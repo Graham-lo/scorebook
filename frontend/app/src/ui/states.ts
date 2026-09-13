@@ -71,6 +71,14 @@ export function spinner(label: string): HTMLElement {
   return h('div.sync', {}, h('i'), h('span', { text: label }))
 }
 
+/**
+ * 作业进度条，全站只有这一种。后台任务在跑就是一行字；知道跑到哪儿了才多一条
+ * 进度条。统计、参照、准备行情、导入，用的都是它。
+ */
+export function jobLine(label: string, ratio: number | null = null): HTMLElement {
+  return ratio === null ? spinner(label) : progressLine(label, ratio)
+}
+
 /** Used wherever the backend has the data but the feature is not open yet. */
 export function unavailable(title: string, why: string): HTMLElement {
   return h(

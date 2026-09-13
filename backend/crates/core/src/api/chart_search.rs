@@ -17,6 +17,11 @@ pub struct ChartSearchInput {
     pub attachment_id: Uuid,
     pub region: Option<Region>,
     pub scope: ChartScope,
+    /// Optional private-record text retrieval, combined with the screenshot.
+    /// Trimmed; blank means image-only. At most 4096 UTF-8 bytes.
+    /// Nonempty text is unsupported for public market history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_text: Option<String>,
     pub symbol: Option<String>,
     pub market: Option<String>,
     /// The screenshot interval: required under `same_interval`, and must be null

@@ -1,14 +1,5 @@
-//! Pinning a screenshot to real Binance bars, once, in the background.
-//!
-//! Publishing a review is the moment a record is finished, so that is when each
-//! scene screenshot that has never been pinned gets one automatic match. The
-//! only thing keeping two matches off the same screenshot is the jobs table's
-//! own `UNIQUE(owner_id,kind,dedupe_key)`: the automatic key is the attachment
-//! id, so the automatic attempt happens at most once ever, and a manual request
-//! joins a queued or running job instead of starting a second one. No lock
-//! table, no shared writable state, and a location the trader confirmed is
-//! never overwritten — the automatic job only ever inserts, and reports
-//! `already_located` when a row is already there.
+//! Upload schedules one automatic location attempt per image content and owner.
+//! Trusted coordinates persist; uncertain candidates stay available for manual confirmation.
 use super::{
     Services,
     jobs::{self, Job},
@@ -25,23 +16,12 @@ const ACTIVE: [&str; 3] = ["queued", "retry_wait", "running"];
 
 /// How sure an automatic match has to be before it is written down.
 ///
-/// `chart_match::rerank` scores `exp(-6 * alignment_cost)`, so 0.85 is roughly
-/// a hundredth of a normalized candle of drift per bar: the level the existing
-/// chart-search acceptance treats as "the same chart", not merely a similar
-/// one. The margin keeps the runner-up clearly behind, because a screenshot
-/// that fits two windows equally well has not actually been identified.
+/// `chart_match::rerank` scores `exp(-6 * alignment_cost)`。真实截图（抗锯齿、
+/// 均线穿过、影线被裁）在同一段行情上也只到 0.75 上下，从前那个 0.85 是拿合成图
+/// 试出来的，所以真图永远够不到（§5.2 第 5 步）。门槛降到 0.75，代价用更宽的间距
+/// 补回来：次佳要落后 0.10，并且最佳分在这一次的分布里得是 z ≥ 4 的孤峰。
 fn thresholds() -> (f64, f64) {
-    let read = |name: &str, fallback: f64| {
-        std::env::var(name)
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite())
-            .unwrap_or(fallback)
-    };
-    (
-        read("SCOREBOOK_AUTO_LOCATE_MIN_SCORE", 0.85),
-        read("SCOREBOOK_AUTO_LOCATE_MIN_MARGIN", 0.05),
-    )
+    super::locate_anchored::thresholds()
 }
 
 fn score_of(item: &Value) -> f64 {
@@ -173,8 +153,12 @@ async fn screenshot_reading(s: &Services, owner: Uuid, attachment: Uuid) -> Loca
     if !matches!(pinned, Ok(false)) {
         return nothing;
     }
+    if let Ok(Some(scoped)) = super::chart_search::browser_labels_cached(s, owner, attachment).await
+    {
+        return scoped;
+    }
     let cached: Option<(Option<String>, Option<String>)> = match sqlx::query_as(
-        "SELECT symbol,interval FROM attachment_reads WHERE owner_id=$1 AND attachment_id=$2",
+        "SELECT symbol,interval FROM attachment_reads WHERE owner_id=$1 AND attachment_id=$2 AND recognition_version=2",
     )
     .bind(owner)
     .bind(attachment)
@@ -188,14 +172,14 @@ async fn screenshot_reading(s: &Services, owner: Uuid, attachment: Uuid) -> Loca
         Some(v) => v,
         None => match super::chart_search::read_labels(s, owner, attachment).await {
             Ok((symbol, _, interval)) => {
-                let _ = sqlx::query("INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval) VALUES($1,$2,$3,$4) ON CONFLICT(owner_id,attachment_id) DO NOTHING")
+                let _ = sqlx::query("INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval,recognition_version) VALUES($1,$2,$3,$4,2) ON CONFLICT(owner_id,attachment_id) DO UPDATE SET symbol=EXCLUDED.symbol,interval=EXCLUDED.interval,recognition_version=EXCLUDED.recognition_version")
                     .bind(owner).bind(attachment).bind(&symbol).bind(&interval)
                     .execute(&s.db.pool).await;
                 (symbol, interval)
             }
             Err(e) => {
                 if e.kind == crate::error::ErrorKind::Invalid {
-                    let _ = sqlx::query("INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval) VALUES($1,$2,NULL,NULL) ON CONFLICT(owner_id,attachment_id) DO NOTHING")
+                    let _ = sqlx::query("INSERT INTO attachment_reads(owner_id,attachment_id,symbol,interval,recognition_version) VALUES($1,$2,NULL,NULL,2) ON CONFLICT(owner_id,attachment_id) DO UPDATE SET symbol=NULL,interval=NULL,recognition_version=EXCLUDED.recognition_version")
                         .bind(owner).bind(attachment).execute(&s.db.pool).await;
                 }
                 tracing::debug!(code = %e.code, "screenshot label read did not produce a default");
@@ -268,7 +252,7 @@ async fn resolved(
     over: &LocateOverride,
     read: &LocateOverride,
 ) -> Result<Value> {
-    let job: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('symbol',j.body->>'symbol','market',j.body->>'market','interval',j.body->>'interval','chosen',j.body->'chosen') FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id'=$2::text ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
+    let job: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('symbol',j.body->>'symbol','market',j.body->>'market','interval',j.body->>'interval','chosen',j.body->'chosen') FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id' IN (SELECT sibling.id::text FROM attachments sibling JOIN attachments requested ON requested.owner_id=sibling.owner_id AND requested.sha256=sibling.sha256 WHERE requested.owner_id=$1 AND requested.id::text=$2::text) ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
         .bind(owner)
         .bind(attachment.to_string())
         .fetch_optional(&mut **tx)
@@ -300,12 +284,11 @@ async fn resolved(
 }
 
 const LOCATION: &str = "SELECT (to_jsonb(al)-'owner_id'-'score')||jsonb_build_object('score',al.score::text) FROM attachment_locations al WHERE al.owner_id=$1 AND al.attachment_id=$2";
-const LATEST_JOB: &str = "SELECT jsonb_build_object('id',j.id,'status',j.status,'result',j.result,'created_at',j.created_at) FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id'=$2::text ORDER BY j.created_at DESC,j.id DESC LIMIT 1";
+const LATEST_JOB: &str = "SELECT jsonb_build_object('id',j.id,'status',j.status,'result',j.result,'created_at',j.created_at) FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id' IN (SELECT sibling.id::text FROM attachments sibling JOIN attachments requested ON requested.owner_id=sibling.owner_id AND requested.sha256=sibling.sha256 WHERE requested.owner_id=$1 AND requested.id::text=$2::text) ORDER BY j.created_at DESC,j.id DESC LIMIT 1";
 
 /// The screenshot's pin and the most recent attempt at making one.
 pub async fn get(s: &Services, owner: Uuid, attachment: Uuid) -> Result<Value> {
-    // 先读图，再开事务：OCR 要一枚视觉许可加一个子进程，不该攥着数据库连接跑。
-    let read = screenshot_reading(s, owner, attachment).await;
+    // Status polling reads persisted metadata only; it must never start OCR.
     let mut tx = s.db.pool.begin().await?;
     owned(&mut tx, owner, attachment).await?;
     let location: Option<Value> = sqlx::query_scalar(LOCATION)
@@ -318,6 +301,14 @@ pub async fn get(s: &Services, owner: Uuid, attachment: Uuid) -> Result<Value> {
         .bind(attachment.to_string())
         .fetch_optional(&mut *tx)
         .await?;
+    let read_row: Option<(Option<String>,Option<String>)> = sqlx::query_as("SELECT r.symbol,r.interval FROM attachment_reads r JOIN attachments a ON a.owner_id=r.owner_id AND a.id=r.attachment_id JOIN attachments requested ON requested.owner_id=a.owner_id AND requested.sha256=a.sha256 WHERE requested.owner_id=$1 AND requested.id=$2 ORDER BY r.recognition_version DESC LIMIT 1")
+        .bind(owner).bind(attachment).fetch_optional(&mut *tx).await?;
+    let (symbol, interval) = read_row.unwrap_or_default();
+    let read = LocateOverride {
+        symbol,
+        interval,
+        ..Default::default()
+    };
     let used = resolved(
         &mut tx,
         owner,
@@ -327,9 +318,31 @@ pub async fn get(s: &Services, owner: Uuid, attachment: Uuid) -> Result<Value> {
     )
     .await?;
     tx.commit().await?;
-    Ok(
-        json!({"location":location,"job":job,"symbol":used["symbol"],"market":used["market"],"interval":used["interval"]}),
-    )
+    let mut response = json!({"location":location,"job":job,"symbol":used["symbol"],"market":used["market"],"interval":used["interval"]});
+    for field in ["symbol", "market", "interval"] {
+        if !response["location"][field].is_null() {
+            response[field] = response["location"][field].clone();
+        } else if !response["job"]["result"][field].is_null() {
+            response[field] = response["job"]["result"][field].clone();
+        }
+    }
+    if response["location"].is_null()
+        && let Some(scoped) =
+            super::chart_search::browser_labels_cached(s, owner, attachment).await?
+    {
+        let old = response["job"]["result"]["anchors"]["symbol"].as_str();
+        if response["job"]["result"]["anchors"]["symbol_from"] != "user"
+            && old != scoped.symbol.as_deref()
+        {
+            response["symbol"] = json!(scoped.symbol);
+            response["market"] = json!(scoped.market);
+            response["interval"] = json!(scoped.interval);
+            if response["job"]["result"].is_object() {
+                response["job"]["result"] = json!({"outcome":"needs_manual","candidates":[],"anchors":{"symbol":scoped.symbol,"interval":scoped.interval}});
+            }
+        }
+    }
+    Ok(response)
 }
 
 /// The record this screenshot can be matched against: it has to name an
@@ -384,7 +397,8 @@ pub async fn request(
         return Ok(v);
     }
     owned(&mut tx, owner, attachment).await?;
-    let active: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'status',j.status,'result',j.result,'created_at',j.created_at) FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id'=$2::text AND j.status=ANY($3) ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
+    lock_content(&mut tx, owner, attachment).await?;
+    let active: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'status',j.status,'result',j.result,'created_at',j.created_at) FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id' IN (SELECT sibling.id::text FROM attachments sibling JOIN attachments requested ON requested.owner_id=sibling.owner_id AND requested.sha256=sibling.sha256 WHERE requested.owner_id=$1 AND requested.id::text=$2::text) AND j.status=ANY($3) ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
         .bind(owner)
         .bind(attachment.to_string())
         .bind(ACTIVE.as_slice())
@@ -394,10 +408,18 @@ pub async fn request(
     let job = match active {
         Some(v) => v,
         None => {
-            let call = matchable_call(&mut tx, owner, attachment).await?;
+            let call = matchable_call(&mut tx, owner, attachment).await.ok();
             // worker 读的是 job 体，所以实际用的三元组在这里就定下来，
             // 它跑的时候记录被改成别的品种也不影响这一次。
-            let (symbol, market, interval) = call_target(&mut tx, owner, call).await?;
+            let (symbol, market, interval) = if let Some(call) = call {
+                call_target(&mut tx, owner, call).await?
+            } else {
+                (
+                    read.symbol.clone().unwrap_or_default(),
+                    read.market.clone().unwrap_or_else(|| "usd_m".into()),
+                    read.interval.clone().unwrap_or_default(),
+                )
+            };
             let symbol = over.symbol.clone().unwrap_or(symbol);
             let market = over.market.clone().unwrap_or(market);
             let interval = over.interval.clone().unwrap_or(interval);
@@ -447,69 +469,80 @@ pub async fn request(
     Ok(v)
 }
 
-/// One automatic attempt per never-pinned scene screenshot of a finished
-/// record, enqueued inside the transaction that published the review.
+pub(crate) async fn lock_content(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: Uuid,
+    attachment: Uuid,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(owner_id::text||':'||sha256,14)) FROM attachments WHERE owner_id=$1 AND id=$2")
+        .bind(owner).bind(attachment).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Copy a previously trusted location to another metadata row for identical bytes.
+/// Manual corrections propagate; automatic jobs never replace a user-confirmed row.
+pub(crate) async fn share_location(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: Uuid,
+    attachment: Uuid,
+    replace: bool,
+) -> Result<()> {
+    sqlx::query("INSERT INTO attachment_locations(owner_id,attachment_id,symbol,market,interval,start_at,end_at,bars_count,source,score,search_run_id,matched_by,anchor,confirmed_at) SELECT a.owner_id,a.id,l.symbol,l.market,l.interval,l.start_at,l.end_at,l.bars_count,l.source,l.score,l.search_run_id,l.matched_by,l.anchor,l.confirmed_at FROM attachments original JOIN attachments a ON a.owner_id=original.owner_id AND a.sha256=original.sha256 JOIN attachment_locations l ON l.owner_id=original.owner_id AND l.attachment_id=original.id WHERE original.owner_id=$1 AND original.id=$2 AND a.id<>original.id ON CONFLICT(owner_id,attachment_id) DO UPDATE SET symbol=EXCLUDED.symbol,market=EXCLUDED.market,interval=EXCLUDED.interval,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at,bars_count=EXCLUDED.bars_count,source=EXCLUDED.source,score=EXCLUDED.score,search_run_id=EXCLUDED.search_run_id,matched_by=EXCLUDED.matched_by,anchor=EXCLUDED.anchor,confirmed_at=EXCLUDED.confirmed_at WHERE $3")
+        .bind(owner).bind(attachment).bind(replace).execute(&mut **tx).await?;
+    Ok(())
+}
+
+pub(crate) async fn enqueue_upload(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: Uuid,
+    attachment: Uuid,
+) -> Result<()> {
+    let pinned: Option<Uuid> = sqlx::query_scalar("SELECT l.attachment_id FROM attachment_locations l JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id JOIN attachments requested ON requested.owner_id=a.owner_id AND requested.sha256=a.sha256 WHERE requested.owner_id=$1 AND requested.id=$2 ORDER BY l.confirmed_at DESC LIMIT 1")
+        .bind(owner).bind(attachment).fetch_optional(&mut **tx).await?;
+    if let Some(pinned) = pinned {
+        share_location(tx, owner, pinned, false).await?;
+        return Ok(());
+    }
+    let tried: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN attachments a ON a.owner_id=j.owner_id AND a.id::text=j.body->>'attachment_id' JOIN attachments requested ON requested.owner_id=a.owner_id AND requested.sha256=a.sha256 WHERE requested.owner_id=$1 AND requested.id=$2 AND j.kind='attachment.locate')")
+        .bind(owner).bind(attachment).fetch_one(&mut **tx).await?;
+    if tried {
+        return Ok(());
+    }
+    match jobs::enqueue_tx(
+        tx,
+        owner,
+        KIND,
+        &attachment.to_string(),
+        json!({"attachment_id":attachment,"trigger":"upload"}),
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) if e.code == "queue_capacity_reached" => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 pub async fn enqueue_after_review(
     tx: &mut Transaction<'_, Postgres>,
     owner: Uuid,
     call: Uuid,
 ) -> Result<()> {
-    enqueue_unpinned_scene(tx, owner, call, "review_published").await
+    enqueue_after_scene_change(tx, owner, call).await
 }
 
-/// 换过场景图之后补的那一次：新的那一张还没钉到真实 K 线上时，重温就没有锚点
-/// 可用了。只有已经写过复盘的记录才补——「自动定位发生在复盘发布那一刻」这条
-/// 规矩不放宽，换的只是同一条规矩下的那一张图。作业键仍然是附件 id，所以一张
-/// 图至多还是一次自动尝试。
 pub(crate) async fn enqueue_after_scene_change(
     tx: &mut Transaction<'_, Postgres>,
     owner: Uuid,
     call: Uuid,
 ) -> Result<()> {
-    let reviewed: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM reviews WHERE owner_id=$1 AND call_id=$2)")
-            .bind(owner)
-            .bind(call)
-            .fetch_one(&mut **tx)
-            .await?;
-    if !reviewed {
-        return Ok(());
-    }
-    enqueue_unpinned_scene(tx, owner, call, "scene_replaced").await
-}
-
-/// 只排生效的那一张（定义见 `record_changes` 模块头）：被接替的图不必再钉，
-/// 钉了也没人读。
-async fn enqueue_unpinned_scene(
-    tx: &mut Transaction<'_, Postgres>,
-    owner: Uuid,
-    call: Uuid,
-    trigger: &str,
-) -> Result<()> {
-    // Without an instrument and a timeframe there is nothing to match against.
-    let matchable:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM calls WHERE owner_id=$1 AND id=$2 AND instrument IS NOT NULL AND timeframe IS NOT NULL)")
-        .bind(owner).bind(call).fetch_one(&mut **tx).await?;
-    if !matchable {
-        return Ok(());
-    }
-    let pending: Vec<Uuid> = sqlx::query_scalar("SELECT a.id FROM attachments a JOIN call_attachments l ON l.owner_id=a.owner_id AND l.attachment_id=a.id WHERE l.owner_id=$1 AND l.call_id=$2 AND a.kind='scene' AND l.superseded_at IS NULL AND NOT EXISTS(SELECT 1 FROM attachment_locations al WHERE al.owner_id=a.owner_id AND al.attachment_id=a.id) ORDER BY l.attached_at,l.attachment_id LIMIT 1")
+    let pending: Vec<Uuid> = sqlx::query_scalar("SELECT l.attachment_id FROM call_attachments l JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id WHERE l.owner_id=$1 AND l.call_id=$2 AND l.superseded_at IS NULL ORDER BY a.sha256,l.attachment_id")
         .bind(owner).bind(call).fetch_all(&mut **tx).await?;
+    for attachment in &pending {
+        lock_content(tx, owner, *attachment).await?;
+    }
     for attachment in pending {
-        match jobs::enqueue_tx(
-            tx,
-            owner,
-            KIND,
-            &attachment.to_string(),
-            json!({"call_id":call,"attachment_id":attachment,"trigger":trigger}),
-        )
-        .await
-        {
-            Ok(_) => {}
-            // A full queue must never cost the trader their review; the
-            // screenshot can still be pinned by hand later.
-            Err(e) if e.code == "queue_capacity_reached" => break,
-            Err(e) => return Err(e),
-        }
+        enqueue_upload(tx, owner, attachment).await?;
     }
     Ok(())
 }
@@ -524,7 +557,7 @@ pub async fn locating_for_call(s: &Services, owner: Uuid, call: Uuid) -> Result<
     if pinned {
         return Ok(Value::Null);
     }
-    let job:Option<Value>=sqlx::query_scalar("SELECT jsonb_build_object('job_id',j.id,'status',j.status) FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'call_id'=$2::text AND j.status=ANY($3) ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
+    let job:Option<Value>=sqlx::query_scalar("SELECT jsonb_build_object('job_id',j.id,'status',j.status) FROM jobs j WHERE j.owner_id=$1 AND j.kind='attachment.locate' AND j.body->>'attachment_id' IN (SELECT a.id::text FROM attachments a JOIN attachments own ON own.owner_id=a.owner_id AND own.sha256=a.sha256 JOIN call_attachments ca ON ca.owner_id=own.owner_id AND ca.attachment_id=own.id WHERE ca.owner_id=$1 AND ca.call_id::text=$2::text AND ca.superseded_at IS NULL) AND j.status=ANY($3) ORDER BY j.created_at DESC,j.id DESC LIMIT 1")
         .bind(owner).bind(call.to_string()).bind(ACTIVE.as_slice()).fetch_optional(&s.db.pool).await?;
     Ok(job.unwrap_or(Value::Null))
 }
@@ -545,13 +578,17 @@ fn source_name(candidate: &Value) -> &'static str {
     }
 }
 
-/// The worker's side: run the same bounded screenshot search a manual pin runs,
-/// against the record's own contract and timeframe, as of the judgment moment.
+/// The worker's side: the anchored pipeline of §5.2, against whatever the
+/// screenshot itself says, falling back to the record's own contract.
+///
+/// 从前这里是「按记录的三元组建一段索引 → ANN → 精排 → 阈值」，还带一条「人说都
+/// 不是就往更早推一段」的加宽路径。两样都去掉了：定位现在从图上的时间标签和极值
+/// 标签出发，认不出来就让人手填（§5.2 第 6 步），不再拿同一套阈值把同一段历史重
+/// 算一遍。`ensure_index` 留着给全市场检索用。
 pub async fn run(s: &Services, j: &Job) -> Result<Value> {
     let attachment: Uuid = serde_json::from_value(j.body["attachment_id"].clone())
         .map_err(|_| Error::bad("invalid_locate_job"))?;
-    let call: Uuid = serde_json::from_value(j.body["call_id"].clone())
-        .map_err(|_| Error::bad("invalid_locate_job"))?;
+
     let existing: Option<Value> = sqlx::query_scalar(LOCATION)
         .bind(j.owner)
         .bind(attachment)
@@ -559,9 +596,9 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
         .await?;
     // 这张图上指定的品种；手动请求已经把实际要用的三元组写进 job 体了。
     let over = LocateOverride {
-        symbol: j.body["symbol"].as_str().map(str::to_string),
-        market: j.body["market"].as_str().map(str::to_string),
-        interval: j.body["interval"].as_str().map(str::to_string),
+        symbol: picked(Some(&j.body), "symbol"),
+        market: picked(Some(&j.body), "market"),
+        interval: picked(Some(&j.body), "interval"),
         exclude: serde_json::from_value(j.body["exclude"].clone()).unwrap_or_default(),
     };
     if let Some(location) = existing {
@@ -579,82 +616,175 @@ pub async fn run(s: &Services, j: &Job) -> Result<Value> {
             echo("interval", over.interval.as_deref()),
         );
         return Ok(
-            json!({"outcome":"already_located","attachment_id":attachment,"location":location,"symbol":symbol,"market":market,"interval":interval}),
+            json!({"outcome":"already_located","attachment_id":attachment,"location":location,"symbol":symbol,"market":market,"interval":interval,"candidates":[]}),
         );
     }
-    let row = sqlx::query(
-        "SELECT submitted_at,instrument,market,timeframe,body FROM calls WHERE owner_id=$1 AND id=$2",
-    )
-    .bind(j.owner)
-    .bind(call)
-    .fetch_optional(&s.db.pool)
-    .await?
-    .ok_or_else(Error::not_found)?;
-    let symbol: Option<String> = row.get("instrument");
-    let symbol = over
-        .symbol
-        .clone()
-        .or_else(|| symbol.filter(|v| !v.trim().is_empty()))
-        .ok_or_else(|| Error::conflict("replay_needs_instrument"))?;
-    let market: Option<String> = row.get("market");
-    let market = over
-        .market
-        .clone()
-        .or(market)
-        .unwrap_or_else(|| "usd_m".into());
-    let timeframe: Option<String> = row.get("timeframe");
-    let interval = match &over.interval {
-        Some(v) => super::replay::interval_for(Some(v))?,
-        None => super::replay::interval_for(timeframe.as_deref())?,
+    let row = sqlx::query("SELECT c.submitted_at,c.instrument,c.market,c.timeframe,c.body FROM calls c JOIN call_attachments l ON l.owner_id=c.owner_id AND l.call_id=c.id JOIN attachments a ON a.owner_id=l.owner_id AND a.id=l.attachment_id WHERE l.owner_id=$1 AND l.attachment_id=$2 AND a.kind='scene' AND l.superseded_at IS NULL ORDER BY c.submitted_at,c.id LIMIT 1")
+        .bind(j.owner).bind(attachment).fetch_optional(&s.db.pool).await?;
+    let (symbol, market, timeframe, judgment) = if let Some(row) = row {
+        let body: Value = row.get("body");
+        let submitted: DateTime<Utc> = row.get("submitted_at");
+        let judgment = body["original_claimed_at"]
+            .as_str()
+            .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+            .map(|v| v.with_timezone(&Utc))
+            .unwrap_or(submitted);
+        (
+            row.get::<Option<String>, _>("instrument")
+                .unwrap_or_default(),
+            row.get::<Option<String>, _>("market"),
+            row.get::<Option<String>, _>("timeframe"),
+            judgment,
+        )
+    } else {
+        // Upload time bounds the search; file modification time is not proof of a market date.
+        let uploaded: DateTime<Utc> =
+            sqlx::query_scalar("SELECT uploaded_at FROM attachments WHERE owner_id=$1 AND id=$2")
+                .bind(j.owner)
+                .bind(attachment)
+                .fetch_one(&s.db.pool)
+                .await?;
+        (String::new(), None, None, uploaded)
     };
-    let submitted: DateTime<Utc> = row.get("submitted_at");
-    let body: Value = row.get("body");
-    // The judgment moment, exactly as the replay window uses it: nothing the
-    // market revealed afterwards may take part in identifying the screenshot.
-    let judgment: DateTime<Utc> = body["original_claimed_at"]
-        .as_str()
-        .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
-        .map(|v| v.with_timezone(&Utc))
-        .unwrap_or(submitted);
-    // Nothing can be recognised against an index that does not exist. This
-    // machine deliberately runs no history sync, so the windows this search
-    // needs are built here, now, around this one judgment moment.
-    // 人点过「都不是」才把索引往更早推：那句话的意思是「这段历史里没有」，不是
-    // 「再算一遍」。自动定位和第一次手动都照旧只看判断时刻前面那一段。
-    let widen = j.body["trigger"].as_str() == Some("manual") && !over.exclude.is_empty();
-    let index = ensure_index(s, j, &market, &symbol, &interval, judgment, widen).await?;
-    let mut input = json!({"attachment_id":attachment,"region":null,"scope":"binance_history","symbol":&symbol,"market":&market,"interval":&interval,"cutoff_at":judgment,"reverse":false,"red_up":false,"limit":3});
-    if !over.exclude.is_empty() {
-        input["exclude"] = json!(over.exclude);
-    }
+    let ctx = super::locate_anchored::Context {
+        attachment,
+        judgment,
+        record: (
+            symbol,
+            market,
+            timeframe
+                .as_deref()
+                .and_then(|v| super::replay::interval_for(Some(v)).ok()),
+        ),
+        chosen_symbol: over.symbol.clone(),
+        chosen_market: over.market.clone(),
+        chosen_interval: over.interval.clone(),
+        preferred_offset: remembered_offset(s, j.owner).await,
+    };
     // This job is the search run, so its candidates stay readable afterwards at
     // GET /v1/chart-search/runs/{id} and the written location can cite it.
+    let request = json!({"attachment_id":attachment,"pipeline":"anchored_locate_v1","symbol":ctx.record.0,"market":ctx.record.1,"interval":ctx.record.2,"cutoff_at":judgment});
     sqlx::query("INSERT INTO chart_search_runs(id,owner_id,attachment_id,body) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET body=EXCLUDED.body,result=NULL,completed_at=NULL")
-        .bind(j.id).bind(j.owner).bind(attachment).bind(&input).execute(&s.db.pool).await?;
-    let result = super::chart_search::run(
-        s,
-        &Job {
-            body: input,
-            ..j.clone()
-        },
-    )
-    .await?;
-    let top: Vec<Value> = result["items"]
-        .as_array()
-        .map(|v| v.iter().take(3).cloned().collect())
-        .unwrap_or_default();
-    let mut decided = decide(s, j, attachment, &top).await?;
-    if let Some(o) = decided.as_object_mut() {
-        o.insert("index".into(), index);
-        o.insert("symbol".into(), json!(symbol));
-        o.insert("market".into(), json!(market));
-        o.insert("interval".into(), json!(interval));
+        .bind(j.id).bind(j.owner).bind(attachment).bind(&request).execute(&s.db.pool).await?;
+    let found = super::locate_anchored::run(s, j, &ctx).await?;
+    let mut result = found.value;
+    if let Some(best) = &found.write {
+        let written = write_location(s, j, attachment, best, "auto", &found.anchor).await?;
+        match written {
+            Some(location) => {
+                result["location"] = location;
+                result["score"] = json!(best["match"]["score"].as_f64().unwrap_or(0.).to_string());
+            }
+            None => {
+                result =
+                    json!({"outcome":"already_located","attachment_id":attachment,"candidates":[]});
+            }
+        }
     }
-    Ok(decided)
+    let (symbol, market, interval) = (
+        result_field(&result, "symbol"),
+        result_field(&result, "market"),
+        result_field(&result, "interval"),
+    );
+    if let Some(o) = result.as_object_mut() {
+        o.entry("location").or_insert(Value::Null);
+        o.insert("symbol".into(), symbol);
+        o.insert("market".into(), market);
+        o.insert("interval".into(), interval);
+    }
+    sqlx::query(
+        "UPDATE chart_search_runs SET result=$3,completed_at=now() WHERE owner_id=$1 AND id=$2",
+    )
+    .bind(j.owner)
+    .bind(j.id)
+    .bind(&result)
+    .execute(&s.db.pool)
+    .await?;
+    Ok(result)
+}
+
+/// 回显这次实际用的三元组：钉住了就用钉住的那份，没钉住就用锚点读出来的。
+fn result_field(result: &Value, key: &str) -> Value {
+    let from_location = result["location"][key].clone();
+    if !from_location.is_null() {
+        return from_location;
+    }
+    let anchored = result["anchors"][key].clone();
+    if !anchored.is_null() {
+        return anchored;
+    }
+    result["candidates"][0][key].clone()
+}
+
+/// 上一次确认时记住的截图时区（分钟）。读不到就没有偏好，`anchors::utc_offsets`
+/// 自己会退到本机时区。
+pub async fn remembered_offset(s: &Services, owner: Uuid) -> Option<i32> {
+    sqlx::query_scalar::<_, Value>(
+        "SELECT value FROM user_preferences WHERE owner_id=$1 AND key='screenshot_utc_offset_minutes'",
+    )
+    .bind(owner)
+    .fetch_optional(&s.db.pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_i64())
+    .map(|v| v as i32)
+}
+
+/// 首次确认之后记住这张图用的时区（§5.2 第 6 步末尾）。
+pub async fn remember_offset(s: &Services, owner: Uuid, minutes: i32) -> Result<()> {
+    sqlx::query("INSERT INTO user_preferences(owner_id,key,value) VALUES($1,'screenshot_utc_offset_minutes',to_jsonb($2::int)) ON CONFLICT(owner_id,key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()")
+        .bind(owner)
+        .bind(minutes)
+        .execute(&s.db.pool)
+        .await?;
+    Ok(())
+}
+
+/// Insert only: a row the trader confirmed in the meantime stays theirs.
+async fn write_location(
+    s: &Services,
+    j: &Job,
+    attachment: Uuid,
+    best: &Value,
+    matched_by: &str,
+    anchor: &Value,
+) -> Result<Option<Value>> {
+    let start: DateTime<Utc> = serde_json::from_value(best["start_at"].clone())
+        .map_err(|_| Error::bad("invalid_candidate"))?;
+    let end: DateTime<Utc> = serde_json::from_value(best["end_at"].clone())
+        .map_err(|_| Error::bad("invalid_candidate"))?;
+    let score = score_of(best).to_string();
+    let mut tx = s.db.pool.begin().await?;
+    lock_content(&mut tx, j.owner, attachment).await?;
+    enqueue_upload(&mut tx, j.owner, attachment).await?;
+    let written = sqlx::query_scalar(
+        r#"INSERT INTO attachment_locations(owner_id,attachment_id,symbol,market,interval,start_at,end_at,bars_count,source,score,search_run_id,matched_by,anchor)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::numeric,$11,$12,$13) ON CONFLICT(owner_id,attachment_id) DO NOTHING
+        RETURNING (to_jsonb(attachment_locations)-'owner_id'-'score')||jsonb_build_object('score',score::text)"#,
+    )
+    .bind(j.owner)
+    .bind(attachment)
+    .bind(named(best, "symbol")?)
+    .bind(named(best, "market")?)
+    .bind(named(best, "interval")?)
+    .bind(start)
+    .bind(end)
+    .bind(best["bars_count"].as_i64().map(|v| v as i32))
+    .bind(source_name(best))
+    .bind(&score)
+    .bind(j.id)
+    .bind(matched_by)
+    .bind(anchor)
+    .fetch_optional(&mut *tx)
+    .await?;
+    share_location(&mut tx, j.owner, attachment, false).await?;
+    tx.commit().await?;
+    Ok(written)
 }
 
 /// 一段有多长：判断时刻往前 768 根，和重温窗口自己的宽度一样。
-const SPAN: i64 = 3 * super::history::LOCATE_WINDOWS[2] as i64;
+const SPAN: i64 = 3 * super::history::LARGEST_WINDOW as i64;
 
 /// 最多往前推几段。1h 周期上 8 段是 6144 根、约八个半月；再往前，「这张截图拍的
 /// 是这个合约的哪一段」已经不是一次检索能回答的问题了。
@@ -675,7 +805,7 @@ fn span_of(
     let overlap = if n == 0 {
         0
     } else {
-        super::history::LOCATE_WINDOWS[2] as i64 - 1
+        super::history::LARGEST_WINDOW as i64 - 1
     };
     let start = iv.add_bars(base, -(n + 1) * SPAN);
     let end = iv.add_bars(base, -n * SPAN + overlap);
@@ -795,31 +925,8 @@ pub async fn decide(s: &Services, j: &Job, attachment: Uuid, items: &[Value]) ->
         );
     }
     let best = &top[0];
-    let start: DateTime<Utc> = serde_json::from_value(best["start_at"].clone())
-        .map_err(|_| Error::bad("invalid_candidate"))?;
-    let end: DateTime<Utc> = serde_json::from_value(best["end_at"].clone())
-        .map_err(|_| Error::bad("invalid_candidate"))?;
     let score = score_of(best).to_string();
-    // Insert only: a row the trader confirmed in the meantime stays theirs.
-    let written: Option<Value> = sqlx::query_scalar(
-        r#"INSERT INTO attachment_locations(owner_id,attachment_id,symbol,market,interval,start_at,end_at,bars_count,source,score,search_run_id,matched_by)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::numeric,$11,'auto') ON CONFLICT(owner_id,attachment_id) DO NOTHING
-        RETURNING (to_jsonb(attachment_locations)-'owner_id'-'score')||jsonb_build_object('score',score::text)"#,
-    )
-    .bind(j.owner)
-    .bind(attachment)
-    .bind(named(best, "symbol")?)
-    .bind(named(best, "market")?)
-    .bind(named(best, "interval")?)
-    .bind(start)
-    .bind(end)
-    .bind(best["bars_count"].as_i64().map(|v| v as i32))
-    .bind(source_name(best))
-    .bind(&score)
-    .bind(j.id)
-    .fetch_optional(&s.db.pool)
-    .await?;
-    match written {
+    match write_location(s, j, attachment, best, "auto", &Value::Null).await? {
         Some(location) => Ok(
             json!({"outcome":"located","attachment_id":attachment,"search_run_id":j.id,"score":score,"location":location}),
         ),

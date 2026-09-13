@@ -1,0 +1,89 @@
+/* ============================================================
+   截图板（stile）
+   ------------------------------------------------------------
+   页面上每一处截图都长成同一块小板子：对上行情的板面画那一段真实 K 线，
+   没对上的是一层晨雾。原图在「看截图」后面，点开才放大。
+   板子是缩小版：标准 200px，紧凑 150px，宽屏也不放大。
+   ============================================================ */
+.stile{
+  position:relative;width:200px;max-width:100%;display:flex;flex-direction:column;
+  border-radius:var(--r2);background:var(--sheet);box-shadow:var(--shadow);overflow:hidden;
+  transition:transform var(--t2) var(--e),box-shadow var(--t2);
+}
+.stile:hover{transform:translateY(-2px);box-shadow:var(--shadow-hover)}
+.stile-top{position:relative}
+.stile-board{position:relative;aspect-ratio:16/10;background:linear-gradient(160deg,#20244F,var(--night));overflow:hidden}
+.stile-board::after{content:'';position:absolute;inset:0;background:radial-gradient(70% 60% at 100% 0%,rgba(58,63,143,.6),transparent 60%);pointer-events:none}
+.stile-board .chart-slot{position:absolute;inset:0;z-index:1;min-height:0;background:transparent}
+.stile-board .chart-slot svg{position:absolute;inset:0;width:100%;height:100%;animation:shotIn .6s var(--e-out) both}
+.stile-board .chart-wait{position:absolute;inset:0;display:grid;place-items:center;padding:0 10px;text-align:center;font-size:11px;color:var(--board-ink2);background:transparent;min-height:0}
+/* 后端那张图是给全尺寸看的：底板、价格轴、时间都不进板面。 */
+.stile-board svg>rect:first-of-type{display:none}
+.stile-board svg text{display:none}
+.stile-board svg path[stroke="#e3e5e9"]{stroke:rgba(255,255,255,.07)}
+.stile-board svg path[stroke="#14a877"]{stroke:#3FD3A5}
+.stile-board svg rect[fill="#14a877"]{fill:#3FD3A5}
+.stile-board svg path[stroke="#dc5b69"]{stroke:#FF7A98}
+.stile-board svg rect[fill="#dc5b69"]{fill:#FF7A98}
+.stile-board svg path[stroke]{vector-effect:non-scaling-stroke;stroke-width:1.1}
+.stile-board .sweep{position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(100deg,transparent 40%,rgba(255,255,255,.18) 50%,transparent 60%);transform:translateX(-100%);animation:sweep 1.2s var(--e-out) .3s both}
+.stile-board.mist{background:linear-gradient(160deg,#F4F1FF,#FFF3EC 60%,#EAF7F1)}
+.stile-board.mist::after{background:radial-gradient(60% 70% at 20% 100%,rgba(220,214,255,.8),transparent 60%),radial-gradient(50% 60% at 100% 0%,rgba(255,216,196,.8),transparent 60%)}
+.stile-board.mist .glyph{position:absolute;inset:0;display:grid;place-items:center;z-index:1;color:var(--ink4)}
+.stile-board.mist .glyph svg{width:34px;height:34px}
+.stile-badge{position:absolute;left:10px;top:10px;z-index:3;height:24px;padding:0 10px;border-radius:99px;display:inline-flex;align-items:center;font-size:11.5px;font-weight:800;background:rgba(255,255,255,.92);color:var(--ink);box-shadow:var(--btn-shadow)}
+.stile-badge.ref{background:var(--gold-soft);color:var(--gold)}
+.stile-badge.after{background:var(--blue-soft);color:var(--blue-text)}
+.stile-menu{position:absolute;right:8px;top:8px;z-index:3;width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.85);color:var(--ink2);display:grid;place-items:center;font-weight:800;letter-spacing:.1em;font-size:12px;line-height:1}
+.stile-menu:hover{background:#fff;color:var(--ink)}
+.stile-see{
+  position:absolute;right:10px;bottom:10px;z-index:3;height:28px;padding:0 12px;border-radius:99px;
+  display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;
+  background:rgba(255,255,255,.94);color:var(--ink);box-shadow:var(--btn-shadow);
+  transition:transform var(--t2) var(--es),background var(--t2);
+}
+.stile-see:hover{transform:translateY(-1px);background:#fff}
+.stile-see svg{width:13px;height:13px}
+.stile-foot{display:flex;flex-direction:column;gap:6px;padding:10px 14px 12px}
+.stile-meta{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--ink2);min-width:0}
+.stile-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stile-meta i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--up);box-shadow:0 0 0 3px var(--up-soft)}
+.stile-meta.none{color:var(--ink3)}
+.stile-meta.none i{background:var(--ink4);box-shadow:none}
+.stile-acts{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;font-weight:800;color:var(--gold)}
+.stile-acts .screenshot-actions{gap:14px}
+.stile-acts .linkbtn{font-size:12.5px;font-weight:800}
+
+/* 紧凑板：只留一行 meta，「看截图」也收小一号。 */
+.stile.compact{width:150px}
+.stile.compact .stile-foot{padding:8px 10px 9px}
+.stile.compact .stile-meta{font-size:11px;gap:6px}
+.stile.compact .stile-badge{height:20px;padding:0 8px;font-size:10.5px;left:8px;top:8px}
+.stile.compact .stile-see{height:24px;padding:0 9px;font-size:11px;right:8px;bottom:8px;gap:5px}
+.stile.compact .stile-see svg{width:11px;height:11px}
+.stile.compact .stile-board.mist .glyph svg{width:26px;height:26px}
+
+/* 一排板子：固定宽度铺，放不下就换行，任何宽度都不拉大。 */
+.shots{display:grid;grid-template-columns:repeat(auto-fill,200px);gap:14px}
+.shots-compact{display:flex;flex-wrap:wrap;gap:12px}
+
+/* 找页命中：第一列就是一块紧凑板，外面那层 .fshot 的框不要再叠一遍。 */
+.fhit.link{grid-template-columns:150px 1fr auto}
+.fhit>.stile{align-self:start}
+
+/* 拿去问的那张图：胶囊里只放小图标和文件名，原图在「看截图」后面。 */
+.fshelf .fico{flex:none;width:16px;height:16px;display:grid;place-items:center;color:var(--ink3)}
+.fshelf .fico svg{width:16px;height:16px}
+.fshelf .fsee{flex:none;font-size:12px}
+
+@media(max-width:640px){
+  .fhit.link{grid-template-columns:1fr auto}
+  .fhit>.stile{grid-column:1/-1}
+}
+
+/* 选图器：卡片里放的就是紧凑板，外面那层框不再叠一遍。 */
+.upload-images{display:flex;flex-wrap:wrap;gap:12px;grid-template-columns:none}
+.upload-images>figure.upload-image{width:150px;min-width:0}
+figure.upload-image:has(.stile){padding:0;border:0;background:none;box-shadow:none;border-radius:0;overflow:visible}
+figure.upload-image:has(.stile) figcaption{padding:6px 2px 0}
+figure.upload-image:has(.stile) .screenshot-actions{padding:0 2px 4px}

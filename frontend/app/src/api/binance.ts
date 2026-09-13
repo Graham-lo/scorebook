@@ -5,8 +5,9 @@
 // 就得等着。浏览器自己去取，一次往返就有了。
 //
 // 三条规矩，破了任何一条都退回后端那一条路（relive 页面负责回落）：
-//   · 只在内存里。不写 localStorage，不写 IndexedDB，不写任何地方——行情是借来
-//     看的，和后端那份临时缓存一个待遇；
+//   · 只在内存，加一份 24 小时就过期的 IndexedDB 热缓存。热缓存里只放已经收盘
+//     的整根，正在走的那一根一秒一变，永远不落盘；口径和后端 replay_bars 一致
+//     ——临时、过期即清、设置里可一键清空，绝不长期保存；
 //   · 有边界。一次最多取 MAX_BARS 根，超时 8 秒，不让一个卡住的请求把页面拖住；
 //   · 不改口径。返回的是项目自己的 Bar，时间按 UTC 的 RFC 3339，价格原样留着
 //     交易所给的那个字符串，一位小数都不重算。
@@ -173,4 +174,32 @@ export async function fetchKlines(window: KlineWindow, signal?: AbortSignal): Pr
   if (!tidied.length) throw new Error('这一段行情币安没有给')
   if (tidied.length > MAX_BARS) throw new Error('这一段太长了')
   return tidied
+}
+
+/**
+ * 按格子取一段：一次请求，要多少给多少，空的就是空的。
+ *
+ * 和 `fetchKlines` 的差别只在规矩上：那一条是重温页的「这一段」，超过 2000 根
+ * 就该换后端那条路，取不到还要报错；这一条是全屏懒加载的一格，取回来几根都算
+ * 数——上市之前、退市之后本来就没有行情，空数组是答案而不是故障。
+ */
+export async function fetchRange(
+  window: KlineWindow & { limit?: number },
+  signal?: AbortSignal,
+): Promise<Bar[]> {
+  const startMs = new Date(window.start_at).getTime()
+  const endMs = new Date(window.end_at).getTime()
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    throw new Error('这一段的起止时间说不通')
+  }
+  const url = ENDPOINTS[window.market]
+  if (!url) throw new Error('不认识这个市场')
+  const rows = await page(url, signal, {
+    symbol: window.symbol,
+    interval: window.interval,
+    startTime: startMs,
+    endTime: endMs - 1,
+    limit: Math.min(Math.max(1, Math.floor(window.limit ?? PAGE)), PAGE),
+  })
+  return tidy(mapKlines(rows), startMs, endMs)
 }

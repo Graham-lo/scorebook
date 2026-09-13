@@ -61,6 +61,7 @@ use utoipa::OpenApi;
     scorebook_core::api::record_changes::SceneSelection,
     scorebook_core::api::record_changes::Correction,
     scorebook_core::domain::chart::ChartRequest,
+    scorebook_core::api::market::MarketBoundsQuery,
     scorebook_core::api::history::HistoryIndexRequest,
     scorebook_core::api::history::HistorySearch,
     scorebook_core::api::history::CoverageFilter,
@@ -207,6 +208,11 @@ pub fn openapi() -> Value {
         ),
         ("/v1/history/archive-catalog", "post", "ArchiveCatalogInput"),
         ("/v1/attachments/{id}/location", "put", "AttachmentLocation"),
+        (
+            "/v1/attachments/{id}/location-preview",
+            "post",
+            "AttachmentLocation",
+        ),
         ("/v1/attachments/{id}/location", "delete", ""),
         ("/v1/attachments/{id}/locate", "get", ""),
         ("/v1/attachments/{id}/locate", "post", "LocateOverride"),
@@ -215,6 +221,7 @@ pub fn openapi() -> Value {
         ("/v1/calls/{id}/replay", "get", ""),
         ("/v1/calls/{id}/replay", "delete", ""),
         ("/v1/chart-analyses", "post", "ChartAnalysisInput"),
+        ("/v1/chart-analyses/outline", "post", "ChartAnalysisInput"),
         ("/v1/chart-search/runs", "post", "ChartSearchInput"),
         ("/v1/chart-search/runs/{id}", "get", ""),
         (
@@ -257,6 +264,7 @@ pub fn openapi() -> Value {
         ("/v1/calls/{id}/corrections", "post", "Correction"),
         ("/v1/calls/{id}/revisions", "post", "CreateCall"),
         ("/v1/market/data", "post", "ChartRequest"),
+        ("/v1/market/bounds", "get", ""),
         ("/v1/market/chart", "post", "ChartRequest"),
         ("/v1/history/indexes", "post", "HistoryIndexRequest"),
         ("/v1/history/indexes", "get", ""),
@@ -315,6 +323,7 @@ pub fn openapi() -> Value {
             "/v1/review-queue" => Some("QueueFilter"),
             "/v1/history/coverage" => Some("CoverageFilter"),
             "/v1/history/catalog" => Some("HistoryCatalogFilter"),
+            "/v1/market/bounds" => Some("MarketBoundsQuery"),
             "/v1/imports" | "/v1/exchange-connections" => Some("ImportFilter"),
             "/v1/statistics/runs/{id}/members" | "/v1/baseline-runs/{id}/samples" => {
                 Some("MemberFilter")
@@ -337,10 +346,11 @@ pub fn openapi() -> Value {
                 op["parameters"]
                     .as_array_mut()
                     .unwrap()
-                    .push(json!({"name":name,"in":"query","required":false,"schema":shape}));
+                    .push(json!({"name":name,"in":"query","required":path == "/v1/market/bounds","schema":shape}));
             }
         }
         if method == "post"
+            && !path.ends_with("/location-preview")
             && !path.ends_with("/preview")
             && !path.ends_with("/tools/call")
             && !path.starts_with("/v1/market/")

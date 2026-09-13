@@ -4,6 +4,7 @@ pub mod history_plans;
 pub mod instruments;
 pub mod jobs;
 pub mod lifecycle;
+pub mod market;
 pub mod record_changes;
 pub mod review_trades;
 pub mod review_workflow;

@@ -3,9 +3,17 @@ use scorebook_core::api::chart_search::*;
 pub fn routes() -> Router<Services> {
     Router::new()
         .route("/v1/chart-analyses", post(analyze))
+        .route("/v1/chart-analyses/outline", post(outline))
         .route("/v1/chart-search/runs", post(create))
         .route("/v1/chart-search/runs/{id}", get(read))
         .route("/v1/chart-search/runs/{id}/cancel", post(cancel))
+}
+async fn outline(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Json(v): Json<ChartAnalysisInput>,
+) -> Result<Json<Value>> {
+    invoke(&s, o, Action::ChartOutline, None, None, json!(v)).await
 }
 async fn analyze(
     State(s): State<Services>,

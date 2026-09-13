@@ -1,216 +1,184 @@
-// 一条命中长什么样。
+// 一条结果长什么样：小 K 线图 · 品种 · 周期 · 起止日期 · 像到什么程度。
 //
-// 两种来源两种读法：公开历史给的是一段行情，主角是那张图；自己的记录给的是当
-// 时那条判断，主角是现场截图和它背后的那句话。
+// 两种来源两种读法。币安历史给的是一段行情，那张图是后端现画的，只在内存里活到
+// 这次查看结束，不落盘。自己的记录给的是当时那条判断，主角是当时图，点进去就是
+// 那条记录。
 //
-// 「之后的走势」只是画出来给人看的，不参与召回、评分和排序：画图的请求只把
-// end_at 往后延，原来的收尾时刻照原样放在 match_end_at 里发回去，后端据此在图
-// 上划出那条分界线。公开行情的 K 线和画出来的图只在内存里活到这次查看结束。
+// 排的是形状上的接近程度。它只说像不像，不说后面会怎么走。
 
-import { INTERVAL_SECONDS, MARKET_LABELS } from '../../data/session'
 import { chartSvg } from '../../api/market'
 import { isHistoryCandidate, type HistoryCandidate, type PrivateCandidate, type SearchCandidate } from '../../api/chart'
-import { utcRange } from '../../data/time'
-import { h } from '../../ui/dom'
-import { attachmentImage } from '../../ui/media'
+import type { CallDetail, Uuid } from '../../api/types'
+import { Gate, cachedDetail, detail } from '../../data/store'
+import { shortDate } from '../../data/time'
+import { clear, h } from '../../ui/dom'
+import { type ChartView } from '../../ui/media'
+import { stile } from '../../ui/stile'
 import { stagger } from '../../ui/motion'
-import { foldout } from '../../ui/states'
 import { go } from '../../router'
-import { kvRow } from './bits'
-import { SCORE_CAVEAT, SCORE_MEANING, scoreBand, scorePercent } from './score'
-import type { SearchCtx } from './state'
+import { levelWord } from './score'
+import { openMarketChart } from '../relive/market-view'
+import { sourceButton } from './sources'
 
-/** 之后的走势默认画多少根。 */
-const FOLLOWING = [32, 64, 128]
-const FOLLOWING_DEFAULT = 64
+const gate = new Gate(3)
 
-export function hitList(ctx: SearchCtx, items: SearchCandidate[], ranked: boolean): HTMLElement {
-  const list = h('div.hits')
-  items.forEach((item, index) => {
-    list.appendChild(
-      isHistoryCandidate(item) ? historyHit(ctx, item, index, ranked) : privateHit(ctx, item, index, ranked),
-    )
-  })
+export interface HitCtx {
+  alive(): boolean
+  queryAttachmentId(): string | null
+  /** 要一张登记过的行情图；离开这一页时统一取消。 */
+  chart(): ChartView
+}
+
+/** 一条结果的身份：自己的记录认那条记录，历史匹配认「品种 + 周期 + 起点」。 */
+export function hitKey(item: SearchCandidate): string {
+  return isHistoryCandidate(item)
+    ? `h:${item.symbol}|${item.interval}|${item.start_at}`
+    : `p:${item.call_id}|${item.attachment_id}`
+}
+
+function relatedOf(items: SearchCandidate[]): NonNullable<HistoryCandidate['chart_request']>[] {
+  return items.filter(isHistoryCandidate).flatMap(item => item.chart_request ? [item.chart_request] : [])
+}
+
+function buildHit(
+  ctx: HitCtx,
+  item: SearchCandidate,
+  index: number,
+  related: NonNullable<HistoryCandidate['chart_request']>[],
+): HTMLElement {
+  const node = isHistoryCandidate(item) ? historyHit(ctx, item, index, related) : privateHit(ctx, item, index)
+  node.setAttribute('data-key', hitKey(item))
+  return node
+}
+
+export function hitList(ctx: HitCtx, items: SearchCandidate[], key?: string): HTMLElement {
+  const list = h('div.fhits')
+  if (key) list.setAttribute('data-key', key)
+  const related = relatedOf(items)
+  items.forEach((item, index) => { list.appendChild(buildHit(ctx, item, index, related)) })
   stagger(list.children)
   return list
 }
 
-/* ------------------------------------------------ 一条公开历史的片段 */
-
-function historyHit(ctx: SearchCtx, item: HistoryCandidate, index: number, ranked: boolean): HTMLElement {
-  const view = ctx.chart()
-  const drawn = h('div', { hidden: true }, view.node)
-
-  const request = item.chart_request
-  let following = FOLLOWING_DEFAULT
-  const afterChoice = h('span.seg')
-  for (const n of FOLLOWING) {
-    afterChoice.appendChild(
-      h('button', {
-        text: `后 ${n} 根`,
-        class: n === following ? 'on' : '',
-        on: {
-          click: () => {
-            following = n
-            for (const b of afterChoice.querySelectorAll('button')) {
-              b.classList.toggle('on', b.textContent === `后 ${n} 根`)
-            }
-            showFollowthrough()
-          },
-        },
-      }),
-    )
-  }
-  function showFollowthrough(): void {
-    if (!request) return
-    const seconds = INTERVAL_SECONDS[request.interval as keyof typeof INTERVAL_SECONDS]
-    if (!seconds) return
-    const boundary = Date.parse(request.end_at)
-    const lastClosed = Math.floor(Date.now() / (seconds * 1000)) * seconds * 1000
-    const end = Math.min(boundary + following * seconds * 1000, lastClosed)
-    drawn.hidden = false
-    void view.show((signal) =>
-      chartSvg(
-        { ...request, end_at: new Date(Math.max(boundary, end)).toISOString(), match_end_at: request.end_at },
-        { signal },
-      ),
-    )
-  }
-  const draw = h('button.btn.sm.ghost', {
-    text: '重新读取走势',
-    disabled: !request,
-    title: request ? '' : '这条候选还没有配套的行情来源，画不出它那一段。',
-    on: {
-      click: (e: Event) => {
-        if (!request) return
-        const button = e.currentTarget as HTMLButtonElement
-        button.disabled = true
-        drawn.hidden = false
-        showFollowthrough()
-        button.disabled = false
-      },
-    },
-  })
-
-  // 排的顺序就是读的顺序：先知道这是哪一段，再看走势，最后才是它凭什么排在
-  // 这儿。图是主角，所以它紧跟在标题下面，不排在一串参数后面。
-  const body = h(
-    'div',
-    {},
-    h(
-      'div.hithead',
-      {},
-      ranked ? h('span.rank', { text: `#${index + 1}` }) : h('span.badge.wait', { text: '候选' }),
-      h('span.hitsym', { text: item.symbol }),
-      h(
-        'div.line',
-        { style: 'margin-left:auto' },
-        h('span', { text: MARKET_LABELS[item.market] }),
-        h('span', { text: item.interval }),
-        h('span', { text: `${item.bars_count} 根` }),
-        h('span.faint', { text: sourceLabel(item.market_source) }),
-      ),
-    ),
-    // 日期按 UTC 写，跟下面那张图的横轴对得上；后面缀一个 UTC，免得当成本地时间。
-    h(
-      'div.hitwhen',
-      {},
-      h('span', { text: utcRange(item.start_at, item.end_at) }),
-      h('span.faint', { text: 'UTC' }),
-    ),
-    drawn,
-    chartLegend(),
-    h('div.acts', { style: 'margin-top:10px' }, afterChoice, draw),
-    matchLine(item),
-  )
-  if (ranked && request) showFollowthrough()
-  return h('div.hit.wide', { style: `--i:${index}` }, body)
-}
-
 /**
- * 图上那条虚线两边分别是什么。色块用的就是后端画进 SVG 里的那两种底色——香槟
- * 色那一段是参与匹配的，右边没有底色的是当时接下来发生的事。
- */
-function chartLegend(): HTMLElement {
-  return h(
-    'div.clegend',
-    {},
-    h('span', {}, h('i.a'), '参与匹配的片段'),
-    h('span.div', { text: '｜' }),
-    h('span', {}, h('i.b'), '之后的走势 · 不参与召回、评分和排序'),
-  )
-}
-
-function sourceLabel(source: string): string {
-  if (source === 'monthly_archive') return '来自月度归档'
-  if (source === 'rest') return '来自交易所接口'
-  return source
-}
-
-/* -------------------------------------------------- 一条自己的记录 */
-
-function privateHit(_ctx: SearchCtx, item: PrivateCandidate, index: number, ranked: boolean): HTMLElement {
-  // 84px 高的一格，按显示尺寸解一张小的；要看清楚点进那条记录。
-  const shot = attachmentImage(item.attachment_id, { alt: '这条记录的现场图', maxWidth: 320 })
-  shot.style.height = '84px'
-  shot.style.cursor = 'pointer'
-  shot.addEventListener('click', () => go(`call/${item.call_id}`))
-
-  const right = h(
-    'div',
-    {},
-    h(
-      'div.line',
-      {},
-      ranked ? h('span.rank', { text: `#${index + 1}` }) : h('span.badge.wait', { text: '候选' }),
-      h('span.faint', { text: '我写过的一条记录' }),
-      // 不限周期时命中的可能是别的周期，这条自己是哪个周期得写在脸上。
-      h('span', { text: item.interval ?? '未注明周期' }),
-    ),
-    matchLine(item),
-    h(
-      'div.acts',
-      { style: 'margin-top:8px' },
-      h('a.btn.sm.ghost', { href: `#/call/${item.call_id}`, text: '打开这条' }),
-    ),
-  )
-  return h('div.hit', { style: `--i:${index}` }, shot, right)
-}
-
-/**
- * 接近程度。后端自己把口径写在 `match.meaning` 里：结构相似，不是概率。方向对不
- * 上的时候也照实说——那是一段反着走的行情。
+ * 轮询回来的一批：同一条结果留着原来那个节点，只改变了的那几个字。
  *
- * 数写成百分比，旁边缀一句人话的分档：0.347 这种三位小数没人读得出轻重，35% 有
- * 人读得出，但百分号也更容易被当成概率，所以那句「不是涨跌概率」必须留在看得见
- * 的地方，不能只藏在悬停提示里。分档的界和理由都在 ./score 里。
+ * 小 K 线是这里最怕重来的一样东西——它要发一次网络请求才画得出来。卡片节点在
+ * 就不重建，图一根线都不重画；新冒出来的那几条自己进场一次，不跟着整组抖。
  */
-function matchLine(item: SearchCandidate): HTMLElement {
-  const match = item.match
-  if (!match) {
-    return h('div.line', {}, h('span.faint', { text: '这一条还没有精排，暂时没有接近程度。' }))
+export function syncHits(ctx: HitCtx, list: HTMLElement, items: SearchCandidate[]): void {
+  const related = relatedOf(items)
+  const live = new Map<string, HTMLElement>()
+  for (const node of Array.from(list.children)) {
+    const key = node.getAttribute('data-key')
+    if (key) live.set(key, node as HTMLElement)
   }
-  const percent = scorePercent(match.score)
-  const line = h(
-    'div.near',
-    { title: SCORE_MEANING },
-    h('span.faint', { text: '形状接近程度' }),
-    h('span.track', {}, h('i', { style: `width:${percent}%` })),
-    h('span.num', { text: `${percent}%` }),
-    h('span.band', { text: scoreBand(percent) }),
+  const seen = new Set<string>()
+  let cursor: Element | null = list.firstElementChild
+  items.forEach((item, index) => {
+    const key = hitKey(item)
+    seen.add(key)
+    const had = live.get(key)
+    let node: HTMLElement
+    if (had) { patchHit(had, item); node = had }
+    else {
+      node = buildHit(ctx, item, index, related)
+      // 单独进场一次：整组的错峰只属于新查询那一趟。
+      node.style.setProperty('--i', '0')
+    }
+    if (node === cursor) cursor = cursor.nextElementSibling
+    else list.insertBefore(node, cursor)
+  })
+  for (const [key, node] of live) if (!seen.has(key)) node.remove()
+}
+
+/** 同一条结果两次之间会变的就那几样：像不像、历史那条的起止。 */
+function patchHit(node: HTMLElement, item: SearchCandidate): void {
+  const word = levelWord(item.match)
+  const tag = node.querySelector('.fband')
+  if (word) {
+    if (tag) { if (tag.textContent !== word) tag.textContent = word }
+    else node.appendChild(h('span.fband', { text: word }))
+  } else tag?.remove()
+  if (!isHistoryCandidate(item)) return
+  const line = node.querySelector('.fb > .fm')
+  const text = `${item.interval} · ${shortDate(item.start_at)} – ${shortDate(item.end_at)}`
+  if (line && line.textContent !== text) line.textContent = text
+}
+
+/* ------------------------------------------------ 币安历史里的一段 */
+
+function historyHit(ctx: HitCtx, item: HistoryCandidate, index: number, related: NonNullable<HistoryCandidate['chart_request']>[]): HTMLElement {
+  const view = ctx.chart()
+  const request = item.chart_request
+  if (request) void view.show((signal) => chartSvg(request, { signal }))
+  return h(
+    'div.fhit.fhit-history',
+    { style: `--i:${index}` },
+    h('div.fshot', {}, view.node),
+    h(
+      'div.fb',
+      {},
+      request ? h('button.fh.fhit-open', {
+        type: 'button', text: item.symbol,
+        attrs: { 'aria-haspopup': 'dialog', 'aria-label': `${item.symbol} · 查看 K 线` },
+        on: { click: () => openMarketChart(request, '匹配这段', { related }) },
+      }) : h('div.fh', { text: item.symbol }),
+      h('div.fm', { text: `${item.interval} · ${shortDate(item.start_at)} – ${shortDate(item.end_at)}` }),
+      request ? h('span.fhit-action', { text: '放大对比 K 线 ↗' }) : null,
+    ),
+    band(item),
   )
-  // 方向对不对得上是读图的人要知道的，留在外面；对齐代价是内部量纲，只在要
-  // 追查这条为什么排在这儿的时候才有用，收起来。
-  const extra = h(
-    'div.line',
-    { style: 'margin-top:4px' },
-    h('span.faint', { text: match.direction_consistent ? '方向一致' : '方向相反' }),
-    match.reverse ? h('span.faint', { text: '这是翻转之后比出来的' }) : null,
-    h('span.faint', { text: SCORE_CAVEAT }),
+}
+
+/* -------------------------------------------------- 我的记录里的一条 */
+
+function privateHit(ctx: HitCtx, item: PrivateCandidate, index: number): HTMLElement {
+  const shot = stile({ id: item.attachment_id as Uuid, compact: true, label: '当时图', alt: '当时图' })
+  const head = h('div.fh')
+  const mine = h('div.fm')
+  const row = h(
+    'div.fhit.link',
+    { style: `--i:${index}`, attrs: { role: 'link', tabindex: '0' } },
+    shot,
+    h('div.fb', {}, head, mine, item.text_match ? h('div', {}, h('p', { text: item.text_match.excerpt }), sourceButton(item.text_match)) : null),
+    band(item),
   )
-  const detail = foldout(
-    '这条为什么排在这儿',
-    h('div.kv', {}, kvRow('对齐代价', match.alignment_cost.toFixed(3)), kvRow('后端口径', match.meaning)),
-  )
-  return h('div', {}, line, extra, h('div', { style: 'margin-top:8px' }, detail))
+  row.addEventListener('click', e => { if (!(e.target instanceof Element && e.target.closest('button, a'))) go(`call/${item.call_id}`) })
+  row.addEventListener('keydown', (e) => {
+    if (e.target === row && (e as KeyboardEvent).key === 'Enter') go(`call/${item.call_id}`)
+  })
+  paintRecord(head, mine, item, null)
+  const cached = cachedDetail(item.call_id)
+  if (cached) paintRecord(head, mine, item, cached)
+  else {
+    void gate.run(async () => {
+      if (!ctx.alive()) return
+      try {
+        const full = await detail(item.call_id)
+        if (ctx.alive()) paintRecord(head, mine, item, full)
+      } catch { /* 读不到就只写这一条自己带的那几样 */ }
+    })
+  }
+  return row
+}
+
+function paintRecord(head: HTMLElement, mine: HTMLElement, item: PrivateCandidate, full: CallDetail | null): void {
+  clear(head)
+  clear(mine)
+  const facts = [full?.instrument ?? '', item.interval ?? full?.timeframe ?? ''].filter(Boolean)
+  head.textContent = facts.join(' · ')
+  mine.textContent = full ? `我的记录 · ${shortDate(full.submitted_at)}` : '我的记录'
+}
+
+/* ------------------------------------------------------------ 像不像 */
+
+function band(item: SearchCandidate): HTMLElement | null {
+  const word = levelWord(item.match)
+  return word ? h('span.fband', { text: word }) : null
+}
+
+/** 后端还没精排完的那一批，这里一条都不显示——候选不是结论。 */
+export function ranked(items: SearchCandidate[]): SearchCandidate[] {
+  return items.filter((item) => levelWord(item.match) !== null)
 }

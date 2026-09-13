@@ -1,425 +1,323 @@
 // 今天 —— 打开这个产品第一眼看到的地方。
 //
-// 它只回答一个问题：接着上次，现在该做哪一件事。上面是记分簿的前提（交易先有
-// 判断、市场后给答案、这里只存答案揭晓之前的那一半），下面就是今天真正等着你
-// 的那几条记录：写了一半的复盘、结果已经出来可以回头对一次的、还在观察期里的。
+// 左边一句日期、三个数、一条「记一笔」的入口；右边一扇夜窗，放判对率的圆环。
+// 下面两列：等答案（市场还没开口的那几条）、该复盘（答案到了但还没判、还没写）。
+// 最后是最近记下的几条。
 //
-// 这里出现的每一条、每一个数字都来自真实请求：任务来自 GET /v1/review-queue 的
-// 两个桶，最近的判断来自 GET /v1/calls，本周条数和局面类别数各自数出来。哪条记
-// 录走到了哪个环节、下一步是什么，由 data/flow.ts 统一决定，这一页不自己猜。
-// 能力没开的时候不摆一排点不开的卡片，只给一句实话和一个设置入口。
+// 哪条记录走到了哪一步、该进哪一列，由 data/review-task.ts 统一决定，这一页不
+// 自己猜。队列行不带方向和「怎么算对」，所以取到 id 之后按记录详情补一遍，补不
+// 到的那条就不进这一列——不拿半张卡片凑数。判对率来自 data/scorecard.ts，和
+// 「经验」页用的是同一份底稿。
 
+import { ApiError } from '../../api/errors'
+import { WriteAction } from '../../api/http'
 import * as calls from '../../api/calls'
-import * as knowledge from '../../api/knowledge'
-import * as reviews from '../../api/reviews'
-import type { CallListItem, QueueItem } from '../../api/types'
-import { flowOf, fromQueueItem, STAGES, type Flow } from '../../data/flow'
-import { capabilityGap, isLive } from '../../data/session'
-import { relative } from '../../data/time'
-import { go } from '../../router'
-import { stanceBadge, thumb } from '../../ui/bits'
+import { judge } from '../../api/calls'
+import type { CallDetail } from '../../api/types'
+import { PATHS, primary, sentence } from '../../data/criteria'
+import { head } from '../../data/outcome'
+import { classifyReviewTask, type ReviewTask } from '../../data/review-task'
+import { forgetScorecard, hitRate, scorecard, type Scored } from '../../data/scorecard'
+import { Gate, detail, invalidate } from '../../data/store'
+import { shortDate } from '../../data/time'
+import { stanceBadge } from '../../ui/bits'
 import { clear, h } from '../../ui/dom'
-import { flowMini } from '../../ui/flow'
 import { icon } from '../../ui/icons'
 import { countUp, prefersReducedMotion, stagger } from '../../ui/motion'
-import { empty } from '../../ui/states'
+import { recordRow } from '../../ui/record-row'
+import { empty, ledgerSkeleton } from '../../ui/states'
+import { problem, toast } from '../../ui/toast'
+import { invalidateArchive } from '../archive'
+import { greeting, sundial } from '../../ui/decor'
 import { openCapture } from '../capture'
+import { reviewQueue } from '../review/queue'
 
-const WEEK_MS = 7 * 24 * 3_600_000
+const gate = new Gate(3)
+const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+const RING = 2 * Math.PI * 66
+
+const JUDGES: { label: string; state: 'realized' | 'unrealized' | 'not_triggered'; cls: string }[] = [
+  { label: '对', state: 'realized', cls: 'up' },
+  { label: '错', state: 'unrealized', cls: 'down' },
+  { label: '不算', state: 'not_triggered', cls: 'flat' },
+]
 
 export function homePage(host: HTMLElement): () => void {
   let alive = true
   const isAlive = () => alive
+  const controller = new AbortController()
+  const now = new Date()
 
-  const week = bigNumber('本周记下的判断')
-  const due = bigNumber('还等着回头对一次')
-  const tagged = bigNumber('你分出来的局面类别')
-
-  const hero = buildHero(week.node, due.node, tagged.node)
-  const today = h('div.tlist')
-  const recent = h('div.hrecent')
-
-  host.appendChild(hero)
-  host.appendChild(
-    h(
-      'section.tsec',
-      {},
-      h(
-        'div.tsh',
-        {},
-        h('span.eyebrow', { text: '今天' }),
-        h('span.why', { text: '接着上次的地方继续。这里只放真的等着你的那几条，没有的时候就是没有。' }),
-        h('a.more', { href: '#/review' }, '全部复盘队列', icon('chev')),
-      ),
-      today,
-    ),
+  // ---------- 左：日期、三个数、记一笔 ----------
+  const waitCount = h('b', { text: '0' })
+  const todoCount = h('b', { text: '0' })
+  const allCount = h('b', { text: '0' })
+  const quick = h('div.quick', { role: 'button', tabIndex: 0, title: '记一笔（⌃⇧S）', on: {
+    click: () => openCapture(),
+    keydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCapture() } },
+  } },
+    h('span.ph-text', {}, '此刻看到什么？', h('b', { text: '一句话，记下判断' })),
+    h('kbd.kbd', { text: '⌃⇧S' }),
+    h('button.btn.gold.sm', { text: '记一笔', tabIndex: -1 }),
   )
-  host.appendChild(
-    h(
-      'section.hsec',
-      {},
-      h(
-        'div.hsh',
-        {},
-        h('span.eyebrow', { text: '最近记下的判断' }),
-        h('span.why', { text: '点开任意一条，看到的是当时那张图和当时那句话，一个字都没动过。' }),
-        h('a.more', { href: '#/find' }, '全部记录', icon('chev')),
+  const dial = sundial()
+  const hero = h('section.today-hero', {},
+    h('div.hero-l', {},
+      h('div.date.greet', {},
+        h('span.g', { text: greeting(now.getHours()) }),
+        h('span.d', { text: `${shortDate(now.toISOString())} · ${WEEKDAYS[now.getDay()]}` }),
       ),
-      recent,
+      h('div.line', {},
+        h('a', { href: '#/review?box=waiting' }, waitCount, '等答案'),
+        h('a', { href: '#/review?box=verdict' }, todoCount, '该复盘'),
+        h('a', { href: '#/find' }, allCount, '条记录'),
+      ),
+      quick,
     ),
+    dial.node,
   )
-  const gaps = gapNote()
-  if (gaps) host.appendChild(gaps)
+  // 日晷上的时刻每分钟对一次表。
+  const minute = window.setInterval(() => dial.tick(), 60_000)
 
-  today.appendChild(waitRow())
-  today.appendChild(waitRow())
-  recent.appendChild(h('div.hrec.wait', {}, h('span.sk.line', { style: 'width:40%' })))
+  // ---------- 右：夜窗，判对率 ----------
+  const score = h('section.score', {}, h('div.k', { text: '判对率' }), h('div.none', { text: '正在数' }))
 
-  void loadToday()
-  void loadNumbers()
+  // ---------- 两列 + 最近 ----------
+  const waiting = h('div.wait-list')
+  const todo = h('div.verdict-list')
+  const recent = h('div.list')
+  const blockWait = section('等答案', '市场还没开口', waiting, h('a.more', { href: '#/review?box=waiting' }, '全部', icon('chev')))
+  const blockTodo = section('该复盘', '答案已经到了', todo, h('a.more', { href: '#/review?box=verdict' }, '全部', icon('chev')))
+  const blockRecent = section('最近', null, recent, h('a.more', { href: '#/find' }, '全部记录', icon('chev')))
+  blockRecent.classList.add('recent-sec')
+
+  host.append(h('div.today', {}, hero, score), h('div.today-cols', {}, blockWait, blockTodo, blockRecent))
+  waiting.appendChild(ledgerSkeleton(2))
+  todo.appendChild(ledgerSkeleton(2))
+  recent.appendChild(ledgerSkeleton(3))
+
+  void loadQueue()
+  void loadScore()
   void loadRecent()
 
-  // 顶上那块深色板子上的光跟着指针走一点点，幅度很小，只是让它不像一张贴纸。
-  const track = (e: PointerEvent) => {
-    if (e.pointerType !== 'mouse' || prefersReducedMotion()) return
-    const box = hero.getBoundingClientRect()
-    hero.style.setProperty('--mx', `${((e.clientX - box.left) / box.width) * 100}%`)
-    hero.style.setProperty('--my', `${((e.clientY - box.top) / box.height) * 100}%`)
-  }
-  if (!prefersReducedMotion()) hero.addEventListener('pointermove', track)
-
-  /**
-   * 两个桶分开读，筛选交给后端：写了一半的在 in_progress，还没写过的在
-   * needs_review——后者既有结果已经出来的，也有还在观察期里的，按流程环节分开。
-   */
-  async function loadToday(): Promise<void> {
+  /** 队列一起读，再按流程分成「等答案」和「该复盘」。草稿写到一半的也算该复盘。 */
+  async function loadQueue(): Promise<void> {
     try {
-      const [drafts, fresh] = await Promise.all([
-        reviews.queue({ bucket: 'in_progress', limit: 10 }),
-        reviews.queue({ bucket: 'needs_review', limit: 40 }),
-      ])
+      const queue = await reviewQueue(controller.signal)
+      const loaded = await Promise.all(queue.map(item => gate.run(async () => {
+        const record = await detail(item.id)
+        return record.voided ? null : classifyReviewTask(item, record)
+      })))
       if (!isAlive()) return
-      const rows = [...drafts.items, ...fresh.items].map((item) => ({
-        item,
-        flow: flowOf(fromQueueItem(item)),
-      }))
-      const editing = rows.filter((r) => r.flow.next.kind === 'continue')
-      const ready = rows.filter((r) => r.flow.next.kind === 'write' || r.flow.next.kind === 'recheck')
-      const watching = rows.filter((r) => r.flow.next.kind === 'observe' || r.flow.next.kind === 'result')
-
-      clear(today)
-      if (!editing.length && !ready.length && !watching.length) {
-        today.appendChild(clearDay())
-        return
-      }
-      const made: HTMLElement[] = []
-      const put = (title: string, why: string, list: typeof rows, max: number) => {
-        if (!list.length) return
-        today.appendChild(groupLine(title, why, list.length, max))
-        for (const row of list.slice(0, max)) {
-          const node = taskRow(row.item, row.flow)
-          today.appendChild(node)
-          made.push(node)
-        }
-      }
-      put('接着写完', '上次写到一半的复盘草稿还在，原样留着。', editing, 3)
-      put('可以回头对一次了', '市场已经给出答案，趁着还记得写下来。', ready, 4)
-      put('还在观察里', '到期以前不判对错。想先看看现在走到哪了，从这儿进去。', watching, 3)
-      stagger(made)
-      for (const node of made) node.classList.add('in')
+      const tasks = loaded.filter((task): task is ReviewTask => task !== null)
+      const wait = tasks.filter(task => task.box === 'waiting')
+      const write = tasks.filter(task => task.box !== 'waiting')
+      countUp(waitCount, wait.length)
+      countUp(todoCount, write.length)
+      paintWaiting(wait)
+      paintTodo(write)
     } catch {
       if (!isAlive()) return
-      clear(today)
-      today.appendChild(
-        empty({
-          title: '今天要做的事没读出来',
-          tip: '确认本机后端在 127.0.0.1:8787 运行，然后在这儿再试一次。',
-          action: h('button.btn.sm', { text: '再试一次', on: { click: () => void loadToday() } }),
-        }),
-      )
+      clear(waiting)
+      clear(todo)
+      waitCount.textContent = '—'
+      todoCount.textContent = '—'
+      for (const box of [waiting, todo]) box.appendChild(empty({ title: '清单没读出来', action: h('button.btn.sm', { text: '重试', on: { click: () => void loadQueue() } }) }))
     }
   }
 
-  async function loadNumbers(): Promise<void> {
+  /** 判对率：和「经验」页同一份底稿。没判过就只写还没有数。 */
+  async function loadScore(): Promise<void> {
     try {
-      const page = await calls.list({ limit: 100 })
+      const all = await scorecard({ signal: controller.signal })
       if (!isAlive()) return
-      const since = Date.now() - WEEK_MS
-      let count = 0
-      let capped = true
-      for (const item of page.items) {
-        if (new Date(item.submitted_at).getTime() < since) {
-          capped = false
-          break
-        }
-        count += 1
+      countUp(allCount, all.length)
+      paintScore(all)
+    } catch {
+      if (!isAlive()) return
+      allCount.textContent = '—'
+      clear(score)
+      score.append(h('div.k', { text: '判对率' }),
+        h('div.none', {}, '没数出来', h('small', {}, h('button.linkbtn', { text: '重试', on: { click: () => void loadScore() } }))))
+    }
+  }
+
+  function paintScore(all: Scored[]): void {
+    clear(score)
+    const judged = all.filter(s => s.verdict === 'right' || s.verdict === 'wrong')
+    const right = all.filter(s => s.verdict === 'right').length
+    const wrong = all.filter(s => s.verdict === 'wrong').length
+    const skipped = all.filter(s => s.verdict === 'void').length
+    const waitingN = all.length - right - wrong - skipped
+    const rate = hitRate(all)
+    score.appendChild(h('div.k', { text: '判对率' }))
+    if (rate === null) {
+      score.appendChild(h('div.none', {}, all.length ? '还没有判过对错的记录。' : '还没有记录。',
+        h('small', { text: all.length ? '市场给了答案再判，这里就有数。' : '记下第一笔判断，等市场给答案。' })))
+      score.appendChild(h('div.foot', {}, h('a', { href: '#/stats' }, '看全部战绩')))
+      return
+    }
+    const num = h('b', { text: '0' })
+    const ring = h('div.ring', { style: `--c:${RING.toFixed(1)};--p:${(rate / 100).toFixed(3)}` },
+      svgRing(),
+      h('div.num', {}, h('b', {}, num, h('small', { text: '%' })), h('span', { text: `${judged.length} 次已判` })))
+    if (prefersReducedMotion()) num.textContent = String(rate)
+    else countUp(num, rate, 1200)
+    const total = Math.max(1, all.length)
+    const facts = h('div.facts', {},
+      h('div.f.ok', {}, h('i'), h('b', { text: String(right) }), '对'),
+      h('div.f.no', {}, h('i'), h('b', { text: String(wrong) }), '错'),
+      h('div.f.wait', {}, h('i'), h('b', { text: String(waitingN) }), '等答案'),
+      h('div.bar', {},
+        h('i.ok', { style: `--w:${(right * 100 / total).toFixed(1)}%;--i:0` }),
+        h('i.no', { style: `--w:${(wrong * 100 / total).toFixed(1)}%;--i:1` }),
+        h('i.wait', { style: `--w:${(waitingN * 100 / total).toFixed(1)}%;--i:2` })),
+    )
+    score.appendChild(h('div.body', {}, ring, facts))
+    const chart = hitRate(all.filter(s => s.item.body.path === 'chart_first'))
+    const idea = hitRate(all.filter(s => s.item.body.path === 'thought_first'))
+    const foot = h('div.foot')
+    if (chart !== null) foot.appendChild(h('span', { text: `${PATHS['chart_first']} ${chart}%` }))
+    if (idea !== null) foot.appendChild(h('span', { text: `${PATHS['thought_first']} ${idea}%` }))
+    foot.appendChild(h('a', { href: '#/stats' }, '看全部战绩'))
+    score.appendChild(foot)
+  }
+
+  function paintWaiting(rows: ReviewTask[]): void {
+    clear(waiting)
+    if (!rows.length) {
+      waiting.appendChild(empty({ title: '今天没有等答案的判断', action: h('button.btn.gold.sm', { text: '记一笔', on: { click: () => openCapture() } }) }))
+      return
+    }
+    const made = rows.slice(0, 4).map(({ record: d }) => waitCard(d))
+    for (const node of made) waiting.appendChild(node)
+    stagger(made)
+  }
+
+  function waitCard(d: CallDetail): HTMLElement {
+    const body = d.body
+    const rule = sentence(primary(body.criteria))
+    const pending = (d.current_outcomes ?? []).find(o => o.result.state === 'pending' && o.result.end_at)
+    const hours = pending?.result.end_at ? Math.max(1, Math.ceil((Date.parse(pending.result.end_at) - Date.now()) / 3_600_000)) : null
+    const top = h('div.top', {}, h('b', { text: d.instrument ?? body.instrument ?? '—' }), stanceBadge(body.stance))
+    if (body.confidence != null) top.appendChild(h('span.conf', { text: `${body.confidence}%` }))
+    const tf = d.timeframe ?? body.timeframe
+    const path = PATHS[body.path]
+    if (tf || path) top.appendChild(h('span.chip.tag', { text: [tf, path].filter(Boolean).join(' · ') }))
+    const card = h('a.wait-card', { href: `#/call/${d.id}` },
+      top,
+      h('div.q', { text: d.original_text || body.original_text }),
+      hours === null
+        ? h('div.countdown', {}, h('b', { text: '—' }), h('span', { text: '没写时限' }))
+        : h('div.countdown', {}, h('b', { text: String(hours) }), h('span', { text: '小时到期限' })),
+    )
+    if (rule) card.appendChild(h('div.rule', {}, '怎么算对 ', h('span', { text: rule })))
+    return card
+  }
+
+  function paintTodo(rows: ReviewTask[]): void {
+    clear(todo)
+    if (!rows.length) {
+      todo.appendChild(empty({ title: '暂时没有该复盘的' }))
+      return
+    }
+    const made = rows.slice(0, 5).map((task) =>
+      recordRow(task.record, {
+        density: 'task',
+        alive: isAlive,
+        outcome: head(task.record),
+        action: () => actionsFor(task),
+      }),
+    )
+    for (const node of made) todo.appendChild(node)
+    stagger(made)
+    const judgeN = rows.filter(task => task.box === 'verdict').length
+    const writeN = rows.length - judgeN
+    const links = h('div.row', { style: 'gap:16px;margin-top:10px' })
+    if (judgeN) links.appendChild(h('a.more', { href: '#/review?box=verdict', text: `判对错 ${judgeN} 条` }))
+    if (writeN) links.appendChild(h('a.more', { href: '#/review?box=write', text: `写复盘 ${writeN} 条` }))
+    todo.appendChild(links)
+  }
+
+  function actionsFor(task: ReviewTask): Node {
+    const slot = document.createDocumentFragment()
+    if (task.box === 'verdict') {
+      for (const j of JUDGES) {
+        slot.appendChild(h('button.btn.sm', { class: j.cls, type: 'button', text: j.label,
+          on: { click: (e) => void setVerdict(task, j.state, e.currentTarget as HTMLButtonElement) } }))
       }
-      week.set(count, capped && Boolean(page.next_cursor))
-    } catch {
-      if (isAlive()) week.fail()
+    } else {
+      if (task.draft) slot.appendChild(h('span.tag', { text: '草稿' }))
+      slot.appendChild(h('a.btn.sm.gold', { href: `#/review/${task.record.id}/step/1`, text: task.draft ? '继续复盘' : '写复盘' }))
     }
+    return slot
+  }
 
+  /** 行内判对错：和复盘页同一个接口、同一句提示。判完清单和判对率一起重数。 */
+  async function setVerdict(task: ReviewTask, state: 'realized' | 'unrealized' | 'not_triggered', button: HTMLButtonElement): Promise<void> {
+    if (!isAlive()) return
+    const buttons = Array.from(button.closest('.tk-act')?.querySelectorAll<HTMLButtonElement>('button') ?? [button])
+    for (const control of buttons) control.disabled = true
+    const action = new WriteAction()
+    const payload = { state, expected_revision: task.record.revision }
     try {
-      const page = await reviews.queue({ bucket: 'needs_review', limit: 20 })
+      await judge(task.record.id, payload, action.keyFor(payload))
+      invalidate(task.record.id)
+      invalidateArchive()
+      forgetScorecard()
       if (!isAlive()) return
-      due.set(page.items.length, Boolean(page.next_cursor))
-      if (page.items.length) due.node.classList.add('hot')
-    } catch {
-      if (isAlive()) due.fail()
-    }
-
-    try {
-      const page = await knowledge.tags(null)
+      toast('记下了')
+      void loadQueue()
+      void loadScore()
+    } catch (error) {
       if (!isAlive()) return
-      tagged.set(page.items.length, Boolean(page.next_cursor))
-    } catch {
-      if (isAlive()) tagged.fail()
+      const status = error instanceof ApiError ? error.status : 0
+      problem(status === 404 || status === 405 ? '本机后端还没有这个接口' : '没保存上，再试一次')
+      for (const control of buttons) control.disabled = false
     }
   }
 
   async function loadRecent(): Promise<void> {
     try {
-      const page = await calls.list({ limit: 4 })
+      const page = await calls.list({ limit: 6 })
       if (!isAlive()) return
       clear(recent)
       if (!page.items.length) {
-        recent.appendChild(
-          empty({
-            title: '还没有第一条判断',
-            tip: '下一次开口之前先记一条，往后这里就是你最近说过的话，也是记分的第一笔。',
-            action: h('button.btn.sm', { text: '记录判断', on: { click: () => openCapture() } }),
-          }),
-        )
+        recent.appendChild(empty({ title: '还没有记录', action: h('button.btn.gold.sm', { text: '记一笔', on: { click: () => openCapture() } }) }))
         return
       }
-      const made = page.items.map((item) => recentRow(item))
-      for (const row of made) recent.appendChild(row)
+      const made = page.items.map((item) => recordRow(item, { density: 'compact', alive: isAlive }))
+      for (const node of made) recent.appendChild(node)
       stagger(made)
     } catch {
       if (!isAlive()) return
       clear(recent)
-      recent.appendChild(
-        empty({
-          title: '最近的判断没读出来',
-          tip: '确认本机后端在运行，然后在这儿再试一次。',
-          action: h('button.btn.sm', { text: '再试一次', on: { click: () => void loadRecent() } }),
-        }),
-      )
+      recent.appendChild(empty({ title: '记录没读出来', action: h('button.btn.sm', { text: '重试', on: { click: () => void loadRecent() } }) }))
     }
   }
 
   return () => {
     alive = false
-    hero.removeEventListener('pointermove', track)
+    controller.abort()
+    window.clearInterval(minute)
   }
 }
 
-/**
- * 顶上的记分牌：一句话说清这个产品的前提，底下五步就是一条记录真实的走法，
- * 和四个主入口对得上。
- */
-function buildHero(...tiles: HTMLElement[]): HTMLElement {
-  return h(
-    'section.hero',
-    {},
-    h('div.hero-grid'),
-    h('div.hero-scan'),
-    h(
-      'div.hero-in',
-      {},
-      h('span.eyebrow.noline.hero-eb', { text: '记分簿 · Scorebook' }),
-      h(
-        'h1.hero-t',
-        {},
-        h('span.ln', {}, h('i', { text: '让你的交易直觉' })),
-        h('span.ln', {}, h('i', { text: '越用越准。' })),
-      ),
-      h('p.hero-s', {
-        text:
-          '直觉是主观交易者最值钱的东西，也是最说不清的东西：反馈快的品种上它是真本事，反馈慢的品种上它可能只是错觉，而两者的体感一模一样。' +
-          '记分簿把你在市场开口之前说出的每一句判断，连同当时那张图一起钉住，等行情走完，由市场来打分。' +
-          '它不替你判断，也不怀疑你的直觉——只是让直觉自己长出能被数出来的证据。',
-      }),
-      h(
-        'div.hero-flow',
-        {},
-        ...STAGES.map((stage, i) =>
-          h(
-            'div.hstep',
-            {},
-            h('span.n', { text: String(i + 1).padStart(2, '0') }),
-            h('span.t', { text: stage.title }),
-            h('span.l', { text: stage.line }),
-          ),
-        ),
-      ),
-      h(
-        'div.hero-acts',
-        {},
-        h('button.btn.primary.lg', { on: { click: () => openCapture() } }, icon('plus'), '记下这一刻的判断'),
-        h('a.btn.lg.onboard', { href: '#/search' }, icon('img'), '用现在的走势找过去'),
-      ),
-      h('div.hero-nums', {}, ...tiles),
-    ),
-  )
+function section(title: string, small: string | null, body: HTMLElement, more: HTMLElement | null): HTMLElement {
+  const heading = h('h2', { text: title })
+  if (small) heading.appendChild(h('small', { text: small }))
+  return h('section.sec', {}, h('div.sec-h', {}, heading, more), body)
 }
 
-function groupLine(title: string, why: string, total: number, max: number): HTMLElement {
-  const more = total > max ? `　还有 ${total - max} 条` : ''
-  return h(
-    'div.tgh',
-    {},
-    h('span.t', { text: title }),
-    h('span.n', { text: String(total) }),
-    h('span.w', { text: why + more }),
-  )
-}
-
-/** 一条今天要做的事：说清是哪条记录、走到哪儿了、下一步做什么。 */
-function taskRow(item: QueueItem, flow: Flow): HTMLElement {
-  const href = flow.next.href ?? `#/call/${item.id}`
-  return h(
-    'a.ttask',
-    {
-      href,
-      on: {
-        click: (e: MouseEvent) => {
-          e.preventDefault()
-          go(href.replace(/^#\//, ''))
-        },
-      },
-    },
-    h('span.ic', {}, icon(flow.next.iconName)),
-    h(
-      'div.c',
-      {},
-      h(
-        'div.r1',
-        {},
-        h('span.sym', { text: item.instrument ?? '没写品种' }),
-        item.timeframe ? h('span', { text: item.timeframe }) : null,
-        h('span', { text: relative(item.submitted_at) }),
-        flowMini(flow),
-      ),
-      h('div.q', { text: item.original_text }),
-      h('div.r2', { text: flow.summary }),
-    ),
-    h('span.go', {}, h('span', { text: flow.next.label }), icon('chev')),
-  )
-}
-
-function waitRow(): HTMLElement {
-  return h(
-    'div.ttask.wait',
-    {},
-    h('span.ic', {}, h('span.sk', { style: 'width:20px;height:20px;border-radius:7px' })),
-    h(
-      'div.c',
-      {},
-      h('div.sk.line', { style: 'width:26%' }),
-      h('div.sk.line', { style: 'width:72%' }),
-    ),
-  )
-}
-
-/** 今天没有待办：不摆一排空卡片，给一句话和一个动作。 */
-function clearDay(): HTMLElement {
-  return h(
-    'div.tclear',
-    {},
-    h('span.ic', {}, icon('check')),
-    h(
-      'div.b',
-      {},
-      h('b', { text: '今天没有等着你的记录' }),
-      h('span', {
-        text: '写了一半的、结果已经出来的、还在观察里的，现在都没有。下一次开口之前记一条，它会自己排到这里来。',
-      }),
-    ),
-    h('button.btn.primary', { on: { click: () => openCapture() } }, icon('plus'), '记录判断'),
-  )
-}
-
-/**
- * 没接上的能力，一句实话加一个设置入口。
- *
- * 「后端没做」和「后端做了、这台机器没配」是两件事：交易所账户在 v4 里适配器
- * 已经实现，缺的只是本机凭证；Chat 同理。上一版把这两种情况都写成「后端还没有
- * 做这部分」，这里按 /v1/capabilities 的真实形态分开说。
- */
-function gapNote(): HTMLElement | null {
-  const watch: { name: string; label: string }[] = [
-    { name: 'chat_generation', label: '问过去的自己' },
-    { name: 'exchange_accounts', label: '交易所账户' },
-    { name: 'encrypted_backup', label: '加密备份' },
-    { name: 'knowledge_index', label: '按意思找' },
-  ]
-  const missing = watch.filter((w) => !isLive(w.name))
-  if (!missing.length) return null
-
-  const configure = missing.filter((w) => capabilityGap(w.name) === 'not_configured')
-  const absent = missing.filter((w) => capabilityGap(w.name) !== 'not_configured')
-  const lines: string[] = []
-  if (configure.length) {
-    lines.push(`${configure.map((w) => w.label).join('、')}：后端已经做好了，这台机器上还没配它要的那一份东西。`)
+function svgRing(): SVGElement {
+  const ns = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(ns, 'svg')
+  svg.setAttribute('viewBox', '0 0 150 150')
+  for (const cls of ['track', 'val']) {
+    const c = document.createElementNS(ns, 'circle')
+    c.setAttribute('class', cls)
+    c.setAttribute('cx', '75'); c.setAttribute('cy', '75'); c.setAttribute('r', '66')
+    svg.appendChild(c)
   }
-  if (absent.length) {
-    lines.push(`${absent.map((w) => w.label).join('、')}：本机后端现在没有报告这项能力。`)
-  }
-
-  return h(
-    'section.tsec',
-    {},
-    h(
-      'div.gapnote',
-      {},
-      h('span.ic', {}, icon('gear')),
-      h(
-        'div.b',
-        {},
-        h('b', { text: '有几项现在用不了' }),
-        ...lines.map((text) => h('span', { text })),
-      ),
-      h('a.btn.sm', { href: '#/settings' }, '去设置里看', icon('chev')),
-    ),
-  )
-}
-
-function recentRow(item: CallListItem): HTMLElement {
-  const body = item.body
-  return h(
-    'a.hrec',
-    { href: `#/call/${item.id}`, on: { click: () => go(`call/${item.id}`) } },
-    thumb(body.attachments?.[0] ?? null, `${body.instrument ?? '未标品种'} 现场图`, 'sm'),
-    h(
-      'div.c',
-      {},
-      h(
-        'div.r1',
-        {},
-        stanceBadge(body.stance),
-        h('span.sym', { text: body.instrument ?? '品种待确认' }),
-        h('span.when', { text: relative(item.submitted_at) }),
-      ),
-      h('div.q', { text: body.original_text }),
-    ),
-    icon('chev'),
-  )
-}
-
-function bigNumber(label: string) {
-  const value = h('span.v', { text: '—' })
-  const node = h('div.hnum', {}, value, h('span.k', { text: label }))
-  return {
-    node,
-    set(n: number, atLeast: boolean) {
-      value.replaceChildren()
-      const number = h('span', { text: '0' })
-      value.append(number, h('small', { text: atLeast ? '条以上' : '条' }))
-      countUp(number, n)
-    },
-    fail() {
-      value.replaceChildren(h('small', { text: '没读出来' }))
-    },
-  }
+  return svg
 }

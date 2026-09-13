@@ -2,7 +2,8 @@
 //
 // 这块界面唯一的承诺是：显示「已保存」的时候，服务器确实已经收下了这些字。
 // 所以它只在收到回执之后才改状态文字，也从不用本地缓存冒充同步；关掉页面再
-// 进来，恢复的是服务器确认过的那一版。
+// 进来，恢复的是服务器确认过的那一版。未保存的编辑器留在当前标签页供重试，
+// 刷新或关闭前用浏览器的离开提醒保护它，不把本地副本说成「已保存」。
 //
 // 三件事必须分清楚：
 //   · 自动保存草稿   不动原判断，也不产生正式复盘，随便写随便改
@@ -30,10 +31,10 @@ import { problem, toast } from '../../ui/toast'
 
 /** 四种「和上次比」的说法，后端只认这四个值。 */
 export const REVIEW_ACTIONS: { value: ReviewAction; label: string; help: string }[] = [
-  { value: 'did', label: '照上次说的做了', help: '上一次复盘写下的改法，这次照做了。' },
-  { value: 'did_not', label: '没照上次说的做', help: '上一次写下了改法，这次还是没做到。' },
-  { value: 'keep', label: '维持原来的做法', help: '这次没有改，仍然按原来的方式处理。' },
-  { value: 'new', label: '这次是新做法', help: '这次的处理方式和以前不一样。' },
+  { value: 'did', label: '照上次说的做了', help: '' },
+  { value: 'did_not', label: '没照上次说的做', help: '' },
+  { value: 'keep', label: '维持原来的做法', help: '' },
+  { value: 'new', label: '这次是新做法', help: '' },
 ]
 
 export interface DraftEditorOptions {
@@ -71,7 +72,9 @@ export interface DraftParts {
   vsLast: HTMLElement
   /** 冲突和「结果变了」的横幅。 */
   banner: HTMLElement
-  /** 发布、丢弃和保存状态。 */
+  /** 每一步都能看到的保存状态和重试入口。 */
+  status: HTMLElement
+  /** 发布和丢弃。 */
   foot: HTMLElement
 }
 
@@ -89,9 +92,11 @@ export interface DraftEditor {
   /** 这一步之后还能不能发布，引导式复盘用它决定「下一步」亮不亮。 */
   canPublish(): boolean
   hasText(): boolean
+  hasUnsaved(): boolean
   /** 离开页面之前把没发出的那一次保存补上。 */
   flush(): Promise<void>
-  dispose(): void
+  /** 有未保存内容时拒绝释放，调用方必须保留编辑器以便恢复。 */
+  dispose(): boolean
 }
 
 const SAVE_DELAY_MS = 800
@@ -116,18 +121,20 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   let timer = 0
   let vs: ReviewAction | null = null
   let publishing = false
+  let needsOutcomeReview = false
   let pendingSave: Promise<void> | null = null
   let saveFailed = false
   let imageSignature = '[]'
+  const composing = new Set<HTMLTextAreaElement>()
   const positions = tradeEditor(options.instrument, touched, () => ready && !paused && !publishing)
   const images = new ImageUploads('supplement')
-  const pictures = imagePicker(images, '上传后续走势截图', () => {
+  const pictures = imagePicker(images, '补一张之后的图', () => {
     const signature = JSON.stringify(images.ids)
     if (signature !== imageSignature) {
       imageSignature = signature
       touched()
     }
-    if (ready) publish.disabled = !canPublish()
+    if (ready) { publish.disabled = !canPublish(); paintState() }
   }, () => ready && !paused && !publishing)
 
   function restoreImages(ids: Uuid[] = []): void {
@@ -137,18 +144,17 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
 
   const noteInput = h('textarea.textarea', {
     rows: 4,
-    placeholder: '这次看到了什么？当时那句话哪一半站住了，哪一半是错觉？',
+    placeholder: '当时那句话，哪一半站住了，哪一半没有',
   }) as HTMLTextAreaElement
 
   const betterInput = h('textarea.textarea', {
     rows: 3,
-    placeholder: '下次同样的局面，怎么做更好？',
+    placeholder: '同样的局面再来，改哪儿',
   }) as HTMLTextAreaElement
 
   const opts = h('div.opts.four')
-  const optHelp = h('div.tip', { text: '选一个，它会跟着这条复盘一起存下来。' })
 
-  const state = h('span.dstate', { text: '正在读草稿…' })
+  const state = h('span.dstate', { text: '正在加载', attrs: { role: 'status', 'aria-live': 'polite' } })
   const stateRetry = h('button.linkbtn', {
     text: '重试',
     hidden: true,
@@ -156,7 +162,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   }) as HTMLButtonElement
 
   const publish = h('button.btn.primary', {
-    text: '发布这条复盘',
+    text: '发布',
     disabled: true,
     on: { click: () => void doPublish() },
   }) as HTMLButtonElement
@@ -174,29 +180,27 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     'div.dpart',
     {},
     pictures.node,
-    h('div.tip', { text: '放上判断之后的走势，和当时的截图对照着看。图片会随草稿保存，发布后保留在这条复盘里。' }),
   )
   const partNote = h('div.dpart', {}, noteInput)
   const partBetter = h(
     'div.dpart',
     {},
-    h('div.dlabel', { text: '下次怎么做（可以不写）' }),
+    h('div.dlabel', { text: '下次怎么做' }),
     betterInput,
   )
   const partVs = h(
     'div.dpart',
     {},
-    h('div.dlabel', { text: '和上一次同类局面比' }),
+    h('div.dlabel', { text: '和上一次比' }),
     opts,
-    optHelp,
   )
   const partFoot = h(
     'div.dfoot',
     {},
     publish,
     discard,
-    h('span.dstatewrap', {}, state, stateRetry),
   )
+  const partStatus = h('span.dstatewrap', {}, state, stateRetry)
   const parts: DraftParts = {
     pictures: partPictures,
     trades: positions.node,
@@ -204,23 +208,25 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     better: partBetter,
     vsLast: partVs,
     banner,
+    status: partStatus,
     foot: partFoot,
   }
 
   const body = h(
     'div.dbody',
     { hidden: true },
-    h('div.dlead', { text: options.lead ?? '行情已经走完了，现在你怎么看当时那句话？' }),
+    options.lead ? h('div.dlead', { text: options.lead }) : null,
     partPictures,
     positions.node,
     partNote,
     partBetter,
     partVs,
     banner,
+    partStatus,
     partFoot,
   )
 
-  const loading = spinner('正在读这条记录的草稿…')
+  const loading = spinner('正在加载')
   const node = h('div.rvform', {}, loading, body)
 
   let settleOpen: () => void = () => undefined
@@ -233,6 +239,13 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   opened.catch(() => undefined)
 
   void open()
+
+  const beforeUnload = (event: BeforeUnloadEvent) => {
+    if (!hasUnsaved()) return
+    event.preventDefault()
+    event.returnValue = ''
+  }
+  window.addEventListener('beforeunload', beforeUnload)
 
   async function open(): Promise<void> {
     try {
@@ -264,7 +277,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
       loading.replaceWith(
         noteBox(
           'warn',
-          error instanceof Error ? error.message : '草稿读不出来。',
+          '没读出来',
           h('button.linkbtn', { text: '重试', on: { click: () => void retryOpen() } }),
         ),
       )
@@ -290,8 +303,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
               if (publishing) return
               vs = vs === item.value ? null : item.value
               paintOptions()
-              optHelp.textContent = vs ? item.help : '选一个，它会跟着这条复盘一起存下来。'
-              touched()
+                  touched()
             },
           },
         }),
@@ -301,12 +313,16 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   }
 
   function canPublish(): boolean {
-    if (!ready || paused || publishing || images.pending || !positions.valid()) return false
+    if (!ready || paused || publishing || needsOutcomeReview || images.pending || !positions.valid()) return false
     return Boolean(vs) && Boolean(noteInput.value.trim() || betterInput.value.trim())
   }
 
   function hasText(): boolean {
     return Boolean(noteInput.value.trim() || betterInput.value.trim() || vs || images.items.length || positions.hasContent())
+  }
+
+  function hasUnsaved(): boolean {
+    return dirty || saving || Boolean(pendingSave) || paused || images.pending || publishing || composing.size > 0
   }
 
   function report(): void {
@@ -316,9 +332,26 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   function paintState(): void {
     positions.lock()
     stateRetry.hidden = true
+    discard.hidden = !savedAt
+    if (paused) {
+      state.className = 'dstate bad'
+      state.textContent = '这条复盘在别处改过，请先选一份留下来'
+      return
+    }
+    if (images.pending) {
+      state.className = images.uploading ? 'dstate saving' : 'dstate bad'
+      state.textContent = images.uploading ? '图片上传中，草稿还没保存' : '有图片没传上，请在截图旁重试或移除'
+      return
+    }
     if (saving) {
       state.className = 'dstate saving'
-      state.textContent = '保存中…'
+      state.textContent = '保存中'
+      return
+    }
+    if (saveFailed) {
+      state.className = 'dstate bad'
+      state.textContent = '没保存上，内容还在当前标签页'
+      stateRetry.hidden = false
       return
     }
     if (dirty) {
@@ -329,35 +362,34 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     if (savedAt) {
       state.className = 'dstate ok'
       state.textContent = `已保存 · ${dateTime(savedAt)}`
-      discard.hidden = false
       return
     }
     state.className = 'dstate'
-    state.textContent = hasText() ? '还没保存' : '写下的字会自动存成草稿，不会动原来那句话。'
+    state.textContent = hasText() ? '还没保存' : ''
   }
 
   function touched(): void {
-    if (!ready) return
+    if (!alive || !ready) return
     dirty = true
     publish.disabled = !canPublish()
     paintState()
     report()
     window.clearTimeout(timer)
-    timer = window.setTimeout(() => void flush(), SAVE_DELAY_MS)
+    if (!paused) timer = window.setTimeout(() => void flush(), SAVE_DELAY_MS)
   }
 
   for (const field of [noteInput, betterInput]) {
     // 中文输入法组词期间不提交半个字，等 compositionend 之后再算一次改动。
-    let composing = false
     field.addEventListener('compositionstart', () => {
-      composing = true
+      composing.add(field)
+      window.clearTimeout(timer)
     })
     field.addEventListener('compositionend', () => {
-      composing = false
+      composing.delete(field)
       touched()
     })
     field.addEventListener('input', () => {
-      if (!composing) touched()
+      if (!composing.has(field)) touched()
     })
     field.addEventListener('blur', () => {
       if (dirty) void flush(true)
@@ -370,14 +402,16 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
    */
   async function flush(immediate = false): Promise<void> {
     if (immediate) window.clearTimeout(timer)
+    if (!alive || composing.size) return
     await images.wait()
+    if (images.pending) { paintState(); return }
     if (pendingSave) return pendingSave
     if (!ready || paused || !dirty) return
     pendingSave = (async () => {
       do {
         saveFailed = false
         await saveOnce()
-      } while (dirty && !saveFailed && !paused)
+      } while (dirty && !saveFailed && !paused && !images.pending && !composing.size)
     })().finally(() => { pendingSave = null })
     await pendingSave
   }
@@ -416,7 +450,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
       // 失败就近说明，不弹提示；文字全部留在编辑器里，重试用的还是同一把幂等键。
       state.className = 'dstate bad'
       state.textContent =
-        error instanceof NetworkError ? '尚未保存，网络没通。' : error instanceof Error ? error.message : '这一次没有存下来。'
+        error instanceof NetworkError ? '连不上本机服务' : '没保存上，再试一次'
       stateRetry.hidden = false
       report()
     }
@@ -429,16 +463,16 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
   async function onConflict(): Promise<void> {
     paused = true
     publish.disabled = true
-    state.className = 'dstate bad'
-    state.textContent = '这条复盘已在另一处更新。'
+    paintState()
+    pictures.render()
     let remote: Awaited<ReturnType<typeof reviews.draft>>
     try {
       remote = await reviews.draft(options.callId)
     } catch {
       if (!alive) return
       showBanner(
-        '这条复盘已在另一处更新',
-        '另一处的内容还没读出来。你写的字都留着，网络好一点再试一次。',
+        '这条复盘在别处改过',
+        '没读出来',
         [h('button.btn.sm', { text: '再读一次', on: { click: () => void onConflict() } })],
       )
       return
@@ -447,29 +481,27 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     const theirs = remote.draft?.body
     const mine = { note: noteInput.value, better: betterInput.value, vs }
     showBanner(
-      '这条复盘已在另一处更新',
-      theirs
-        ? '另一处保存的内容在下面。你这边写的字一个都没动，选一份留下来。'
-        : '另一处把这份草稿清掉了。你写的字还在，可以按原样重新存一次。',
+      '这条复盘在别处改过',
+      theirs ? '选一份留下来' : '别处把草稿清掉了，可以重新存一次',
       [
         h('button.btn.sm.primary', {
           text: '保留我写的',
           on: {
             click: () => {
               draftRevision = remote.draft_revision
-              callRevision = remote.call_revision
-              seenOutcomeIds = [...remote.current_outcome_ids]
               hideBanner()
               paused = false
+              saveFailed = false
               dirty = true
+              pictures.render()
               publish.disabled = !canPublish()
-              void flush(true)
+              void flush(true).then(() => { if (needsOutcomeReview && !dirty && !paused) return onOutcomesChanged() })
             },
           },
         }),
         theirs
           ? h('button.btn.sm', {
-              text: '改用另一处那份',
+              text: '改用别处那份',
               on: {
                 click: () => {
                   noteInput.value = theirs.note ?? ''
@@ -478,15 +510,17 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
                   restoreImages(theirs.attachment_ids)
                   positions.restore(theirs.trades, theirs.trade_snapshots)
                   draftRevision = remote.draft_revision
-                  callRevision = remote.call_revision
-                  seenOutcomeIds = [...remote.current_outcome_ids]
                   savedAt = remote.draft?.updated_at ?? null
                   hideBanner()
                   paused = false
                   dirty = false
+                  saveFailed = false
+                  save.reset()
+                  pictures.render()
                   paintOptions()
                   paintState()
                   report()
+                  if (needsOutcomeReview) void onOutcomesChanged()
                 },
               },
             })
@@ -496,8 +530,8 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
         ? h(
             'div.dcompare',
             {},
-            side('我这边', mine.note, mine.better, mine.vs, images.ids, positions.read()),
-            side('另一处', theirs.note, theirs.better_play, theirs.vs_last, theirs.attachment_ids, theirs.trades, theirs.trade_snapshots),
+            side('我写的', mine.note, mine.better, mine.vs, images.ids, positions.read()),
+            side('别处', theirs.note, theirs.better_play, theirs.vs_last, theirs.attachment_ids, theirs.trades, theirs.trade_snapshots),
           )
         : null,
     )
@@ -517,9 +551,9 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
       'div.dside',
       {},
       h('div.dside-t', { text: title }),
-      h('div.quote.sm', { text: text.trim() || '（这一栏是空的）' }),
-      better?.trim() ? h('div.faint', { text: `下次怎么做：${better.trim()}` }) : null,
-      label ? h('div.faint', { text: `和上一次比：${label}` }) : null,
+      h('div.quote.sm', { text: text.trim() || '没写' }),
+      better?.trim() ? h('div.faint', { text: `下次怎么做 ${better.trim()}` }) : null,
+      label ? h('div.faint', { text: `和上一次比 ${label}` }) : null,
       reviewImages(imageIds),
       tradeSummary(trades, snapshots),
     )
@@ -553,7 +587,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     pictures.render()
     noteInput.disabled = betterInput.disabled = true
     publish.disabled = true
-    publish.textContent = '正在发布…'
+    publish.textContent = '正在发布'
     try {
       // 发布之前先把最后一次草稿保存确认掉，否则发出去的会是上一版文字。
       await flush(true)
@@ -623,31 +657,38 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
    * 再决定这条复盘是不是还算数——不能把没看过的结果悄悄绑上去。
    */
   async function onOutcomesChanged(): Promise<void> {
+    needsOutcomeReview = true
     publish.disabled = true
     let fresh: CallDetail | null = null
     let latest: Awaited<ReturnType<typeof reviews.draft>> | null = null
     try {
       ;[fresh, latest] = await Promise.all([options.reread(), reviews.draft(options.callId)])
     } catch {
-      /* 读不出来也要把提示留在页面上 */
+      if (alive) showBanner('这条记录有了新的结果', '新的结果没读出来，你写的内容还在。', [
+        h('button.btn.sm', { text: '重试', on: { click: () => void onOutcomesChanged() } }),
+      ])
+      return
     }
     if (!alive) return
-    const shown = (fresh?.current_outcomes ?? options.outcomes()).filter((o) =>
-      latest ? latest.current_outcome_ids.includes(o.id) : true,
-    )
+    if (latest.draft_revision !== draftRevision) { await onConflict(); return }
+    const shown = fresh.current_outcomes.filter((o) => latest.current_outcome_ids.includes(o.id))
+    if (shown.length !== latest.current_outcome_ids.length) {
+      showBanner('结果又更新了', '这一版还没读全，你写的内容还在。', [
+        h('button.btn.sm', { text: '再读一次', on: { click: () => void onOutcomesChanged() } }),
+      ])
+      return
+    }
     showBanner(
       '这条记录有了新的结果',
       '你写的字一个都没动。先看一眼下面这一版结果，确认之后再发布，这条复盘就会绑在这一版上。',
       [
         h('button.btn.sm.primary', {
-          text: '看过了，按这一版发布',
+          text: '看过了，继续发布',
           on: {
             click: () => {
-              if (latest) {
-                seenOutcomeIds = [...latest.current_outcome_ids]
-                draftRevision = latest.draft_revision
-                callRevision = latest.call_revision
-              }
+              seenOutcomeIds = [...latest.current_outcome_ids]
+              callRevision = latest.call_revision
+              needsOutcomeReview = false
               hideBanner()
               publish.disabled = !canPublish()
             },
@@ -656,7 +697,7 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
       ],
       shown.length
         ? h('div.douts', {}, ...shown.map(outcomeLine))
-        : h('div.faint', { text: '新的结果还没读出来，稍后再看一次。' }),
+        : h('div.faint', { text: '当前没有结果版本' }),
     )
   }
 
@@ -665,9 +706,12 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     try {
       const [fresh, latest] = await Promise.all([options.reread(), reviews.draft(options.callId)])
       if (!alive) return
+      if (latest.draft_revision !== draftRevision) { await onConflict(); return }
+      if (latest.current_outcome_ids.length !== seenOutcomeIds.length || latest.current_outcome_ids.some((id) => !seenOutcomeIds.includes(id))) {
+        await onOutcomesChanged()
+        return
+      }
       callRevision = latest.call_revision
-      draftRevision = latest.draft_revision
-      seenOutcomeIds = [...latest.current_outcome_ids]
       void fresh
       showBanner('这条记录刚刚被改过', '已经读到最新的一版，你写的字都还在，再发布一次就行。', [
         h('button.btn.sm.primary', {
@@ -744,12 +788,18 @@ export function draftEditor(options: DraftEditorOptions): DraftEditor {
     parts,
     canPublish,
     hasText,
+    hasUnsaved,
     flush: () => flush(true),
     dispose() {
+      if (hasUnsaved()) return false
       alive = false
       positions.dispose()
+      pictures.dispose()
       window.clearTimeout(timer)
-      void flush(true).finally(() => { images.onChange = () => {}; images.clear() })
+      window.removeEventListener('beforeunload', beforeUnload)
+      images.onChange = () => {}
+      images.clear()
+      return true
     },
   }
 }

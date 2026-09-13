@@ -77,6 +77,13 @@ pub(super) async fn market_data(
 ) -> Result<Json<Value>> {
     invoke(&s, o, Action::MarketData, None, None, json!(v)).await
 }
+pub(super) async fn market_bounds(
+    State(s): State<Services>,
+    Extension(o): Extension<Uuid>,
+    Query(v): Query<api::market::MarketBoundsQuery>,
+) -> Result<Json<Value>> {
+    invoke(&s, o, Action::MarketBounds, None, None, json!(v)).await
+}
 pub(super) async fn market_chart(
     State(s): State<Services>,
     Extension(o): Extension<Uuid>,

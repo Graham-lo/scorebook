@@ -3,7 +3,7 @@
 // 一条记录 = 一次判断的完整发生过程。以前这十几个字段全摊在一个浮层里一次
 // 涌出来，人不知道从哪儿下笔。现在拆成三步，一步一页，各自是自己的网址
 // （#/new、#/new/step/2、#/new/step/3、#/new/done）：返回手势、刷新、走开
-// 一会儿再回来接着填都能用。草稿存在这个模块里，翻页不会掉。
+// 一会儿再回来接着填都能用。草稿暂存在这台设备，翻页和刷新后可以继续。
 //
 // 第一步就能存。市场不等人，判断发生的那一刻只要一张截图加一句话这条就成
 // 立了，底下那颗「记下来」在每一步都在，后两步永远是可选的补充。
@@ -13,6 +13,7 @@
 // 写记录，记录里指到的附件一定已经存在。每次写都带一个由请求体算出来的幂
 // 等键，断线重试重放的是第一次的结果，不会多写一条。
 import { create, preview, type NewCall } from '../../api/calls'
+import { analyze, type RecognizedIndicator } from '../../api/chart'
 import { ApiError, NetworkError } from '../../api/errors'
 import { WriteAction } from '../../api/http'
 import { createTag } from '../../api/knowledge'
@@ -24,7 +25,15 @@ import type {
   TagRecord,
   Template,
 } from '../../api/types'
-import { PATHS, STANCES, TEMPLATES, sentence } from '../../data/criteria'
+import {
+  PATHS,
+  STANCE_CHOICES,
+  STANCES,
+  TEMPLATES,
+  TEMPLATE_NOTES,
+  sentence,
+  templateName,
+} from '../../data/criteria'
 import {
   INTERVALS,
   MARKET_LABELS,
@@ -36,6 +45,7 @@ import {
 import { knownTags, tagIndex } from '../../data/store'
 import { dateTime, horizon, relative } from '../../data/time'
 import { markFresh } from '../find/state'
+import { invalidateArchive } from '../archive'
 import { invalidateLedger } from '../find'
 import { go, route } from '../../router'
 import { append, clear, h } from '../../ui/dom'
@@ -51,14 +61,19 @@ import {
   emptyCriteriaDraft,
   problems,
   ratioFromPercent,
-  TEMPLATE_HELP,
   type CriteriaDraft,
 } from './criteria'
+import { CAPTURE_KEY, decodeCapture, type StoredCapture } from './draft-storage'
+import { putChartSetup } from '../../api/replay'
+import { setupIsEmpty } from '../relive/setup'
+import { recognizedNames, recognizedTip, setupFromRecognized } from '../relive/recognized-setup'
 
 interface Draft {
   text: string
   images: ImageUploads
   instrument: Instrument | null
+  /** 图上认出来、还没被采纳的那个代码。 */
+  guess: string | null
   timeframe: string | null
   stance: Stance
   path: Path
@@ -68,6 +83,8 @@ interface Draft {
   crit: CriteriaDraft
   saving: boolean
   done: CreatedCall | null
+  pendingSave: StoredCapture['pendingSave']
+  missingImages: number
 }
 
 function blank(): Draft {
@@ -75,6 +92,7 @@ function blank(): Draft {
     text: '',
     images: new ImageUploads('scene'),
     instrument: null,
+    guess: null,
     timeframe: null,
     stance: 'unknown',
     path: 'unknown',
@@ -84,19 +102,53 @@ function blank(): Draft {
     crit: emptyCriteriaDraft(),
     saving: false,
     done: null,
+    pendingSave: null,
+    missingImages: 0,
   }
 }
 
 // The draft outlives the overlay: closing it to look something up must never
 // throw away what has been written.
-let draft = blank()
+let draft = restoreDraft()
+let storageFailed = false
 const saveAction = new WriteAction()
+
+function restoreDraft(): Draft {
+  const fresh = blank()
+  try {
+    const saved = decodeCapture(localStorage.getItem(CAPTURE_KEY))
+    if (!saved) return fresh
+    const { attachmentIds, pendingImages, ...fields } = saved
+    Object.assign(fresh, fields)
+    fresh.missingImages = pendingImages
+    fresh.images.restore(attachmentIds)
+  } catch { /* Storage may be unavailable; capture still works in memory. */ }
+  return fresh
+}
+
+function remember(): void {
+  try {
+    if (draft.done) localStorage.removeItem(CAPTURE_KEY)
+    else {
+      const { images, guess: _guess, saving: _saving, done: _done, missingImages, ...fields } = draft
+      const saved: StoredCapture = {
+        ...fields,
+        attachmentIds: images.ids,
+        pendingImages: missingImages + images.items.filter(item => !item.id).length,
+      }
+      localStorage.setItem(CAPTURE_KEY, JSON.stringify(saved))
+    }
+    storageFailed = false
+  } catch { storageFailed = true }
+}
 
 function discard(): void {
   draft.images.clear()
   draft = blank()
   saveAction.reset()
   picker = null
+  guessImage = null
+  remember()
 }
 
 /**
@@ -117,7 +169,7 @@ interface Ui {
   stance: HTMLElement
   crit: HTMLElement
   extras: HTMLElement
-  hint: HTMLElement
+  trigger: HTMLElement
   foot: HTMLElement
   nav: HTMLElement
   detach: (() => void)[]
@@ -137,7 +189,24 @@ let composing = false
 let picker: Picker | null = null
 function pictures(): Picker {
   if (!picker) {
-    picker = imagePicker(draft.images, '上传当时截图', () => paintFoot(), () => !draft.saving && !draft.done)
+    let previousCount = draft.images.items.length
+    picker = imagePicker(
+      draft.images,
+      '拖图进来，或 ⌘V',
+      () => {
+        const count = draft.images.items.length
+        if (count > previousCount) draft.missingImages = Math.max(0, draft.missingImages - (count - previousCount))
+        previousCount = count
+        if (!draft.images.ids.includes(guessImage ?? '')) {
+          draft.guess = null
+          guessImage = null
+          paintCtx()
+        }
+        paintFoot()
+        void sniff()
+      },
+      () => !draft.saving && !draft.done,
+    )
   }
   return picker
 }
@@ -147,29 +216,13 @@ function pictures(): Picker {
 interface Step {
   n: number
   title: string
-  lead: string
   next: string
 }
 
 const STEPS: Step[] = [
-  {
-    n: 1,
-    title: '现在看到什么',
-    lead: '一张截图，一句你现在的想法，这条就成立了——底下那颗「记下来」现在就能按。后面两步是给这条记录加上以后能算分的东西，愿意就接着填，不填也不影响它存下来。',
-    next: '说说你的判断',
-  },
-  {
-    n: 2,
-    title: '你的判断',
-    lead: '看多还是看空，这个想法是先在图上看见的，还是先在脑子里冒出来再去图上找证据。方向只认你按的这几颗按钮，你写下的中文一个字都不会被拿去猜。',
-    next: '定个算对的标准',
-  },
-  {
-    n: 3,
-    title: '怎么算你对了',
-    lead: '趁市场还没开口，把「什么样算你说对了」先说死。定了标准，到期市场自己给答案，你的直觉才有分可记；不定也行，这条就只留下话和图，不判对错。',
-    next: '记下来',
-  },
+  { n: 1, title: '看到什么', next: '你的判断' },
+  { n: 2, title: '你的判断', next: '怎么算对' },
+  { n: 3, title: '怎么算对', next: '记下' },
 ]
 
 /** 去记一条。地址是 #/new，返回、刷新、以后再打开都还是这一条草稿。 */
@@ -180,6 +233,7 @@ export function openCapture(): void {
 export function capturePage(host: HTMLElement, arg: string): () => void {
   const parts = arg ? arg.split('/') : []
   const done = parts[0] === 'done'
+  if (!done && draft.done) discard()
   // 直接把 #/new/done 贴进地址栏的人手上没有那条记录，回到第一步。
   if (done && !draft.done) {
     go('new')
@@ -193,7 +247,7 @@ export function capturePage(host: HTMLElement, arg: string): () => void {
       {},
       h('a', { href: '#/find', text: '记录' }),
       h('span.sep', { text: '›' }),
-      h('span', { text: done ? '记下来了' : `第 ${at.n} 步 · ${at.title}` }),
+      h('span', { text: done ? '记下了' : `第 ${at.n} 步 · ${at.title}` }),
     ),
   )
   const wiz = h('div.wiz')
@@ -210,7 +264,7 @@ export function capturePage(host: HTMLElement, arg: string): () => void {
   const text = h('textarea', {
     id: 'capText',
     rows: 2,
-    placeholder: '现在看到什么、为什么这么想，直接说。这句话存下就不改了。',
+    placeholder: '一句话：看到什么，打算怎么做',
     value: draft.text,
   }) as HTMLTextAreaElement
 
@@ -226,7 +280,7 @@ export function capturePage(host: HTMLElement, arg: string): () => void {
     stance: h('div.capseg'),
     crit: h('div.more-fields'),
     extras: h('div.more-fields'),
-    hint: h('div.mini-hint'),
+    trigger: h('div.more-fields'),
     foot: h('div.pf'),
     nav: h('div.wizfoot'),
     detach: [],
@@ -239,27 +293,34 @@ export function capturePage(host: HTMLElement, arg: string): () => void {
     append(panel, [
       h('div.ph', {}, box.ctx),
       h('div.capsec.shots', {}, box.shot),
-      h('div.pin', {}, text),
+      h('div.pin', {}, text, shorthandTip()),
+      h('div.capsec', {}, box.trigger),
       box.parse,
       box.foot,
     ])
     wireText()
   } else if (at.n === 2) {
     append(panel, [
-      h('div.capsec', {}, h('div.dlabel', { text: '这一次你怎么看' }), box.stance),
-      h('div.capsec', {}, h('div.dlabel', { text: '这条记录的来龙去脉' }), box.extras),
-      box.hint,
+      h('div.capsec', {}, h('div.dlabel', { text: '方向' }), box.stance),
+      h('div.capsec', {}, box.extras),
     ])
   } else {
     append(panel, [
-      // 这一格不另起标题：里头第一行就是「这条记下去算什么」的原话，
-      // 再压一句「算对的标准」等于把同一句话说两遍。
       h('div.capsec', {}, box.crit),
-      h('div.capsec', {}, h('div.dlabel', { text: '这条记下去会是什么样' }), box.parse),
+      h('div.capsec', {}, box.parse),
     ])
   }
 
   paintAll()
+  const beforeUnload = (event: BeforeUnloadEvent) => {
+    remember()
+    if (draft.images.pending || storageFailed) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+  }
+  window.addEventListener('beforeunload', beforeUnload)
+  box.detach.push(() => window.removeEventListener('beforeunload', beforeUnload))
   stagger([...panel.children])
   if (at.n === 1) {
     autosize(text)
@@ -268,6 +329,7 @@ export function capturePage(host: HTMLElement, arg: string): () => void {
   }
 
   return () => {
+    remember()
     for (const off of box.detach) off()
     ui = null
     composing = false
@@ -294,7 +356,6 @@ export function capturePage(host: HTMLElement, arg: string): () => void {
       'header.wizhead',
       {},
       h('h1.wizt', {}, h('span.k', { text: `第 ${at.n} 步` }), at.title),
-      h('p.wizl', { text: at.lead }),
     )
   }
 
@@ -313,6 +374,7 @@ export function capturePage(host: HTMLElement, arg: string): () => void {
     text.addEventListener('input', () => {
       draft.text = text.value
       autosize(text)
+      remember()
       if (composing) return
       paintParse()
       paintFoot()
@@ -349,7 +411,6 @@ function filled(n: number): boolean {
   if (n === 2) {
     return (
       draft.stance !== 'unknown' ||
-      draft.path !== 'unknown' ||
       draft.tags.length > 0 ||
       draft.confidence.trim().length > 0 ||
       draft.claimedAt.length > 0
@@ -367,7 +428,7 @@ function paintAll(): void {
   paintStance()
   paintCrit()
   paintExtras()
-  paintHint()
+  paintTrigger()
   paintFoot()
 }
 
@@ -384,15 +445,17 @@ function paintCtx(): void {
   if (!ui) return
   clear(ui.ctx)
 
+  const choices = new Map<string, Instrument>()
   const instrument = popChip({
     label: () => (draft.instrument ? '换品种' : '选品种'),
     active: () => draft.instrument !== null,
-    search: '搜合约代码，如 BTCUSDT',
+    search: '品种，如 BTC',
     items: async (q) => {
       const list = await findInstruments(q, {})
+      for (const row of list) choices.set(`${row.market}:${row.symbol}`, row)
       return list.map((row) => ({
         label: row.symbol,
-        value: row.symbol,
+        value: `${row.market}:${row.symbol}`,
         hint: [MARKET_LABELS[row.market], contractLabel(row.body.contractType)]
           .filter(Boolean)
           .join(' · '),
@@ -400,8 +463,7 @@ function paintCtx(): void {
       }))
     },
     onPick: (symbol) => {
-      // findInstruments filled the catalogue cache, so the picked row is there.
-      draft.instrument = cached(symbol)
+      draft.instrument = choices.get(symbol) ?? null
       paintCtx()
       paintParse()
     },
@@ -410,7 +472,6 @@ function paintCtx(): void {
       paintCtx()
       paintParse()
     },
-    footer: () => '品种身份来自交易所合约目录，不按代码名称推断。',
   })
 
   const timeframe = popChip({
@@ -430,10 +491,6 @@ function paintCtx(): void {
     },
   })
 
-  const identity = draft.instrument
-    ? identityOf(draft.instrument)
-    : '没选品种也能记。只是这条不会和同品种的其他判断连成一段行情，回头看不出你的看法是在哪一步转的。'
-
   append(ui.ctx, [
     h(
       'div.r1',
@@ -449,8 +506,99 @@ function paintCtx(): void {
       timeframe.node,
       h('span.faint', { text: relative(new Date().toISOString()) }),
     ),
-    h('div.win', { text: identity }),
+    draft.instrument ? h('div.win', { text: identityOf(draft.instrument) }) : guessRow(),
+    indicatorRow(),
   ])
+}
+
+/**
+ * 粘进来的那张图上写着品种，就问一句要不要用它。认不出就什么都不说——形状里
+ * 没有品种这个信息，前端不猜。
+ */
+function guessRow(): HTMLElement | null {
+  if (!draft.guess) return null
+  const symbol = draft.guess
+  return h(
+    'div.guess',
+    {},
+    h('span', { text: `图上是 ${symbol}，用它？` }),
+    h('button.btn.sm', {
+      type: 'button',
+      text: '用',
+      on: { click: () => void useGuess(symbol) },
+    }),
+  )
+}
+
+/** 图上读到的指标，一行事实。不问、不引导，就是把认出来的东西摆在这儿。 */
+function indicatorRow(): HTMLElement | null {
+  const id = draft.images.ids[0]
+  const list = id ? sniffedIndicators.get(id) : undefined
+  const names = recognizedNames(list)
+  if (!names.length) return null
+  return h('div.win', { title: recognizedTip(list) }, pk('指标', names.join(' · ')))
+}
+
+async function useGuess(symbol: string): Promise<void> {
+  const current = draft
+  try {
+    if (!cached(symbol)) await findInstruments(symbol, {})
+    const found = cached(symbol)
+    if (!found || draft !== current || draft.guess !== symbol || draft.saving || draft.done) return
+    draft.instrument = found
+    draft.guess = null
+    paintCtx()
+    paintParse()
+  } catch {
+    // 目录没查着就当没认出来，人自己选。
+  }
+}
+
+/** 认过的那几张图，认过就不再认。 */
+const sniffed = new Map<string, string | null>()
+/** 同一次识别顺手读到的指标，按附件 id 留着：记完一笔写进记录当种子。 */
+const sniffedIndicators = new Map<string, RecognizedIndicator[]>()
+const chartSetupAction = new WriteAction()
+const sniffing = new Set<string>()
+let guessImage: string | null = null
+
+async function sniff(): Promise<void> {
+  if (draft.instrument || draft.guess || draft.saving || draft.done) return
+  const current = draft
+  const id = current.images.ids[0]
+  if (!id || sniffing.has(id)) return
+  sniffing.add(id)
+  try {
+    let symbol = sniffed.get(id)
+    if (symbol === undefined) {
+      const action = new WriteAction()
+      const input = { attachment_id: id }
+      const got = await analyze(input, action.keyFor(input))
+      symbol = got.recognized.symbol ?? null
+      sniffed.set(id, symbol)
+      sniffedIndicators.set(id, got.recognized.indicators ?? [])
+      // 只认出指标、没认出品种的时候也要把那一行摆出来。
+      if (draft === current && draft.images.ids[0] === id && recognizedNames(got.recognized.indicators).length) paintCtx()
+    }
+    if (!symbol || draft !== current || draft.images.ids[0] !== id || draft.instrument || draft.saving || draft.done) return
+    guessImage = id
+    draft.guess = symbol
+    paintCtx()
+  } catch {
+    // 自动建议失败仍可手动选择品种。
+  } finally {
+    sniffing.delete(id)
+  }
+}
+
+/** 速记写法只放在这颗问号的 tooltip 里，页面上不出现。 */
+function shorthandTip(): HTMLElement {
+  return h('button.qm', {
+    type: 'button',
+    text: '?',
+    attrs: { 'aria-label': '速记写法' },
+    title: '速记：/kt L s=61500 h=72 | 正文；第三步点「按这行填」',
+  })
 }
 
 function pk(key: string | null, value: string, extra = ''): HTMLElement {
@@ -459,6 +607,9 @@ function pk(key: string | null, value: string, extra = ''): HTMLElement {
 
 function thresholdChip(): HTMLElement {
   const c = draft.crit
+  if (c.template === 'T5') {
+    return pk('振幅', c.atrMultiple.trim() ? `${c.atrMultiple.trim()}×ATR14` : '1.5×ATR14（默认）')
+  }
   if (c.thresholdKind === 'percent') {
     const ratio = ratioFromPercent(c.thresholdPercent)
     return pk('阈值', ratio ? `${c.thresholdPercent.trim()}%` : '待填', ratio ? '' : 'ambig')
@@ -466,21 +617,17 @@ function thresholdChip(): HTMLElement {
   if (c.thresholdKind === 'atr') {
     return pk('阈值', c.atrMultiple.trim() ? `${c.atrMultiple.trim()}×ATR14` : '待填')
   }
-  return pk('阈值', c.template === 'T5' ? '1.5×ATR14（默认）' : '1×ATR14（默认）')
+  return pk('阈值', '1×ATR14（默认）')
 }
 
 function paintParse(): void {
+  paintFoot()
   if (!ui) return
   const box = ui.parse
   clear(box)
   const c = draft.crit
 
   if (!draft.text.trim() && !draft.images.items.length) {
-    box.appendChild(
-      h('span.faint', {
-        text: '先说一句话，或者放一张截图，一样就够。方向、标准、标签都可以空着——市场还没开口，先别为了填表耽误盘面。系统不会从你写的中文里猜方向。',
-      }),
-    )
     return
   }
 
@@ -488,16 +635,18 @@ function paintParse(): void {
   if (draft.instrument) {
     list.push(pk('品种', `${draft.instrument.symbol} · ${MARKET_LABELS[draft.instrument.market]}`))
   } else {
-    list.push(pk(null, '没选品种：可以记，只是连不成一段行情', 'free'))
+    list.push(pk(null, '没写品种', 'free'))
   }
   if (draft.timeframe) list.push(pk('周期', draft.timeframe))
   list.push(pk('方向', STANCES[draft.stance]))
-  list.push(pk('算对的标准', TEMPLATES[c.template], c.template === 'T0' ? 'free' : ''))
+  list.push(pk('怎么算对', TEMPLATES[c.template], c.template === 'T0' ? 'free' : ''))
 
   if (c.template !== 'T0') {
     list.push(pk('期限', `${horizon(c.horizonHours)}${c.horizonTouched ? '' : '（默认）'}`))
     if (c.template !== 'T4') list.push(thresholdChip())
-    if (c.invalidation.trim()) list.push(pk('失效', c.invalidation.trim()))
+    if (['T1', 'T2', 'T3'].includes(c.template) && c.invalidation.trim()) {
+      list.push(pk('失效', c.invalidation.trim()))
+    }
     if (c.template === 'T4') {
       list.push(
         pk(
@@ -518,15 +667,15 @@ function paintParse(): void {
     }
   }
   for (const tag of draft.tags) list.push(pk(null, `#${tag.name}`))
-  if (draft.path !== 'unknown') list.push(pk('顺序', PATHS[draft.path] ?? draft.path))
-  if (draft.claimedAt) list.push(pk('原话时间', dateTime(claimedIso() ?? '')))
+  if (draft.path !== 'unknown') list.push(pk('触发', PATHS[draft.path] ?? draft.path))
+  if (draft.claimedAt) list.push(pk('原话时间', dateTime(claimedIso() ?? '')), pk(null, '事后补记'))
   for (const issue of problems(c)) list.push(pk(null, issue, 'ambig'))
 
   if (protocolText()) {
     list.push(
       h('button.btn.ghost.sm', {
-        text: '按上面的写法解析',
-        title: '把以 / 开头的一行交给后端解析，再填进上面的选项',
+        text: '按这行填',
+        title: '把以 / 开头的那一行交给后端解析，再填进上面的选项',
         on: { click: () => void applyProtocol() },
       }),
     )
@@ -538,18 +687,17 @@ function paintStance(): void {
   if (!ui) return
   const box = ui.stance
   clear(box)
-  const stances: Stance[] = ['unknown', 'L', 'S', '?', 'C']
   const seg = h('span.seg.big')
-  for (const value of stances) {
+  for (const value of STANCE_CHOICES) {
     seg.appendChild(
       h('button', {
         class: draft.stance === value ? 'on' : '',
         text: STANCES[value],
         on: {
           click: () => {
-            draft.stance = value
-            // A direction is only ever the stance the trader picked.
-            draft.crit.direction = value === 'L' || value === 'S' ? value : null
+            // 再点一下就是撤回，方向从来只认人按过的那颗。
+            draft.stance = draft.stance === value ? 'unknown' : value
+            draft.crit.direction = draft.stance === 'L' || draft.stance === 'S' ? draft.stance : null
             paintParse()
             paintStance()
             paintCtx()
@@ -558,18 +706,17 @@ function paintStance(): void {
       }),
     )
   }
-  append(box, [
-    seg,
-    h('div.tip', {
-      text: '「不确定」也是一种判断，照样记：同一个盘面上多空都看得见的时候，把这件事记下来，比事后回忆自己当时到底偏哪边靠谱。',
-    }),
-  ])
+  box.appendChild(seg)
 }
 
 function field(label: string, control: HTMLElement, span = false): HTMLElement {
+  const input = control.matches('input,select,textarea')
   return h(
-    'label.field',
-    { style: span ? 'grid-column:span 2' : '' },
+    input ? 'label.field' : 'div.field',
+    {
+      style: span ? 'grid-column:span 2' : '',
+      attrs: input ? {} : { role: 'group', 'aria-label': label },
+    },
     h('span', { text: label }),
     control,
   )
@@ -602,13 +749,13 @@ function paintCrit(): void {
   const c = draft.crit
 
   const templates: Template[] = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5']
-  const tplSeg = h('span.seg')
+  const tplSeg = h('span.seg.wrap')
   for (const value of templates) {
     tplSeg.appendChild(
       h('button', {
         class: c.template === value ? 'on' : '',
-        text: value,
-        title: TEMPLATES[value],
+        text: templateName(value),
+        title: TEMPLATE_NOTES[value],
         on: {
           click: () => {
             c.template = value
@@ -623,10 +770,15 @@ function paintCrit(): void {
     )
   }
 
+  const said = sentence(build(draft.crit))
   append(box, [
-    h('div.sentence', { style: 'grid-column:span 2', text: sentence(build(draft.crit)) }),
-    field('算对的标准', tplSeg, true),
-    h('div.faint', { style: 'grid-column:span 2;margin-top:-4px', text: TEMPLATE_HELP[c.template] }),
+    h('div', {
+      class: ['sentence', c.template === 'T0' ? 'faint' : ''],
+      style: 'grid-column:span 2',
+      text: c.template === 'T0' ? '怎么算对，如：48 小时内跌破 190' : said,
+    }),
+    field('怎么算对', tplSeg, true),
+    h('div.faint', { style: 'grid-column:span 2;margin-top:-4px', text: TEMPLATE_NOTES[c.template] }),
   ])
 
   if (c.template !== 'T0') {
@@ -648,7 +800,7 @@ function paintCrit(): void {
         }),
       )
     }
-    box.appendChild(field('多久之内算数', quick, true))
+    box.appendChild(field('期限', quick, true))
     const custom = input(
       String(c.horizonHours),
       '小时',
@@ -659,7 +811,7 @@ function paintCrit(): void {
       },
       'number',
     )
-    box.appendChild(field('期限（小时）', custom))
+    box.appendChild(field('小时', custom))
   }
 
   if (c.template === 'T1' || c.template === 'T2' || c.template === 'T3') {
@@ -688,20 +840,20 @@ function paintCrit(): void {
     if (c.thresholdKind === 'percent') {
       box.appendChild(
         field(
-          '走满百分之几',
-          input(c.thresholdPercent, '例如 2 表示 2%', (value) => (c.thresholdPercent = value)),
+          '百分比',
+          input(c.thresholdPercent, '如 2 表示 2%', (value) => (c.thresholdPercent = value)),
         ),
       )
     }
     if (c.thresholdKind === 'atr') {
       box.appendChild(
-        field('几倍 ATR14', input(c.atrMultiple, '例如 1.5', (value) => (c.atrMultiple = value))),
+        field('ATR 倍数', input(c.atrMultiple, '如 1.5', (value) => (c.atrMultiple = value))),
       )
     }
     box.appendChild(
       field(
-        c.template === 'T2' ? '失效价（必填）' : '失效价（可留空）',
-        input(c.invalidation, '触及就算没走成', (value) => (c.invalidation = value)),
+        '失效价',
+        input(c.invalidation, c.template === 'T2' ? '必填' : '可留空', (value) => (c.invalidation = value)),
       ),
     )
   }
@@ -729,15 +881,15 @@ function paintCrit(): void {
     }
     append(box, [
       field('边界方向', kindSeg),
-      field('边界价格', input(c.boundary, '例如 61500', (value) => (c.boundary = value))),
+      field('边界价格', input(c.boundary, '如 61500', (value) => (c.boundary = value))),
     ])
   }
 
   if (c.template === 'T5') {
     box.appendChild(
       field(
-        '振幅门槛（×ATR14）',
-        input(c.atrMultiple, '留空按 1.5×ATR14', (value) => (c.atrMultiple = value)),
+        '振幅（×ATR14）',
+        input(c.atrMultiple, '留空按 1.5', (value) => (c.atrMultiple = value)),
       ),
     )
   }
@@ -784,9 +936,9 @@ function paintCrit(): void {
     append(box, [
       field('触发方式', cmpSeg),
       field('确认方式', kindSeg),
-      field('触发价', input(c.triggerPrice, '例如 63000', (value) => (c.triggerPrice = value))),
+      field('触发价', input(c.triggerPrice, '如 63000', (value) => (c.triggerPrice = value))),
       field(
-        '等它成立的窗口（小时）',
+        '等待窗口（小时）',
         input(
           String(c.triggerWindowHours),
           '24',
@@ -802,12 +954,7 @@ function paintCrit(): void {
 
 }
 
-/**
- * 标签、想法的来路、当时有几分把握、这句话其实是什么时候说的。
- *
- * 这几样都记在记录本身上，都可以空着，但「谁先触发谁」值得花两秒：先看到图
- * 才有想法，和先有想法再去图上找证据，这两种直觉的可靠性要分开看。
- */
+/** 把握、标签、原话时间。都记在记录本身上，都可以空着。 */
 function paintExtras(): void {
   if (!ui) return
   const box = ui.extras
@@ -819,7 +966,9 @@ function paintExtras(): void {
         'span.tag',
         {},
         `#${tag.name}`,
-        h('span.x', {
+        h('button.x', {
+          type: 'button',
+          attrs: { 'aria-label': `去掉标签 ${tag.name}` },
           title: '去掉',
           on: {
             click: () => {
@@ -833,32 +982,12 @@ function paintExtras(): void {
     )
   }
   tagRow.appendChild(tagPicker().node)
-  box.appendChild(field('标签', tagRow, true))
 
-  const pathSeg = h('span.seg')
-  for (const value of ['unknown', 'chart_first', 'thought_first', 'interwoven'] as Path[]) {
-    pathSeg.appendChild(
-      h('button', {
-        class: draft.path === value ? 'on' : '',
-        text: PATHS[value] ?? value,
-        on: {
-          click: () => {
-            draft.path = value
-            paintExtras()
-            paintParse()
-          },
-        },
-      }),
-    )
-  }
   append(box, [
-    field('这次是谁先触发谁', pathSeg, true),
+    field('把握', confidenceRow(), true),
+    field('标签', tagRow, true),
     field(
-      '当时有几分把握（0–100，可留空）',
-      input(draft.confidence, '留空表示没记', (value) => (draft.confidence = value), 'number'),
-    ),
-    field(
-      '这句话其实是什么时候说的',
+      '原话时间',
       input(
         draft.claimedAt,
         '',
@@ -868,26 +997,65 @@ function paintExtras(): void {
         'datetime-local',
       ),
     ),
+    draft.claimedAt ? h('div', { style: 'align-self:end' }, h('span.tag', { text: '事后补记' })) : null,
   ])
-
 }
 
-function paintHint(): void {
+/** 把握是一根 50–100 的滑杆：没动过就是没写，动过就记下那个数。 */
+function confidenceRow(): HTMLElement {
+  const now = draft.confidence.trim() ? Number(draft.confidence) : null
+  const said = h('span.pct', { text: now === null ? '没写' : `${Math.round(now)}%` })
+  const bar = h('input.range', {
+    type: 'range',
+    value: String(now === null ? 70 : Math.max(50, Math.min(100, Math.round(now)))),
+    attrs: { min: '50', max: '100', step: '1', 'aria-label': '把握' },
+  }) as HTMLInputElement
+  bar.addEventListener('input', () => {
+    draft.confidence = bar.value
+    said.textContent = `${bar.value}%`
+    paintParse()
+  })
+  const reset = h('button.btn.ghost.sm', {
+    type: 'button', text: '清除', hidden: now === null,
+    on: { click: () => { draft.confidence = ''; paintExtras(); paintParse() } },
+  })
+  bar.addEventListener('input', () => { reset.hidden = false })
+  return h('div.confrow', {}, bar, said, reset)
+}
+
+/**
+ * 谁先触发谁：先看到图才有想法，还是先有想法再去图上找证据。这两种直觉的可靠
+ * 性要分开看，所以它是必填的。
+ */
+function paintTrigger(): void {
   if (!ui) return
-  const hint = ui.hint
-  clear(hint)
-  append(hint, [
-    '「谁先触发谁」记的是：这次是先看到图上的结构才有想法，还是先有想法再去图上找证据。两种在你身上都有，分开记才知道各自靠不靠得住。想写快一点，第一步那句话可以用这种写法：',
-    h('code', { text: '/kt L s=61500 h=72 | 正文' }),
-    '，写完在第三步点「按上面的写法解析」，由后端解析后填进这几项。你写的中文本身不会被当成方向。',
-  ])
+  const box = ui.trigger
+  clear(box)
+  const seg = h('span.seg')
+  for (const value of ['chart_first', 'thought_first'] as Path[]) {
+    seg.appendChild(
+      h('button', {
+        class: draft.path === value ? 'on' : '',
+        text: PATHS[value] ?? value,
+        on: {
+          click: () => {
+            draft.path = draft.path === value ? 'unknown' : value
+            paintTrigger()
+            paintParse()
+            paintFoot()
+          },
+        },
+      }),
+    )
+  }
+  box.appendChild(field('触发', seg, true))
 }
 
 function tagPicker() {
   return popChip({
-    label: () => '加标签',
+    label: () => '+ 标签',
     active: () => false,
-    search: '搜已有标签，或输入新名字',
+    search: '标签名',
     items: async (q) => {
       await tagIndex()
       const query = q.trim()
@@ -902,7 +1070,7 @@ function tagPicker() {
           on: draft.tags.some((x) => x.id === t.id),
         }))
       if (query && !all.some((t) => t.name === query)) {
-        matched.unshift({ label: `新建标签「${query}」`, value: `new:${query}`, hint: null, on: false })
+        matched.unshift({ label: `新建「${query}」`, value: `new:${query}`, hint: null, on: false })
       }
       return matched
     },
@@ -916,11 +1084,11 @@ function tagPicker() {
       paintExtras()
       paintParse()
     },
-    footer: () => '标签是给同一类局面起的名字；新建的之后可以在「局面类别」里补上定义。',
   })
 }
 
 async function addNewTag(name: string): Promise<void> {
+  const current = draft
   const action = new WriteAction()
   const input = { name, definition: '', aliases: [] as string[] }
   try {
@@ -933,19 +1101,26 @@ async function addNewTag(name: string): Promise<void> {
       version: created.version,
       created_at: new Date().toISOString(),
     }
+    if (draft !== current || draft.saving || draft.done) return
     draft.tags.push(record)
-    await tagIndex({ refresh: true })
     paintExtras()
     paintParse()
-    toast(`已建立标签 #${name}`)
+    await tagIndex({ refresh: true })
+    if (draft !== current) return
+    paintExtras()
+    paintParse()
+    toast('记下了')
   } catch (error) {
-    problem(error instanceof Error ? error.message : '标签没能建立。')
+    problem(error instanceof Error ? error.message : '没保存上，再试一次')
   }
 }
 
 function paintFoot(): void {
+  remember()
   if (!ui) return
   const at = ui.step
+  ui.panel.inert = draft.saving
+  ui.panel.classList.toggle('saving', draft.saving)
   clear(ui.foot)
   clear(ui.nav)
   const blocked = saveBlocker()
@@ -956,7 +1131,7 @@ function paintFoot(): void {
         'span.ime',
         { class: composing ? 'on' : '' },
         h('i'),
-        composing ? '输入法组字中，回车不会提交' : '回车直接记下来 · ⇧回车换行',
+        composing ? '输入法组字中' : '回车记下 · ⇧回车换行',
       ),
       h('span.go', {}, h('span.faint', { text: `${draft.text.trim().length} 字` })),
     ])
@@ -968,10 +1143,10 @@ function paintFoot(): void {
     {
       class: last ? 'btn primary next' : 'btn',
       disabled: blocked !== null || draft.saving,
-      title: blocked ?? '存下来就不改了；后面几步不填也一样成立',
+      title: blocked ?? '存下来就不改了',
       on: { click: () => void save() },
     },
-    draft.saving ? '正在保存…' : '记下来',
+    draft.saving ? '正在保存' : '记下',
     last ? h('span.kbd', { text: '↩' }) : null,
   )
 
@@ -987,13 +1162,25 @@ function paintFoot(): void {
       h('a.btn.primary.next', { href: hrefOf(at.n + 1) }, at.next, icon('go')),
     )
   }
+  if (blocked) {
+    ui.nav.appendChild(h('div.whyoff', { attrs: { role: 'status' } }, blocked,
+      draft.missingImages ? h('button.btn.ghost.sm', {
+        text: '不保留这些图',
+        on: { click: () => { draft.missingImages = 0; paintFoot() } },
+      }) : null,
+    ))
+  }
+  if (storageFailed) ui.nav.appendChild(h('div.whyoff', { text: '草稿暂存失败，刷新会丢失' }))
 }
 
 /** The one reason the record cannot be written yet, or null. */
 function saveBlocker(): string | null {
-  if (!draft.text.trim() && !draft.images.items.length) return '至少要写一句话或者放一张图。'
-  if (draft.images.uploading) return '截图还在上传，请稍等。'
-  if (draft.images.pending) return '还有截图未上传成功，请重试或移除。'
+  if (draft.done) return '这条已经记下了'
+  if (draft.missingImages) return `有 ${draft.missingImages} 张图未传完，请重新添加`
+  if (!draft.text.trim() && !draft.images.items.length) return '先写一句话，或者放一张图'
+  if (draft.images.uploading) return '截图还在传'
+  if (draft.images.pending) return '有截图没传上'
+  if (draft.path === 'unknown') return '先看到图，还是先有想法？'
   const issues = problems(draft.crit)
   return issues[0] ?? null
 }
@@ -1008,11 +1195,13 @@ function protocolText(): string | null {
 
 async function applyProtocol(): Promise<void> {
   const text = protocolText()
+  const current = draft
   if (!text) return
   try {
     const parsed = await preview(text)
+    if (draft !== current || draft.text !== text || draft.saving || draft.done) return
     if (parsed.issues.length) {
-      problem(`这一行里有看不懂的地方（${parsed.issues.join('、')}），已经选好的标准没有改动。`)
+      problem(`这一行认不出：${parsed.issues.join('、')}`)
       return
     }
     draft.stance = parsed.stance
@@ -1031,9 +1220,9 @@ async function applyProtocol(): Promise<void> {
     }
     draft.crit.invalidation = c.invalidation ?? ''
     paintAll()
-    toast('已经按这一行填好标准，仍然可以改。')
+    toast('填好了')
   } catch (error) {
-    problem(error instanceof Error ? error.message : '这一行没能解析出来。')
+    problem(error instanceof Error ? error.message : '这一行认不出')
   }
 }
 
@@ -1076,8 +1265,11 @@ async function save(): Promise<void> {
     problem(blocked)
     return
   }
+  const current = draft
   const payload = body()
-  const key = saveAction.keyFor(payload)
+  const signature = JSON.stringify(payload)
+  const key = draft.pendingSave?.signature === signature ? draft.pendingSave.key : saveAction.keyFor(payload)
+  draft.pendingSave = { signature, key }
   draft.saving = true
   paintShot()
   ui?.panel.classList.add('saving')
@@ -1085,47 +1277,48 @@ async function save(): Promise<void> {
   paintFoot()
   try {
     const created = await create(payload, key)
-    draft.saving = false
-    draft.done = created
+    // 截图上认出来的那几条指标存成这条记录的种子：以后要画的时候有现成参数。
+    const seed = setupFromRecognized(sniffedIndicators.get(payload.attachments?.[0] ?? ''))
+    if (!setupIsEmpty(seed)) {
+      void putChartSetup(created.id, seed, chartSetupAction.keyFor({ id: created.id, seed })).catch(() => {
+        /* 种子没写上不影响这一笔：以后画图时用默认参数 */
+      })
+    }
+    current.saving = false
+    current.done = created
+    if (draft === current) remember()
     saveAction.reset()
     markFresh(created.id)
     invalidateLedger()
-    go('new/done')
+    invalidateArchive()
+    toast(`记下了 · ${payload.instrument ?? '没写品种'} ${STANCES[payload.stance ?? 'unknown']}`, { href: `#/call/${created.id}`, text: '打开' })
+    if (draft === current && route().page === 'new') go('new/done')
   } catch (error) {
-    draft.saving = false
+    current.saving = false
+    if (draft !== current) return
     paintShot()
     ui?.panel.classList.remove('saving')
     ui?.panel.querySelector('.progress')?.remove()
     paintFoot()
     const retryable = error instanceof NetworkError || (error instanceof ApiError && error.canRetry)
     problem(
-      error instanceof Error ? error.message : '这条没有存下来。',
-      retryable ? () => void save() : undefined,
+      error instanceof Error ? error.message : '没保存上，再试一次',
+      retryable ? () => { if (draft === current && !draft.done) void save() } : undefined,
     )
   }
 }
 
-/** What the backend actually did with the criteria, said plainly. */
+/** 后端拿这条标准做了什么，一句话。 */
 function statusLine(created: CreatedCall): string {
   const first = created.criteria_status[0]
-  if (!first) return '已经记下来了。'
-  if (first.state === 'no_criteria') {
-    return first.reason && first.reason !== 'no_explicit_criteria'
-      ? `标准没有生效：${first.reason}。这条只留下话和图。`
-      : '这条只留下话和图，不判对错。'
-  }
-  if (first.state === 'insufficient_data') {
-    return '标准已经定下来，正在等这段行情走完，到期后自动给结果。'
-  }
-  return '标准已经定下来。'
+  if (!first || first.state === 'no_criteria') return '不判对错'
+  if (first.state === 'insufficient_data') return '行情不足，暂时判不了'
+  return '等市场'
 }
 
 /** 存下来之后的那块回执。它自己是一页（#/new/done），不是一个浮层。 */
 function doneCard(created: CreatedCall): HTMLElement {
-  const evidence =
-    created.evidence_identity === 'historical_unverified'
-      ? '这条标记为「事后补记」，时间以你填的原话时间为准，未经证明。'
-      : null
+  const backdated = created.evidence_identity === 'historical_unverified'
   const state = created.criteria_status[0]?.state ?? 'no_criteria'
   return h(
     'div.panel',
@@ -1137,27 +1330,24 @@ function doneCard(created: CreatedCall): HTMLElement {
       h(
         'div',
         {},
-        h('div.t', { text: '已经记下来了' }),
+        h('div.t', { text: '记下了' }),
         h('div.tip', {
-          text: `${draft.instrument?.symbol ?? '未标品种'} · ${dateTime(created.submitted_at)}`,
+          text: `${draft.instrument?.symbol ?? '没写品种'} · ${dateTime(created.submitted_at)}`,
         }),
-        h('div.sentence', { style: 'max-width:44ch;margin:6px auto 0', text: statusLine(created) }),
-        evidence ? h('div.tip', { style: 'max-width:44ch;margin:4px auto 0', text: evidence }) : null,
+        h(
+          'div.row',
+          { style: 'justify-content:center;gap:7px;margin-top:6px' },
+          h('span.tag', { text: statusLine(created) }),
+          backdated ? h('span.tag', { text: '事后补记' }) : null,
+        ),
         h('div.faint', {
           style: 'font-family:var(--mono);font-size:11.5px;margin-top:8px',
           text: created.display_id,
         }),
-        h('div.tip', {
-          style: 'max-width:46ch;margin:10px auto 0',
-          text:
-            state === 'no_criteria'
-              ? '这条不判对错，但它一样留在你的记录里：以后再遇到同一类局面，翻回来能看见当时的原话和当时那张图。'
-              : '接下来这条会自己往前走：到期市场给出答案，它会出现在「复盘」里等你回来打分。',
-        }),
         h(
           'div.acts',
           {},
-          h('a.btn.primary', { href: `#/call/${created.id}`, text: '打开这条记录' }),
+          h('a.btn.primary', { href: `#/call/${created.id}`, text: '打开' }),
           h('button.btn', {
             text: '再记一条',
             on: {
@@ -1167,7 +1357,7 @@ function doneCard(created: CreatedCall): HTMLElement {
               },
             },
           }),
-          h('a.btn.ghost', { href: '#/find', text: '回到我的记录' }),
+          h('a.btn.ghost', { href: '#/find', text: '记录' }),
         ),
       ),
     ),

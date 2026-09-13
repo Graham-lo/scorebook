@@ -102,4 +102,7 @@ pub mod capabilities;
 
 pub mod locate;
 
+/// 锚点定位：先读轴、再取一段真行情、最后只在这一段里比对（§5.2）。
+pub mod locate_anchored;
+
 pub mod replay;
