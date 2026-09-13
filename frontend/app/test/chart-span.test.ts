@@ -6,6 +6,7 @@ import {
   FAR_SCREENS, farJump, glideAt, latticeCap, latticeCovers, latticeEnds, nearEdge,
   needsReassert, nowShowing, planLattice, sameLattice, settled, slotFor, slotOf, swapCover,
   timeOfSlot, viewAim, spanOnBars,
+  MAX_BAR_SPACING, MIN_BAR_SPACING, PINCH_MIN_PX, pinchSpan, pinchView,
 } from '../src/features/relive/chart-span'
 
 const HOUR = 3_600_000
@@ -369,4 +370,79 @@ test('两头都不知道、跨度算不出来，就别动人家的视野', () =>
   assert.deepEqual(spanOnBars(span, HOUR_MS, { firstMs: null, lastMs: null }), span)
   assert.deepEqual(spanOnBars(span, 0, { firstMs: 1, lastMs: 2 }), span)
   assert.deepEqual(spanOnBars({ from: 5, to: 5 }, HOUR_MS, { firstMs: 1, lastMs: 2 }), { from: 5, to: 5 })
+})
+
+/* ------------------------------------------------------------ 双指捏合 */
+
+const SPAN0 = 100 * HOUR
+
+test('捏开一倍跨度减半，捏拢一半跨度加倍', () => {
+  assert.equal(pinchSpan(SPAN0, 100, 200), SPAN0 / 2)
+  assert.equal(pinchSpan(SPAN0, 100, 50), SPAN0 * 2)
+  assert.equal(pinchSpan(SPAN0, 100, 100), SPAN0)
+})
+
+test('捏开再捏回原距离，跨度分毫不差地回到出发点', () => {
+  // 一切都相对「落第二指那一刻」算，所以中间怎么来回都不累积误差。
+  let span = SPAN0
+  for (const d of [180, 260, 90, 140, 100]) span = pinchSpan(SPAN0, 100, d)
+  assert.equal(span, SPAN0)
+})
+
+test('两指贴到一块儿就当这一下没发生', () => {
+  assert.equal(pinchSpan(SPAN0, 100, PINCH_MIN_PX - 1), SPAN0)
+  assert.equal(pinchSpan(SPAN0, PINCH_MIN_PX - 1, 100), SPAN0)
+})
+
+test('跨度钳在根宽上下限换算出来的那一段里', () => {
+  assert.equal(pinchSpan(SPAN0, 100, 10_000, { minMs: 10 * HOUR }), 10 * HOUR)
+  assert.equal(pinchSpan(SPAN0, 10_000, 100, { maxMs: 500 * HOUR }), 500 * HOUR)
+})
+
+test('算不出来的跨度、距离，原样还回去', () => {
+  assert.equal(pinchSpan(0, 100, 200), 0)
+  assert.equal(pinchSpan(SPAN0, Number.NaN, 200), SPAN0)
+  assert.equal(pinchSpan(SPAN0, 100, Number.NaN), SPAN0)
+})
+
+test('中点底下那一刻钉住不动', () => {
+  const from0 = T
+  const to0 = T + SPAN0
+  const width = 400
+  // 两指中点在画布 1/4 处，捏开一倍。
+  const view = pinchView({ from0, to0, d0: 100, d: 200, m0: 100, m: 100, widthPx: width, stepMs: HOUR })
+  const mid = from0 + (100 / width) * SPAN0
+  assert.equal(view.to - view.from, SPAN0 / 2)
+  assert.ok(Math.abs(view.from + (100 / width) * (view.to - view.from) - mid) < 1, '中点那一刻还在中点底下')
+})
+
+test('两指一起横着挪，图跟着挪', () => {
+  const from0 = T
+  const to0 = T + SPAN0
+  const width = 400
+  const same = { from0, to0, d0: 100, d: 100, widthPx: width, stepMs: HOUR }
+  const still = pinchView({ ...same, m0: 200, m: 200 })
+  assert.deepEqual(still, { from: from0, to: to0 })
+  // 中点往右挪一格画布宽的 1/4，视野就往左退同样多的时间。
+  const moved = pinchView({ ...same, m0: 200, m: 300 })
+  assert.equal(moved.to - moved.from, SPAN0)
+  assert.equal(moved.from, from0 - SPAN0 / 4)
+})
+
+test('捏到头就不动了：根宽出不了 [MIN_BAR_SPACING, MAX_BAR_SPACING]', () => {
+  const width = 400
+  const from0 = T
+  const to0 = T + SPAN0
+  const tight = pinchView({ from0, to0, d0: 10, d: 10_000, m0: 200, m: 200, widthPx: width, stepMs: HOUR })
+  const spacing = width / ((tight.to - tight.from) / HOUR)
+  assert.ok(Math.abs(spacing - MAX_BAR_SPACING) < 1e-6, `最密只到 ${MAX_BAR_SPACING}`)
+  const loose = pinchView({ from0, to0, d0: 10_000, d: 10, m0: 200, m: 200, widthPx: width, stepMs: HOUR })
+  const wide = width / ((loose.to - loose.from) / HOUR)
+  assert.ok(Math.abs(wide - MIN_BAR_SPACING) < 1e-6, `最松只到 ${MIN_BAR_SPACING}`)
+})
+
+test('画布宽或者跨度算不出来，视野原样不动', () => {
+  const same = { from0: T, to0: T, d0: 100, d: 200, m0: 1, m: 1, widthPx: 400, stepMs: HOUR }
+  assert.deepEqual(pinchView(same), { from: T, to: T })
+  assert.deepEqual(pinchView({ ...same, to0: T + SPAN0, widthPx: 0 }), { from: T, to: T + SPAN0 })
 })

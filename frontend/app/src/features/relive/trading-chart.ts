@@ -9,21 +9,27 @@
 // 开高低收，以及开着的指标读数。指标一律由外面传进来，这里不自己开任何一条线。
 
 import {
-  CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, PriceScaleMode,
+  ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, PriceScaleMode,
   createChart, TrackingModeExitMode,
   type IPriceLine, type IPrimitivePaneView, type ISeriesApi, type ISeriesPrimitive, type Logical,
-  type LogicalRange, type SeriesType, type Time, type UTCTimestamp,
+  type LogicalRange, type SeriesPartialOptions, type SeriesType, type Time, type UTCTimestamp,
+  type WhitespaceData,
 } from 'lightweight-charts'
 import type { Bar, ChartSetup } from '../../api/types'
 import {
-  clampSpan, farJump, flingSpan, flingSpeed, glideAt, keepInView, latticeEnds, latticeHolds,
-  nearEdge, needsReassert, nowShowing, planLattice, sameLattice, slotFor, slotOf, swapCover,
-  timeOfSlot, viewAim,
+  MIN_BAR_SPACING, MOBILE_BAR_SPACING, clampSpan, farJump, flingSpan, flingSpeed, glideAt, keepInView,
+  latticeEnds, latticeHolds, nearEdge, needsReassert, nowShowing, pinchView, planLattice,
+  sameLattice, slotFor, slotOf, swapCover, timeOfSlot, viewAim,
   type FlingSample, type Lattice, type ViewBounds,
 } from './chart-span'
+import {
+  candleView, columnView,
+  type CandleOptions, type CandlePoint, type ColumnOptions, type ColumnPoint,
+} from './candle-series'
 import { barSpanMs } from './history/tiles'
 import { guarded, jumpTo, refill, retire, selfMark, type Stage } from './view-rules'
 import { measureText, pinLabel, pinToggle } from './measure'
+import { axisPrice, axisVolume, precisionFor } from './chart-ui'
 import { compareOutline } from '../../data/chart-comparison'
 import { prefs } from '../../data/prefs'
 import { h } from '../../ui/dom'
@@ -99,6 +105,11 @@ export interface TradingChart {
    */
   setPadding(on: boolean): void
   /**
+   * 这会儿是手机布局吗。手机上价格轴收窄（字号 10、不占最小宽度）、时间标签只
+   * 留必要的那几位、K 线和量柱都画细一号。桌面那一套一个像素都不变。
+   */
+  setMobile(on: boolean): void
+  /**
    * 视野变了。`programmatic` 为真表示这一次是程序自己设的（锚定、换档、回位），
    * 外面不该拿它当人手缩放去判断档位，也不该拿它算速度。
    */
@@ -150,12 +161,25 @@ export interface TradingChart {
   destroy(): void
 }
 
+/**
+ * 量柱那条轴上的字怎么写。手机上换成三位有效数字加单位（`axisVolume`），桌面
+ * 还是图库自带的成交量格式，一个像素不动。
+ *
+ * 这一层压的其实是价格轴的宽度：右轴宽度是按所有窗格里最宽的那条算的，量柱那格
+ * 默认写 `100.00K` 七个字，比价格还宽，不压它价格轴那边压多少都没用。`minMove`
+ * 跟图库默认的 0.01 一样，刻度还落在原来的位置。
+ */
+function volumeText(mobile: boolean): { type: 'custom'; formatter: (value: number) => string; minMove: number } | { type: 'volume' } {
+  return mobile ? { type: 'custom', formatter: axisVolume, minMove: 0.01 } : { type: 'volume' }
+}
+
 export function tradingChart(
   initial: Bar[],
   cutoff: string,
   symbol: string,
   interval: string,
   startAt?: string,
+  mobile = false,
 ): TradingChart {
   // 图例就这一行：品种 · 周期。开高低收、指标数值、来源、倒计时都不在这儿——
   // 那些字浮在 K 线上就是噪音，价格轴、时间轴、指标线本身已经把它们说完了。
@@ -170,13 +194,27 @@ export function tradingChart(
   const down = prefs().updown === 'red_up' ? NIGHT.up : NIGHT.down
   const mono = monoFont()
 
+  /** 手机布局。第一次 `setMobile` 之前是 null，那一发不管传什么都要落地。 */
+  let mobileOn: boolean | null = mobile ? true : null
+
+  /**
+   * 十字线那条时间标签。桌面写全 `YYYY-MM-DD HH:mm UTC`；手机上那点宽度容不下
+   * 年份和 UTC 三个字母，日内只留 `MM-DD HH:mm`，日线及以上连时分都不必留。
+   */
+  function stampText(t: Time): string {
+    if (typeof t !== 'number') return String(t)
+    const full = utc(t)
+    if (!mobileOn) return `${full} UTC`
+    return barSpanMs(level) >= 86_400_000 ? full.slice(0, 10) : full.slice(5)
+  }
+
   const chart = createChart(canvas, {
     autoSize: false,
     layout: {
       background: { type: ColorType.Solid, color: NIGHT.bg },
       textColor: NIGHT.text,
       fontFamily: mono,
-      fontSize: 12,
+      fontSize: mobile ? 10 : 12,
       attributionLogo: true,
       panes: { separatorColor: NIGHT.bg2, separatorHoverColor: 'rgba(140,149,255,.28)', enableResize: true },
     },
@@ -186,15 +224,19 @@ export function tradingChart(
       vertLine: { color: NIGHT.crosshair, labelBackgroundColor: NIGHT.crosshairLabel },
       horzLine: { color: NIGHT.crosshair, labelBackgroundColor: NIGHT.crosshairLabel },
     },
-    rightPriceScale: { borderColor: NIGHT.axisLine, autoScale: true, minimumWidth: 72 },
+    rightPriceScale: mobile
+      ? { borderColor: NIGHT.axisLine, autoScale: true, minimumWidth: 0, scaleMargins: { top: 0.1, bottom: 0.06 } }
+      : { borderColor: NIGHT.axisLine, autoScale: true, minimumWidth: 72 },
     // shiftVisibleRangeOnNewBar 默认开着：最后一根在屏内的时候，来一根新数据图就
     // 把视野整体往右挪一根。回放是「看那一段」，不是「跟到最新」，挪了就等于把
     // 刚落好的位又推走——一律关掉。
     timeScale: {
       borderColor: NIGHT.axisLine, timeVisible: true, secondsVisible: false, rightOffset: 5,
-      fixLeftEdge: false, minBarSpacing: 0.4, shiftVisibleRangeOnNewBar: false,
+      fixLeftEdge: false, minBarSpacing: MIN_BAR_SPACING, shiftVisibleRangeOnNewBar: false,
+      // 手机上一根默认 4.5px：一屏七十几根，和 AICoin 那张图一个密度。
+      ...(mobile ? { barSpacing: MOBILE_BAR_SPACING } : {}),
     },
-    localization: { locale: 'zh-CN', timeFormatter: (t: Time) => typeof t === 'number' ? utc(t) + ' UTC' : String(t) },
+    localization: { locale: 'zh-CN', timeFormatter: stampText },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
     // 触屏一甩要有惯性，鼠标不要：鼠标拖到哪儿就停在哪儿，飘过去反而不好对位。
     kineticScroll: { mouse: false, touch: true },
@@ -261,6 +303,12 @@ export function tradingChart(
     | null = null
   /** 手指甩完松手，正在惯性往下滑。见下面 startFling。 */
   let fling: { raf: number } | null = null
+  /** 画布上这会儿还按着的手指，按落下的先后排。第二根一落就开始捏合。 */
+  const touches = new Map<number, { x: number; y: number }>()
+  /** 正在被两根手指捏着。记的是第二指落下那一刻的账，见下面 startPinch。 */
+  let pinching:
+    | { d0: number; m0: number; from0: number; to0: number; width: number; left: number }
+    | null = null
   const stamp = (ms: number): UTCTimestamp => Math.floor(ms / 1000) as UTCTimestamp
   const startOf = (bar: Bar): number => Date.parse(bar.start)
   /** 格子上的时刻 → 真实第几根。十字线读图例要用。 */
@@ -303,19 +351,35 @@ export function tradingChart(
     return out
   }
 
-  type Candle = { open: number; high: number; low: number; close: number }
+  type Candle = { open: number; high: number; low: number; close: number; color: string }
   function candleData(): ({ time: UTCTimestamp } | (Candle & { time: UTCTimestamp }))[] {
-    return gridData((bar) => ({
-      open: Number(bar.open), high: Number(bar.high), low: Number(bar.low), close: Number(bar.close),
-    }))
+    return gridData((bar) => {
+      const open = Number(bar.open)
+      const close = Number(bar.close)
+      // 每一根自己带颜色，是为了右侧那枚最新价标签：图库拿这一条的 `color` 去染
+      // 标签和那根虚线，不带的话标签就成了系列的默认色。
+      return { open, high: Number(bar.high), low: Number(bar.low), close, color: open <= close ? up : down }
+    })
   }
 
   const minimum = Math.min(...initial.map((bar) => Number(bar.low)))
-  const precision = Math.max(2, Math.min(8, 3 - Math.floor(Math.log10(Math.max(minimum, 1e-8)))))
+  // 价格轴留约五位有效数字：77186 给一位小数就够看，0.012 得给到六位才分得出档。
+  const precision = precisionFor(minimum)
+  const minMove = 10 ** -precision
+  /**
+   * 价格轴上的字怎么写。手机上再压一层「约四位有效数字」（`axisPrice`），轴就
+   * 窄下来；桌面还是图库那套定点小数，一个像素不动。数据本身的 precision 和
+   * minMove 两边一样，压的只是轴上、最新价标签上、十字线标签上显示的位数。
+   * 走的是这条系列自己的 priceFormat 而不是 chart 的 localization：localization
+   * 是整张图共用的，装上去连成交量轴的 `400K` 都会被改写。
+   */
+  const priceText = (on: boolean) => on
+    ? { type: 'custom' as const, formatter: (value: number) => axisPrice(value, precision), minMove }
+    : { type: 'price' as const, precision, minMove }
   // 均线读数和价格轴用同一位数，别把 190.96133333 这种算出来的尾巴亮给人看。
-  const candles = chart.addSeries(CandlestickSeries, {
-    upColor: up, downColor: down, wickUpColor: up, wickDownColor: down,
-    borderVisible: false, priceFormat: { type: 'price', precision, minMove: 10 ** -precision },
+  const candles = chart.addCustomSeries<CandlePoint, CandleOptions>(candleView(), {
+    upColor: up, downColor: down, mobile,
+    priceFormat: priceText(mobile),
   })
   candles.setData(candleData())
 
@@ -378,7 +442,9 @@ export function tradingChart(
   let setup: ChartSetup | null = null
   let extras: ISeriesApi<SeriesType>[] = []
   /** 量柱那一条。活的最新一根要连量一起改，所以留个引用。 */
-  let volumeSeries: ISeriesApi<'Histogram'> | null = null
+  let volumeSeries:
+    | ISeriesApi<'Custom', Time, ColumnPoint | WhitespaceData<Time>, ColumnOptions, SeriesPartialOptions<ColumnOptions>>
+    | null = null
 
   function points(values: Line): ({ time: UTCTimestamp } | { time: UTCTimestamp; value: number })[] {
     return gridData((_bar, i) => {
@@ -429,7 +495,12 @@ export function tradingChart(
     let pane = 0
     if (setup.volume) {
       pane += 1
-      const histogram = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false }, pane)
+      // 量柱和蜡烛是同一个渲染器：手机上柱宽就等于实体宽，一根 K 线一根柱，
+      // 上下对得齐。桌面照图库那套排法，看不出换过。
+      const histogram = chart.addCustomSeries<ColumnPoint, ColumnOptions>(columnView(), {
+        priceFormat: volumeText(mobileOn === true), priceLineVisible: false, lastValueVisible: false,
+        mobile: mobileOn === true,
+      }, pane)
       histogram.setData(gridData((bar) => {
         if (bar.volume === null || bar.volume === undefined) return null
         const value = Number(bar.volume)
@@ -705,6 +776,46 @@ export function tradingChart(
     })
   }
 
+  /** 这一帧还没落地的视野。平移、捏合都往这儿塞，一帧只算一次。 */
+  let queued: { from: number; to: number } | null = null
+  let queuedRaf = 0
+
+  /**
+   * 排一次视野变更，到下一帧才落。
+   *
+   * 一次手指划过来的 pointermove 可能有十几发（合并事件更多），每发都
+   * `applyTime + layout()` 的话，一帧里要重算十几遍下标、重排一遍钉价和判定线，
+   * 手感就是黏的。这儿只留最后一次坐标，一帧落一发。
+   */
+  function queueTime(fromMs: number, toMs: number): void {
+    queued = { from: fromMs, to: toMs }
+    if (queuedRaf) return
+    queuedRaf = requestAnimationFrame(() => {
+      queuedRaf = 0
+      const want = queued
+      queued = null
+      if (!want) return
+      applyTime(want.from, want.to)
+      layout()
+    })
+  }
+
+  /** 排着的那一发立刻落地。要读「现在看的是哪一段」之前都得先走这儿。 */
+  function flushTime(): void {
+    if (queuedRaf) { cancelAnimationFrame(queuedRaf); queuedRaf = 0 }
+    const want = queued
+    queued = null
+    if (!want) return
+    applyTime(want.from, want.to)
+    layout()
+  }
+
+  /** 排着的那一发作废。有人要往别处跳，这一发再落就是往回拽。 */
+  function dropTime(): void {
+    if (queuedRaf) { cancelAnimationFrame(queuedRaf); queuedRaf = 0 }
+    queued = null
+  }
+
   let regrowing = false
   /**
    * 按这一段视野重铺格子。铺出来和现在这排一样就什么都不做；不一样就换一份数据。
@@ -811,6 +922,7 @@ export function tradingChart(
   function setVisibleTime(from: number, to: number, animate: boolean, next?: Bar[]): void {
     if (!Number.isFinite(from) || !Number.isFinite(to) || !(to > from)) return
     stopFling()
+    dropTime()
     if (gliding) { cancelAnimationFrame(gliding); gliding = 0 }
     glideTo = null
     const here = visibleTime()
@@ -1240,10 +1352,13 @@ export function tradingChart(
    * 两边抢方向盘的结果就是图自己跑起来。索性全屏态就不让它拖。
    */
   function onPanDown(event: PointerEvent): void {
-    // 第二根手指下来就把这一次平移作废：那是要捏合缩放，缩放还是交给图自己做。
-    if (panning !== null) { panning = null; return }
+    if (event.pointerType === 'touch') touches.set(event.pointerId, { x: event.clientX, y: event.clientY })
     if (!padded || measuring) return
+    // 第二根手指下来就转捏合：不作废这一次平移，两件事记在同一本账上，手不跳。
+    if (touches.size >= 2) { startPinch(); return }
+    if (panning !== null) { panning = null; return }
     if (event.button !== 0 || event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return
+    flushTime()
     const view = visibleTime()
     if (!view || !(view.to > view.from)) return
     panning = {
@@ -1258,6 +1373,10 @@ export function tradingChart(
   }
 
   function onPanMove(event: PointerEvent): void {
+    if (event.pointerType === 'touch' && touches.has(event.pointerId)) {
+      touches.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    }
+    if (pinching) { onPinchMove(); return }
     const pan = panning
     if (!pan || event.pointerId !== pan.id) return
     const width = chart.timeScale().width()
@@ -1271,10 +1390,21 @@ export function tradingChart(
     }
     const perPx = (pan.to - pan.from) / width
     const moved = (event.clientX - pan.x) * perPx
-    applyTime(pan.from - moved, pan.to - moved)
+    queueTime(pan.from - moved, pan.to - moved)
   }
 
   function onPanUp(event: PointerEvent): void {
+    touches.delete(event.pointerId)
+    if (pinching) {
+      // 还剩两根以上就地重记一次账（少了的那根不该让画面跳）；剩一根接着平移；
+      // 全松了收尾——捏合不起惯性。
+      if (touches.size >= 2) { startPinch(); return }
+      pinching = null
+      flushTime()
+      if (touches.size === 1) { restartPan(); return }
+      planSettle()
+      return
+    }
     const pan = panning
     if (!pan || event.pointerId !== pan.id) return
     panning = null
@@ -1283,6 +1413,75 @@ export function tradingChart(
     if (!pan.touch || event.type !== 'pointerup') return
     pan.trail.push({ x: event.clientX, at: event.timeStamp })
     startFling(flingSpeed(pan.trail))
+  }
+
+  /* ------------------------------------------ 全屏态：捏合也自己算 */
+
+  /**
+   * 第二根手指落下（或者松掉一根之后还剩两根）那一刻记一次账。
+   *
+   * 往后每一发都拿这一刻的两指距离、中点、可见段去算，不按帧累乘——图库那套按帧
+   * 累乘的缩放，先捏开再捏拢和反过来速度不一样（lightweight-charts#1300 未修）。
+   * 一笔账记死，捏开一倍再捏回去，跨度分毫不差地回到出发点。
+   */
+  function startPinch(): void {
+    const live = [...touches.values()]
+    const one = live[0]
+    const two = live[1]
+    if (!one || !two) return
+    flushTime()
+    const view = visibleTime()
+    const width = chart.timeScale().width()
+    if (!view || !(view.to > view.from) || !(width > 0)) return
+    stopFling()
+    panning = null
+    touched = true
+    pinching = {
+      d0: Math.hypot(two.x - one.x, two.y - one.y),
+      m0: (one.x + two.x) / 2 - canvas.getBoundingClientRect().left,
+      from0: view.from,
+      to0: view.to,
+      width,
+      left: canvas.getBoundingClientRect().left,
+    }
+  }
+
+  /** 捏合每一动：跨度按两指距离之比算，中点底下那一刻钉住。一帧落一次。 */
+  function onPinchMove(): void {
+    const grip = pinching
+    if (!grip) return
+    const live = [...touches.values()]
+    const one = live[0]
+    const two = live[1]
+    if (!one || !two) return
+    const next = pinchView({
+      from0: grip.from0,
+      to0: grip.to0,
+      d0: grip.d0,
+      d: Math.hypot(two.x - one.x, two.y - one.y),
+      m0: grip.m0,
+      m: (one.x + two.x) / 2 - grip.left,
+      widthPx: grip.width,
+      stepMs: barSpanMs(level),
+    })
+    queueTime(next.from, next.to)
+  }
+
+  /** 捏完还剩一根手指：拿它当前的位置就地重起一次平移，画面不跳。 */
+  function restartPan(): void {
+    const id = [...touches.keys()][0]
+    const spot = id === undefined ? undefined : touches.get(id)
+    if (id === undefined || !spot) return
+    const view = visibleTime()
+    if (!view || !(view.to > view.from)) return
+    panning = {
+      id,
+      x: spot.x,
+      from: view.from,
+      to: view.to,
+      touch: true,
+      trail: [{ x: spot.x, at: performance.now() }],
+    }
   }
 
   /** 掐掉正在滑的惯性。人一动手、跳视野、换档、拆组件，都走这儿。 */
@@ -1429,11 +1628,27 @@ export function tradingChart(
       // 过它这一关——它在图内部每一次滚动里都算一遍，抹不掉、也不会跟人手打架。
       // 窗口态没有格子，开了会把人钉死在第一根 K 线上，所以只在全屏开。
       chart.applyOptions({ timeScale: { fixLeftEdge: on } })
-      // 全屏态的平移归 onPanMove 管，别让图自己也拖一遍。
+      // 全屏态的平移归 onPanMove 管、捏合归 onPinchMove 管，别让图自己也来一遍。
       chart.applyOptions({ handleScroll: { pressedMouseMove: !on, horzTouchDrag: !on } })
+      chart.applyOptions({ handleScale: { pinch: !on } })
       stopFling()
-      if (!on) panning = null
+      if (!on) { panning = null; pinching = null; touches.clear(); dropTime() }
       if (changed && before) applyTime(before.from, before.to)
+      layout()
+    },
+    setMobile: (on) => {
+      if (mobileOn === on) return
+      mobileOn = on
+      chart.applyOptions({
+        layout: { fontSize: on ? 10 : 12 },
+        // 手机上价格轴不占最小宽度，上下也少留一点白；桌面照图库默认那套
+        // （0.2 / 0.1）和我们原来的 72 一个字不改。
+        rightPriceScale: on
+          ? { minimumWidth: 0, scaleMargins: { top: 0.1, bottom: 0.06 } }
+          : { minimumWidth: 72, scaleMargins: { top: 0.2, bottom: 0.1 } },
+      })
+      candles.applyOptions({ mobile: on, priceFormat: priceText(on) })
+      volumeSeries?.applyOptions({ mobile: on, priceFormat: volumeText(on) })
       layout()
     },
     onVisibleTime: (handler) => { timeWatchers.push(handler) },
@@ -1515,6 +1730,9 @@ export function tradingChart(
     destroy: () => {
       if (gliding) cancelAnimationFrame(gliding)
       stopFling()
+      dropTime()
+      pinching = null
+      touches.clear()
       stopMeasureTimers()
       watcher.disconnect()
       canvas.removeEventListener('wheel', mark)

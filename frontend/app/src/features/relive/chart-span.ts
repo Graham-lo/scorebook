@@ -483,3 +483,81 @@ export function flingSpan(
   const walled = held.from !== want.from
   return { from: held.from, to: held.to, done: step.done || walled }
 }
+
+/* ------------------------------------------------------------ 双指捏合 */
+
+/** 图允许的最松根宽。捏开到这儿就到头，再撑也不动了。 */
+export const MAX_BAR_SPACING = 40
+/** 手机进图那一刻一根占几个像素。桌面照旧走图库默认的 6。 */
+export const MOBILE_BAR_SPACING = 4.5
+/** 两根手指近到这个距离以内，比例就不作数了——那一下多半是捏到一块儿了。 */
+export const PINCH_MIN_PX = 8
+
+/**
+ * 捏合把跨度缩成多少：`span = span0 × d0 / d`。
+ *
+ * 一切都相对「第二根手指落下那一刻」记的 `d0` 和 `span0` 算，所以捏开一倍再捏
+ * 回原距离，跨度分毫不差地回到出发点——图库那套按帧累乘的做法做不到这一点
+ * （tradingview/lightweight-charts#1300：先捏开还是先捏拢，速度不一样）。
+ *
+ * `minMs`/`maxMs` 是根宽上下限换算过来的跨度，夹在里头。两指贴到一块儿
+ * （`< PINCH_MIN_PX`）就当这一下没发生，跨度原样返回。
+ */
+export function pinchSpan(
+  span0: number,
+  d0: number,
+  d: number,
+  limits: { minMs?: number; maxMs?: number } = {},
+): number {
+  if (!Number.isFinite(span0) || !(span0 > 0)) return span0
+  if (!Number.isFinite(d0) || !Number.isFinite(d)) return span0
+  if (d0 < PINCH_MIN_PX || d < PINCH_MIN_PX) return span0
+  let span = (span0 * d0) / d
+  if (!Number.isFinite(span) || !(span > 0)) return span0
+  const lo = Number.isFinite(limits.minMs ?? NaN) ? (limits.minMs as number) : 0
+  const hi = Number.isFinite(limits.maxMs ?? NaN) ? (limits.maxMs as number) : Number.POSITIVE_INFINITY
+  if (lo > 0 && span < lo) span = lo
+  if (span > hi) span = hi
+  return span
+}
+
+/** 捏合过程中的一笔账：落第二指那一刻记下的，加上此刻两指在哪。 */
+export interface Pinch {
+  /** 落第二指那一刻的可见段。 */
+  from0: number
+  to0: number
+  /** 落第二指那一刻的两指距离（px）。 */
+  d0: number
+  /** 此刻的两指距离（px）。 */
+  d: number
+  /** 落第二指那一刻两指中点在画布上的横坐标（px）。 */
+  m0: number
+  /** 此刻的中点横坐标（px）。 */
+  m: number
+  /** 画布宽（px）。 */
+  widthPx: number
+  /** 现在这一档一根多少毫秒——根宽上下限靠它换算成跨度上下限。 */
+  stepMs: number
+}
+
+/**
+ * 捏合到此刻视野该停在哪一段。
+ *
+ * 中点底下那一刻钉住：`tMid = from0 + m0 / w × span0` 是手指中间压着的那一刻，
+ * 缩放之后它还得待在中点底下，所以 `from = tMid − m / w × span`。用的是**此刻**
+ * 的中点 `m`，两指一起横着挪，图就跟着挪——AICoin 就是这个手感。
+ */
+export function pinchView(now: Pinch): Span {
+  const span0 = now.to0 - now.from0
+  const width = now.widthPx
+  if (!(span0 > 0) || !(width > 0)) return { from: now.from0, to: now.to0 }
+  const step = now.stepMs > 0 ? now.stepMs : 0
+  const limits = step > 0
+    ? { minMs: (width / MAX_BAR_SPACING) * step, maxMs: (width / MIN_BAR_SPACING) * step }
+    : {}
+  const span = pinchSpan(span0, now.d0, now.d, limits)
+  const mid = now.from0 + (now.m0 / width) * span0
+  const from = mid - (now.m / width) * span
+  if (!Number.isFinite(from)) return { from: now.from0, to: now.to0 }
+  return { from, to: from + span }
+}

@@ -158,10 +158,6 @@ export function segmentOrder(total: number, recordAt: number): number[] {
 }
 
 /**
- * 一条滚动条上，把某一颗整个露出来要挪多少（正数往后滚，负数往回滚，0 是本来
- * 就整颗看得见）。两头各留 `pad`，免得紧贴着钉住的 `自动` / `更多` 像被压住。
- */
-/**
  * 把一颗 chip 挪到条正中要滚多少（正数往后滚）。
  *
  * 竖屏那条设了 `scroll-snap-type:x proximity`、每颗 chip 是 `scroll-snap-align:
@@ -177,6 +173,10 @@ export function scrollCenter(
   return (item.start + item.end) / 2 - (box.start + box.end) / 2
 }
 
+/**
+ * 一条滚动条上，把某一颗整个露出来要挪多少（正数往后滚，负数往回滚，0 是本来
+ * 就整颗看得见）。两头各留 `pad`，免得紧贴着钉住的 `自动` / `更多` 像被压住。
+ */
 export function scrollShift(
   box: { start: number; end: number },
   item: { start: number; end: number },
@@ -187,4 +187,52 @@ export function scrollShift(
   if (item.start - pad < box.start) return item.start - pad - box.start
   if (item.end + pad > box.end) return item.end + pad - box.end
   return 0
+}
+
+/**
+ * 价格轴留几位小数：按「约五位有效数字」来。
+ *
+ * 传进来的是这段行情的最低价——一条记录里最小的那个数决定了要分到多细。
+ * 77186 给一位就够看（`77186.4`），0.012 得给到六位才分得出档。上下各夹一
+ * 道：再大的数也留一位，再小的数也不超过八位。
+ */
+export function precisionFor(minimum: number): number {
+  const low = Number.isFinite(minimum) && minimum > 0 ? minimum : 1
+  return Math.max(1, Math.min(8, 4 - Math.floor(Math.log10(low))))
+}
+
+/**
+ * 手机价格轴上这个数写几位小数：按「约四位有效数字」来，再被这个品种本身的
+ * 精度夹一道（`precisionFor` 算出来的那位数就是上限，不会比数据更细）。
+ *
+ * 轴上的字短一位，轴就窄六个像素，手机上那一列本来就该让给 K 线。80250.0 写成
+ * `80250`、192.86 写成 `192.9`，看盘该看的量级一个不少。桌面不装这层，照旧。
+ */
+export function axisPrice(price: number, precision: number): string {
+  const cap = Number.isFinite(precision) ? Math.max(0, Math.min(8, Math.trunc(precision))) : 2
+  const value = Number.isFinite(price) ? price : 0
+  const size = Math.abs(value)
+  const want = size > 0 ? 3 - Math.floor(Math.log10(size)) : cap
+  return value.toFixed(Math.max(0, Math.min(cap, want)))
+}
+
+/**
+ * 手机成交量轴上这个数怎么写：三位有效数字加一个单位，`1.23M` / `500K` / `50K`。
+ *
+ * 右轴那一列是整张图共用的，图库按所有窗格里最宽的那条轴算宽度——量柱窗格默认
+ * 写成 `100.00K` 这种七个字，价格轴再怎么压也白压。这里把量压到最多五个字，右轴
+ * 才真的窄得下来。桌面不装这层，照旧走图库的成交量格式。
+ */
+export function axisVolume(value: number): string {
+  const source = Number.isFinite(value) ? value : 0
+  const sign = source < 0 ? '-' : ''
+  const units = ['', 'K', 'M', 'B', 'T']
+  let size = Math.abs(source)
+  let step = 0
+  while (size >= 1000 && step < units.length - 1) { size /= 1000; step += 1 }
+  let text = size.toFixed(size >= 100 ? 0 : size >= 10 ? 1 : 2)
+  // 999.6 进位成 1000 就该换上一档单位，别在轴上写出 `1000K` 这种四位数。
+  if (Number(text) >= 1000 && step < units.length - 1) { size /= 1000; step += 1; text = size.toFixed(2) }
+  if (text.includes('.')) text = text.replace(/\.?0+$/, '')
+  return sign + text + (units[step] ?? '')
 }

@@ -43,6 +43,11 @@ export function pxPerBar(widthPx: number, fromMs: number, toMs: number, interval
 
 /** 两个阈值中间那个最舒服的密度。程序性跳转按它挑档。 */
 export const TARGET_PX = 6
+/**
+ * 手机上舒服的密度要密一档。手指那块屏只有三百多点宽，按桌面的 6 挑出来，一屏
+ * 才五十根，看不出结构；AICoin 手机端一屏九十来根，4.5 落在那个手感里。
+ */
+export const TARGET_PX_MOBILE = 4.5
 
 /**
  * 程序性跳转（锚定、回位、到上市、`+ −`）要的档：按目标跨度一次算到位，可以跨
@@ -60,6 +65,7 @@ export function levelForSpan(
   current: string,
   locked = false,
   base?: string,
+  targetPx = TARGET_PX,
 ): string {
   if (locked) return current
   if (!ladder.length) return current
@@ -73,7 +79,7 @@ export function levelForSpan(
   for (const step of ladder) {
     const px = pxPerBar(widthPx, fromMs, toMs, step)
     if (!Number.isFinite(px) || px <= 0) continue
-    const off = Math.abs(Math.log(px / TARGET_PX))
+    const off = Math.abs(Math.log(px / (targetPx > 0 ? targetPx : TARGET_PX)))
     const fits = px >= TOO_DENSE_PX && px <= TOO_SPARSE_PX
     // 区间内按「离记录本档多远」排，区间外一律靠后（+10），彼此之间还是比密度。
     const near = baseSpan > 0 ? Math.abs(Math.log(barSpanMs(step) / baseSpan)) : off

@@ -35,7 +35,7 @@ import { correctedNow } from '../../api/market'
 import { fetchRange } from '../../api/binance'
 import { SHORTCUT_TITLE, shortcutItems } from './shortcuts'
 import { moreSet, periodAt, quickSet, readPeriod, savePeriod } from './history/periods'
-import { barsIn, ladderFor, levelForSpan, pickLevel, pxPerBar } from './history/lod'
+import { TARGET_PX, TARGET_PX_MOBILE, barsIn, ladderFor, levelForSpan, pickLevel, pxPerBar } from './history/lod'
 import { NARROW_PX, holdOk, showsJudgment } from './view-rules'
 import { bindWake, chromeHeight, navBottom } from './chrome'
 import {
@@ -560,6 +560,8 @@ export function openMarketChart(initial: ChartRequest, _label = '图中这段', 
     // 桌面上周期在图例上点，底下那条就不露了；手机上窗口态、全屏都露。
     periodBar.hidden = !mobile
     periodSep.hidden = true
+    // 价格轴收窄、K 线和量柱画细一号：每次布局变化都递一发，首次也递。
+    stage?.setMobile(mobile)
     keysChip.node.hidden = !full || coarse() || mobile
     orderControls()
     paintTitle()
@@ -1319,7 +1321,10 @@ export function openMarketChart(initial: ChartRequest, _label = '图中这段', 
     if (!stage || !(toMs > fromMs)) return
     const next = forceLevel && !lockedLevel
       ? forceLevel
-      : levelForSpan(stage.paneWidth(), fromMs, toMs, ladder, level, lockedLevel, request.interval)
+      : levelForSpan(
+        stage.paneWidth(), fromMs, toMs, ladder, level, lockedLevel, request.interval,
+        isMobileLayout(layoutNow) ? TARGET_PX_MOBILE : TARGET_PX,
+      )
     if (next !== level) applyLevel(next, fromMs, toMs)
     settling = Date.now() + SETTLE_MS
     stage.setVisibleTime(fromMs, toMs, animate && !calm(), barsAt(fromMs, toMs))
@@ -1555,7 +1560,11 @@ export function openMarketChart(initial: ChartRequest, _label = '图中这段', 
         return
       }
       if (closed || current.signal.aborted) return
-      stage = tradingChart(result.bars, target.end_at, target.symbol, target.interval, target.start_at)
+      stage = tradingChart(
+        result.bars, target.end_at, target.symbol, target.interval, target.start_at,
+        isMobileLayout(layoutNow),
+      )
+      stage.setMobile(isMobileLayout(layoutNow))
       if (!options.queryAttachmentId) stage.node.setAttribute('aria-label', `${target.symbol} 真实 K 线和成交量`)
       plot.replaceChildren(stage.node)
       // 不是这条记录自己的品种：截图轮廓和截止线都不属于这张图，一概不画。
