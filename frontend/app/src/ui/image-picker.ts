@@ -76,11 +76,14 @@ export function imagePicker(model: ImageUploads, label: string, changed: () => v
 export function reviewImages(ids: string[] = [], label = '复盘时的后续走势'): HTMLElement | null {
   if (!ids.length) return null
   return h('div.review-shots', {}, h('div.dlabel', { text: label }),
-    h('div.shots', {}, ...ids.map((id) => stile({
-      id: id as Uuid,
-      label,
-      tone: label === '当时' ? '' : 'after',
-      acts: screenshotActions(id),
-      alt: label,
-    }))))
+    h('div.shots', {}, ...ids.map((id) => {
+      const card = stile({
+        id: id as Uuid,
+        label,
+        tone: label === '当时' ? '' : 'after',
+        acts: screenshotActions(id, undefined, (at) => card.locate(at)),
+        alt: label,
+      })
+      return card
+    })))
 }

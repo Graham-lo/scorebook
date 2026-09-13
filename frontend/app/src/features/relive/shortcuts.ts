@@ -18,8 +18,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { key: 'End', action: '到最新' },
   { key: 'Shift+Home', action: '到上市' },
   { key: 'G', action: '跳到日期' },
-  { key: '1–9', action: '选条上第几个周期' },
+  { key: '1–9', action: '周期（1m 5m 15m 30m 1h 4h 1d 1w）' },
   { key: 'A', action: '周期自动' },
+  { key: 'P', action: '周期菜单' },
+  { key: 'L', action: '品种列表' },
+  { key: 'Alt+L', action: '对数/常规坐标' },
   { key: 'M', action: '十字线吸附' },
   { key: 'Shift+拖', action: '测量' },
   { key: 'Alt+点', action: '钉价位线' },
@@ -35,7 +38,7 @@ export function shortcutLine(item: Shortcut): string {
   return `${item.key} · ${item.action}`
 }
 
-/** 弹层里那 16 行（标题另外单独一条，不挂在第 0 行上）。 */
+/** 弹层里那 19 行（标题另外单独一条，不挂在第 0 行上）。 */
 export function shortcutItems(): { label: string; value: string }[] {
   return SHORTCUTS.map((item, i) => ({ label: shortcutLine(item), value: `__key${i}` }))
 }

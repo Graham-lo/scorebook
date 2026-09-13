@@ -9,8 +9,8 @@
 // 开高低收，以及开着的指标读数。指标一律由外面传进来，这里不自己开任何一条线。
 
 import {
-  CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart,
-  TrackingModeExitMode,
+  CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, PriceScaleMode,
+  createChart, TrackingModeExitMode,
   type IPriceLine, type IPrimitivePaneView, type ISeriesApi, type ISeriesPrimitive, type Logical,
   type LogicalRange, type SeriesType, type Time, type UTCTimestamp,
 } from 'lightweight-charts'
@@ -88,6 +88,12 @@ export interface TradingChart {
   setVisibleTime(from: number, to: number, animate: boolean, next?: Bar[]): void
   /** 时间轴那块画布有多宽（像素）。换档按它和时间跨度算，不看 barSpacing。 */
   paneWidth(): number
+  /** 此刻一根多宽（像素）。人手换周期时要按它反算跨度，K 线才等大等粗。 */
+  barSpacing(): number
+  /** 价格轴怎么画：对数、常规、百分比。 */
+  setScaleMode(mode: 'log' | 'normal' | 'percent'): void
+  /** 图例那一行的两半，外面挂点击、挂菜单用。 */
+  legendParts(): { symbol: HTMLElement; period: HTMLElement; line: HTMLElement }
   /**
    * 未加载的那一段要不要用留白撑住时间轴。全屏懒加载要，窗口态不要。
    */
@@ -103,7 +109,7 @@ export interface TradingChart {
    */
   setInterval(interval: string, view?: { from: number; to: number }): void
   /** 锚定段那条丁香色时间带。传 null 收起来。 */
-  setAnchor(band: { startMs: number; endMs: number; label: string } | null): void
+  setAnchor(band: { startMs: number; endMs: number } | null): void
   /** 两侧边缘的呼吸条。 */
   setEdge(side: 'left' | 'right', state: 'idle' | 'loading' | 'failed'): void
   /** 边缘那颗「重试」被按了。 */
@@ -131,6 +137,8 @@ export interface TradingChart {
   onHint(handler: (text: string) => void): void
   /** 换一个候选之后，截止线挪到新的那一刻。 */
   setCutoff(at: string): void
+  /** 截止那条虚线画不画。换到不是这条记录的品种上就不画。 */
+  showCutoff(on: boolean): void
   /** 当前视野相对截止那一根的根数；人没动过缩放就是 null。 */
   view(): { before: number; after: number } | null
   setView(view: { before: number; after: number }): void
@@ -151,9 +159,10 @@ export function tradingChart(
 ): TradingChart {
   // 图例就这一行：品种 · 周期。开高低收、指标数值、来源、倒计时都不在这儿——
   // 那些字浮在 K 线上就是噪音，价格轴、时间轴、指标线本身已经把它们说完了。
-  const legendSymbol = h('span.tv-legend-sym', { text: symbol })
-  const legendRest = h('span.tv-legend-rest', { text: ` · ${interval}` })
-  const legend = h('div.tv-legend', { attrs: { 'aria-live': 'off' } }, legendSymbol, legendRest)
+  const legendSymbol = h('button.tv-legend-btn.tv-legend-sym', { type: 'button', text: symbol })
+  const legendSep = h('span.tv-legend-sep', { text: ' · ', attrs: { 'aria-hidden': 'true' } })
+  const legendRest = h('button.tv-legend-btn.tv-legend-rest', { type: 'button', text: interval })
+  const legend = h('div.tv-legend', { attrs: { 'aria-live': 'off' } }, legendSymbol, legendSep, legendRest)
   const canvas = h('div.tv-canvas', { role: 'img', attrs: { 'aria-label': `${symbol} 真实 K 线、成交量和截图轮廓对比` } })
   const node = h('div.tv-chart', {}, canvas, legend)
 
@@ -361,7 +370,8 @@ export function tradingChart(
     const views = [line]
     return { paneViews: () => views }
   })()
-  if (cutIndex > 0 || bars.length) candles.attachPrimitive(marker)
+  let cutShown = cutIndex > 0 || bars.length > 0
+  if (cutShown) candles.attachPrimitive(marker)
 
   /* ------------------------------------------------------------ 指标 */
 
@@ -484,7 +494,7 @@ export function tradingChart(
   }
 
   function reset(): void {
-    chart.priceScale('right').applyOptions({ autoScale: true })
+    applyScale()
     const from = logicalOf(indexAt(anchorFrom))
     const to = logicalOf(indexAt(anchorTo))
     asProgrammatic(() => chart.timeScale().setVisibleLogicalRange({ from: from - 0.5, to: to + 5 }))
@@ -558,19 +568,17 @@ export function tradingChart(
   const timeWatchers: ((range: { from: number; to: number; programmatic: boolean }) => void)[] = []
   const retryWatchers: ((side: 'left' | 'right') => void)[] = []
 
-  const bandLabel = h('span.tv-band-label')
-  const band = h('div.tv-band', { hidden: true }, bandLabel)
+  const band = h('div.tv-band', { hidden: true })
   const retryLeft = h('button.btn', { text: '重试', hidden: true, on: { click: () => { for (const cb of retryWatchers) cb('left') } } })
   const retryRight = h('button.btn', { text: '重试', hidden: true, on: { click: () => { for (const cb of retryWatchers) cb('right') } } })
   const edgeLeft = h('div.tv-edge.left', { hidden: true }, retryLeft)
   const edgeRight = h('div.tv-edge.right', { hidden: true }, retryRight)
   // 「记下判断」是叠在画布上的一块 DOM，不是 series marker：marker 在缩到很密的
   // 时候会被图自己藏掉，这一条必须一直看得见。
-  const judgeNode = h('div.tv-judge', { hidden: true },
-    h('span.tv-judge-mark'), h('span.tv-judge-text', { text: '记下判断' }))
+  const judgeNode = h('div.tv-judge', { hidden: true }, h('span.tv-judge-mark'))
   canvas.append(band, edgeLeft, edgeRight, judgeNode)
 
-  function paintRest(): void { legendRest.textContent = ` · ${level}` }
+  function paintRest(): void { legendRest.textContent = level }
 
   function timeAtLogical(logical: number): number {
     // 铺了格子就只做这一道除法的反向：格子是等距的，整条轴上都准。
@@ -762,6 +770,12 @@ export function tradingChart(
    * 8 万跳到上市那一段，轴还写着 78k–86k，K 线画出来也在屏幕外，看着就像没画）。
    * 换一份数据就把 autoScale 重新按一遍，轴和 K 线同一帧一起到位。
    */
+  // 价格轴默认对数：同一张图上 3 万到 12 万那一段，常规轴会把早年的波动压成一条
+  // 直线。常规和百分比由外面按人的选择切过来。
+  let priceMode: PriceScaleMode = PriceScaleMode.Logarithmic
+  function applyScale(): void {
+    try { chart.priceScale('right').applyOptions({ autoScale: true, mode: priceMode }) } catch { /* 图已经销毁 */ }
+  }
   let priceMark = ''
   /** 这一份数据的价格范围签名。范围一个字没变就别重按——重按一次轴会自己跳一下。 */
   function markOf(list: readonly Bar[]): string {
@@ -781,7 +795,7 @@ export function tradingChart(
     // 无缘无故重算一次刻度，看着就是「刷新了一下」。
     if (mark === priceMark) return
     priceMark = mark
-    try { chart.priceScale('right').applyOptions({ autoScale: true }) } catch { /* 图已经销毁 */ }
+    applyScale()
   }
 
   const stage: Stage<Bar> = {
@@ -860,7 +874,7 @@ export function tradingChart(
     return xAtLogical(logicalAtTime(ms))
   }
 
-  let anchorBand: { startMs: number; endMs: number; label: string } | null = null
+  let anchorBand: { startMs: number; endMs: number } | null = null
 
   let judgeAt: number | null = null
 
@@ -884,9 +898,6 @@ export function tradingChart(
     band.hidden = false
     band.style.left = `${left}px`
     band.style.width = `${right - left}px`
-    // 标签贴在带子左下角、量柱窗上沿往上 8px：图例在左上角，那里让给它。
-    // 带子左边出了屏，标签跟着钉在可见区左边（带子本身已经被裁到 0 了）。
-    bandLabel.style.bottom = `${Math.max(0, canvas.clientHeight - mainBottom() + 8)}px`
   }
 
   /** 「记下判断」钉在截止那一根下面、量柱窗上沿；出了屏就收起来。 */
@@ -1396,6 +1407,16 @@ export function tradingChart(
     },
     setVisibleTime,
     paneWidth: () => chart.timeScale().width(),
+    barSpacing: () => chart.timeScale().options().barSpacing,
+    setScaleMode: (mode) => {
+      priceMode = mode === 'normal' ? PriceScaleMode.Normal
+        : mode === 'percent' ? PriceScaleMode.Percentage
+          : PriceScaleMode.Logarithmic
+      // 换了坐标就当这一份数据没按过 autoScale：不然轴还停在上一套算法的范围上。
+      priceMark = ''
+      applyScale()
+    },
+    legendParts: () => ({ symbol: legendSymbol, period: legendRest, line: legend }),
     setPadding: (on) => {
       if (padded === on) return
       // 进出全屏都要保住「现在看的是哪一段时间」：格子一铺，下标的含义就变了。
@@ -1432,7 +1453,6 @@ export function tradingChart(
     setAnchor: (next) => {
       anchorBand = next
       if (!next) { band.hidden = true; return }
-      bandLabel.textContent = next.label
       layout()
     },
     setEdge,
@@ -1459,6 +1479,12 @@ export function tradingChart(
       applyPins([])
     },
     onHint: (handler) => { hintWatchers.push(handler) },
+    showCutoff: (on) => {
+      if (on === cutShown) return
+      cutShown = on
+      if (on) candles.attachPrimitive(marker)
+      else candles.detachPrimitive(marker)
+    },
     setCutoff: (next) => {
       const when = Date.parse(next)
       if (!Number.isFinite(when)) return

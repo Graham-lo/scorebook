@@ -5,36 +5,35 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  CHROME, CONTROLS_WAKE_EVENTS, WAKE_EVENTS, bindWake, chromeHeight, navBottom, statsBottom,
+  CHROME, CONTROLS_WAKE_EVENTS, WAKE_EVENTS, bindWake, chromeHeight, navBottom,
   type Listenable,
 } from '../src/features/relive/chrome'
 
-test('桌面那种排法：统计在右上角，不占底边', () => {
-  const loose = chromeHeight({ controlsH: 36, statsH: 40, stacked: false })
+test('桌面那种排法：工具条居中浮在底边上', () => {
+  const loose = chromeHeight({ controlsH: 36, stacked: false })
   assert.equal(loose, CHROME.looseBottom + 36 + CHROME.gap + CHROME.pad)
 })
 
-test('手机竖屏摞起来：版权、免责、工具条、统计各占一行，工具条换行也要算进去', () => {
-  const one = chromeHeight({ controlsH: 34, statsH: 25, stacked: true })
-  const two = chromeHeight({ controlsH: 74, statsH: 25, stacked: true })
-  assert.equal(one, CHROME.stackedBottom + 34 + CHROME.gap + 25 + CHROME.pad)
+test('手机竖屏摞起来：版权、工具条各占一行，工具条换行也要算进去', () => {
+  const one = chromeHeight({ controlsH: 34, stacked: true })
+  const two = chromeHeight({ controlsH: 74, stacked: true })
+  assert.equal(one, CHROME.stackedBottom + 34 + CHROME.gap + CHROME.pad)
   assert.equal(two - one, 40, '工具条多一行，留白就得多一行')
 })
 
 test('有导航条就再多让出一条加一道缝，没有就一点都不多留', () => {
-  const without = chromeHeight({ controlsH: 36, statsH: 40, stacked: false })
-  const with28 = chromeHeight({ controlsH: 36, statsH: 40, stacked: false, navH: 28 })
+  const without = chromeHeight({ controlsH: 36, stacked: false })
+  const with28 = chromeHeight({ controlsH: 36, stacked: false, navH: 28 })
   assert.equal(with28 - without, 28 + CHROME.gap)
-  assert.equal(chromeHeight({ controlsH: 36, statsH: 40, stacked: false, navH: 0 }), without)
+  assert.equal(chromeHeight({ controlsH: 36, stacked: false, navH: 0 }), without)
 })
 
 test('负数和小数都按正整数算，不会把留白算成负的', () => {
-  assert.equal(chromeHeight({ controlsH: -20, statsH: -5, stacked: true }),
+  assert.equal(chromeHeight({ controlsH: -20, stacked: true }),
     CHROME.stackedBottom + CHROME.gap + CHROME.pad)
 })
 
-test('统计那一行踩在工具条头顶上；导航条贴在工具条正上方', () => {
-  assert.equal(statsBottom(34), CHROME.stackedBottom + 34 + CHROME.gap)
+test('导航条贴在工具条正上方', () => {
   assert.equal(navBottom(36, false), CHROME.looseBottom + 36 + CHROME.gap)
   assert.equal(navBottom(34, true), CHROME.stackedBottom + 34 + CHROME.gap)
   assert.equal(navBottom(30, false, 8), 8 + 30 + CHROME.gap, '横屏工具条贴到 8px，导航条跟着上去')

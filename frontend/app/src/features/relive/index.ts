@@ -526,7 +526,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
           maxWidth: 220,
           lazy: false,
           onReady: (_url, image) => {
-            image.addEventListener('click', () => openScreenshot(shot.id, '当时图', shot.location, { call, attachment: shot }))
+            image.addEventListener('click', () => openScreenshot(shot.id, '当时图', shot.location, { call, attachment: shot, onChange: (at) => { shot.location = at } }))
           },
         }),
       )
@@ -875,7 +875,7 @@ export function relivePage(host: HTMLElement, arg: string): () => void {
           ratio: { width: shot.width, height: shot.height },
           lazy: false,
           onReady: (_url, image) => {
-            image.addEventListener('click', () => openScreenshot(shot.id, '之后的走势', shot.location, { call, attachment: shot }))
+            image.addEventListener('click', () => openScreenshot(shot.id, '之后的走势', shot.location, { call, attachment: shot, onChange: (at) => { shot.location = at } }))
           },
         }),
       )

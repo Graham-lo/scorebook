@@ -419,17 +419,18 @@ export function callPage(host: HTMLElement, arg: string): () => void {
    * 定位、候选、手动校准、找相似这一行操作照旧挂在脚注里，`···` 还是那几项。
    */
   function shotCard(d: CallDetail, shot: Attachment): HTMLElement {
-    const acts = screenshotActions(shot.id, shot.location, (at) => { shot.location = at })
-    return stile({
+    // 对上（或解开）之后板子就地重画，记录对象同步改掉，回到这页不必刷新。
+    const card = stile({
       id: shot.id,
       label: identityLabel(shot),
       tone: shot.kind === 'reference' ? 'ref' : shot.kind === 'supplement' ? 'after' : '',
       location: shot.location,
       onLocation: (at) => { shot.location = at },
       onMenu: d.voided ? undefined : () => shotMenu(d, shot),
-      acts,
+      acts: screenshotActions(shot.id, shot.location, (at) => { shot.location = at; card.locate(at) }),
       alt: `${d.instrument ?? ''} ${identityLabel(shot)}`,
     })
+    return card
   }
 
   const KIND_MENU: { kind: AttachmentKind; label: string }[] = [

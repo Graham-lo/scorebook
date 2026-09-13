@@ -173,6 +173,60 @@ export function clampSpan(span: Span, bounds: ViewBounds): Span {
   return { from, to: from + width }
 }
 
+/**
+ * 手动换周期：每根 K 线多宽不变，跨度按新周期重算，中心那一刻留在中心。
+ *
+ * TradingView 就是这么干的——人点 `1d` 是想换一把尺子，不是想把屏幕上那几根
+ * 撑成方块。保跨度的话 1h→1d 只剩几根大方块、→5m 挤成一片细线，那是「自动」
+ * 按密度换档才该有的行为（那一路是缩放动作的延续，跨度必须守住）。
+ *
+ * `paneWidthPx` 是时间轴那块画布的宽，`barSpacingPx` 是图现在一根占几个像素，
+ * `stepMs` 是新周期一根多少毫秒。算不出来（宽度或根宽是 0）就原样返回。
+ */
+export function spanForPeriod(
+  fromMs: number,
+  toMs: number,
+  paneWidthPx: number,
+  barSpacingPx: number,
+  stepMs: number,
+): Span {
+  const here = { from: fromMs, to: toMs }
+  if (![fromMs, toMs, paneWidthPx, barSpacingPx, stepMs].every((n) => Number.isFinite(n))) return here
+  if (!(toMs > fromMs) || !(paneWidthPx > 0) || !(barSpacingPx > 0) || !(stepMs > 0)) return here
+  const middle = (fromMs + toMs) / 2
+  const half = (paneWidthPx / barSpacingPx) * stepMs / 2
+  return { from: middle - half, to: middle + half }
+}
+
+/**
+ * 换档算出来的那一段，挪到「至少看得见一根真 K 线」的地方。
+ *
+ * 上一档被未来封顶往左推过之后，视野中点可能已经落在上市之前的空白里；照那个
+ * 中点换档，新的一段就整段悬在没有行情的时间上，屏上一根 K 线都没有。这里只做
+ * 平移，不改跨度（根宽因此不变）：整段在最后一根右边就把右端贴住最后一根，整段
+ * 在上市之前就把左端贴住第一根。两头都不知道，或者本来就压着行情，原样不动。
+ */
+export function spanOnBars(
+  span: Span,
+  stepMs: number,
+  edges: { firstMs?: number | null; lastMs?: number | null },
+): Span {
+  const width = span.to - span.from
+  if (!(width > 0) || !(stepMs > 0)) return span
+  if (!Number.isFinite(span.from) || !Number.isFinite(span.to)) return span
+  const lo = typeof edges.firstMs === 'number' && Number.isFinite(edges.firstMs) ? edges.firstMs : null
+  const hi = typeof edges.lastMs === 'number' && Number.isFinite(edges.lastMs) ? edges.lastMs : null
+  if (lo === null && hi === null) return span
+  // 最后一根自己占一格，右边界算到它收盘。
+  const right = hi === null ? Number.POSITIVE_INFINITY : hi + stepMs
+  const left = lo === null ? Number.NEGATIVE_INFINITY : lo
+  const overlap = Math.min(span.to, right) - Math.max(span.from, left)
+  if (overlap >= stepMs) return span
+  if (hi !== null && span.from > hi) return { from: right - width, to: right }
+  if (lo !== null) return { from: left, to: left + width }
+  return span
+}
+
 /** 换一份数据的那一刻，格子和真 K 线的两头。 */
 export interface Swap {
   lattice: Lattice

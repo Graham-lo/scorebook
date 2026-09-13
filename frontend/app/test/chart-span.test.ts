@@ -5,7 +5,7 @@ import test from 'node:test'
 import {
   FAR_SCREENS, farJump, glideAt, latticeCap, latticeCovers, latticeEnds, nearEdge,
   needsReassert, nowShowing, planLattice, sameLattice, settled, slotFor, slotOf, swapCover,
-  timeOfSlot, viewAim,
+  timeOfSlot, viewAim, spanOnBars,
 } from '../src/features/relive/chart-span'
 
 const HOUR = 3_600_000
@@ -325,4 +325,48 @@ test('合并时的时间锁只认时间：直接沿用旧下标才会跳', () =>
   assert.notEqual(timeOfSlot(after, seen.from), view.from)
   // 按时间换算回来才对得上。
   assert.equal(timeOfSlot(after, slotOf(after, view.from)), view.from)
+})
+
+const MIN_MS = 60_000
+const HOUR_MS = 60 * MIN_MS
+const DAY_MS = 24 * HOUR_MS
+
+test('换档算出来的一段压着行情就原样不动', () => {
+  const onboard = Date.UTC(2026, 6, 1)
+  const last = Date.UTC(2026, 8, 13)
+  const span = { from: Date.UTC(2026, 7, 1), to: Date.UTC(2026, 7, 5) }
+  assert.deepEqual(spanOnBars(span, HOUR_MS, { firstMs: onboard, lastMs: last }), span)
+})
+
+test('整段落在上市之前：左端贴住第一根，跨度一个字不改', () => {
+  const onboard = Date.UTC(2026, 6, 1)
+  const last = Date.UTC(2026, 8, 13)
+  const span = { from: Date.UTC(2026, 2, 15), to: Date.UTC(2026, 5, 10) }
+  const out = spanOnBars(span, 4 * HOUR_MS, { firstMs: onboard, lastMs: last })
+  assert.equal(out.from, onboard, '左端落在上市那一刻')
+  assert.equal(out.to - out.from, span.to - span.from, '跨度不变，根宽就不变')
+})
+
+test('整段落在最后一根右边：右端贴住最后一根', () => {
+  const onboard = Date.UTC(2026, 6, 1)
+  const last = Date.UTC(2026, 8, 13)
+  const span = { from: Date.UTC(2026, 9, 1), to: Date.UTC(2026, 9, 11) }
+  const out = spanOnBars(span, DAY_MS, { firstMs: onboard, lastMs: last })
+  assert.equal(out.to, last + DAY_MS, '最后一根自己占一格，右端算到它收盘')
+  assert.equal(out.to - out.from, span.to - span.from)
+})
+
+test('只压着不到一根也算没压着，照样挪回去', () => {
+  const onboard = Date.UTC(2026, 6, 1)
+  const span = { from: Date.UTC(2026, 5, 1), to: onboard + 10 * MIN_MS }
+  const out = spanOnBars(span, HOUR_MS, { firstMs: onboard, lastMs: Date.UTC(2026, 8, 13) })
+  assert.equal(out.from, onboard)
+})
+
+test('两头都不知道、跨度算不出来，就别动人家的视野', () => {
+  const span = { from: Date.UTC(2026, 2, 1), to: Date.UTC(2026, 3, 1) }
+  assert.deepEqual(spanOnBars(span, HOUR_MS, {}), span)
+  assert.deepEqual(spanOnBars(span, HOUR_MS, { firstMs: null, lastMs: null }), span)
+  assert.deepEqual(spanOnBars(span, 0, { firstMs: 1, lastMs: 2 }), span)
+  assert.deepEqual(spanOnBars({ from: 5, to: 5 }, HOUR_MS, { firstMs: 1, lastMs: 2 }), { from: 5, to: 5 })
 })

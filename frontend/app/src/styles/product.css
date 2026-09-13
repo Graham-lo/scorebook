@@ -500,16 +500,40 @@
 
 /* 图例叠在图左上角：窗口态、全屏态是同一块。没有底板——就一行裸字浮在图上，
    加块毛玻璃反而像贴了张卡片。压不住背景的那点对比度交给 text-shadow。
-   只剩「品种 · 周期」一行，所以直接在自己身上 nowrap + 省略号。 */
-.tv-legend{position:absolute;left:14px;top:12px;z-index:2;pointer-events:none;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+   桌面上这一行是两颗按钮：左半开品种栏，右半开周期菜单。菜单要从这儿垂下来，
+   所以不能再 overflow:hidden，也不能再 pointer-events:none。 */
+.tv-legend{position:absolute;left:14px;top:12px;z-index:6;
+  white-space:nowrap;
   font:13px/1.5 var(--sans);font-variant-numeric:tabular-nums;
   color:#EEF0FF;text-shadow:0 1px 2px rgba(8,10,36,.85)}
+.tv-legend-sep{color:#A6A9C0}
+/* 还是裸字：没有底板、没有内边距，停上去只把那一半转纯白，底下垫 2px 丁香线。 */
+.tv-legend-btn{padding:0;margin:0;border:0;background:none;box-shadow:none;
+  font:inherit;color:inherit;text-shadow:inherit;cursor:pointer;
+  text-underline-offset:3px;text-decoration:none}
 .tv-legend-sym{color:#fff}
 .tv-legend-rest{color:#A6A9C0}
+.tv-legend-btn:hover:not(:disabled),.tv-legend-btn:focus-visible,.tv-legend-btn.on{
+  color:#fff;text-decoration:underline;text-decoration-color:#C4B5FD;text-decoration-thickness:2px}
+.tv-legend-btn:focus-visible{outline:none}
+/* 手机上图例只是一行字，不点。 */
+.tv-legend-flat{pointer-events:none}
+.tv-legend-flat .tv-legend-btn{cursor:default}
+.market-mobile .tv-legend{font-size:12px}
 @media(max-width:480px){
   .tv-legend{left:8px;top:8px;font-size:12px}
 }
+
+/* 点周期那一半，在图例正下方垂下来的那张菜单：`自动` 独占一行，其余 14 档两列。 */
+.tv-legend .pop.tv-period-pop{min-width:176px;padding:6px;z-index:8}
+.tv-period-pop .pop-list{display:grid;grid-template-columns:1fr 1fr;gap:2px;max-height:none;overflow:visible}
+.tv-period-pop .pop-list>button{position:relative;padding:7px 9px;font-size:12.5px;gap:6px;
+  font-variant-numeric:tabular-nums;white-space:nowrap;text-shadow:none}
+.tv-period-pop .pop-list>button:first-child{grid-column:1/-1}
+.tv-period-pop .pop-list>button:disabled{opacity:.35;cursor:not-allowed}
+.tv-period-pop .chk{flex:0 0 12px;width:12px;height:12px}
+.tv-period-pop .chip-dot{position:absolute;top:4px;right:4px;width:4px;height:4px;border-radius:50%;
+  background:#C4B5FD}
 
 /* ============================================================
    必须保留的功能样式：截图定位、行情对比、全屏、找图历史
@@ -537,7 +561,19 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
 .market-fullscreen .market-plot{display:flex;flex:1;min-height:140px}
 .market-fullscreen .tv-chart{flex:1;height:100%!important;min-height:0!important}
 .market-fullscreen .tv-canvas{min-height:0}
-.market-fullscreen .market-note,.market-fullscreen .market-credit{font-size:10px;line-height:1.5}
+.market-fullscreen .market-credit{font-size:10px;line-height:1.5}
+
+/* 周期条和画布是一个盒子：竖屏上下摞，横屏左右排，桌面只剩画布。 */
+.market-stage{display:flex;flex-direction:column;min-width:0;min-height:0}
+.market-landscape .market-stage{flex-direction:row}
+.market-stage>.market-plot{flex:1 1 auto;min-width:0;min-height:0}
+.market-fullscreen .market-comparison>.market-stage{flex:1 1 auto;min-height:0}
+/* 版权（Apache 要求留着）：全屏贴画布右下角，窗口态排在图下面，谁的刻度都不压。 */
+.market-plot{position:relative}
+.market-credit{display:block;margin:2px 2px 0;text-align:right;
+  font-size:10px;line-height:1.6;color:#A6A9C0}
+.market-fullscreen .market-credit{position:absolute;z-index:3;right:10px;bottom:6px;margin:0;
+  text-shadow:0 1px 2px rgba(8,10,36,.85)}
 
 /* ---------- 全屏：沉浸式夜窗舞台 ---------- */
 .market-dialog.market-fullscreen,.market-dialog:fullscreen{background:#0F1230;color:#EEF0FF;border-radius:0;transition:background 240ms var(--e-out)}
@@ -568,27 +604,99 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
   margin:0 auto;width:fit-content;max-width:calc(100% - 32px);flex-wrap:wrap;justify-content:center;overflow:visible;gap:6px;padding:6px 10px;
   background:rgba(15,18,48,.72);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.12);border-radius:999px}
 .market-fullscreen .market-controls>*{flex-shrink:0}
-.market-fullscreen .market-stats{position:absolute;z-index:3;top:12px;right:14px;margin:0;max-width:42%;
-  font:12px/1.55 var(--mono);color:#EEF0FF;background:rgba(15,18,48,.55);backdrop-filter:blur(6px);border-radius:10px;padding:6px 10px}
-.market-fullscreen .market-note{position:absolute;z-index:3;bottom:0;left:14px;margin:0;max-width:48%;font-size:11px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#A6A9C0}
-.market-fullscreen .market-credit{position:absolute;z-index:3;bottom:0;right:14px;margin:0;font-size:10px;line-height:22px;color:#A6A9C0}
+.market-fullscreen .market-credit{bottom:6px;right:10px;line-height:18px}
 
-/* ---------- 周期条：工具条最左那一排，看盘用 ---------- */
-/* 交易所那种一眼可见、一点就换。选中填充、自动落到的那一档描边。 */
-.tv-periods{display:flex;align-items:center;gap:4px;min-width:0}
+/* ---------- 周期条：手机上贴着画布的那一排，看盘用 ---------- */
+/* 交易所那种一眼可见、一点就换。选中填充、自动落到的那一档描边。桌面上这一条
+   不露脸——周期在图例上点。 */
+.tv-periods{display:flex;align-items:center;gap:4px;min-width:0;flex:0 0 auto;background:#161A3F}
 .tv-periods-list{display:flex;align-items:center;gap:4px;min-width:0}
-.tv-periods-sep{flex:0 0 auto;width:1px;height:16px;background:rgba(255,255,255,.14)}
-.market-fullscreen .market-controls .chip-period{height:28px;min-height:28px;padding:0 8px;font-size:12px;
-  font-variant-numeric:tabular-nums;position:relative;
+.tv-periods-sep{display:none}
+.market-desktop .tv-periods{display:none}
+.tv-periods .chip-period{height:32px;min-height:32px;padding:0 10px;font-size:12px;flex:0 0 auto;
+  font-variant-numeric:tabular-nums;position:relative;border-radius:8px;box-shadow:none;
   background:transparent;border:1px solid transparent;color:#EEF0FF;
   transition:background-color 160ms var(--e-out),box-shadow 160ms var(--e-out)}
-.market-fullscreen .market-controls .chip-period:hover:not(:disabled){background:rgba(255,255,255,.08)}
-.market-fullscreen .market-controls .chip-period.at{border-color:rgba(196,181,253,.6)}
-.market-fullscreen .market-controls .chip-period.on{background:rgba(196,181,253,.28);color:#EDE9FE}
-.market-fullscreen .market-controls .chip-period:disabled{opacity:.35;cursor:not-allowed}
+.tv-periods .chip-period:hover:not(:disabled){background:rgba(255,255,255,.08)}
+.tv-periods .chip-period.at{border-color:rgba(196,181,253,.6)}
+.tv-periods .chip-period.on{background:rgba(196,181,253,.28);color:#EDE9FE}
+.tv-periods .chip-period:disabled{opacity:.35;cursor:not-allowed}
+.tv-periods .popwrap>.chip{height:32px;min-height:32px;padding:0 10px;font-size:12px;flex:0 0 auto;
+  background:transparent;border:1px solid rgba(255,255,255,.14);color:#EEF0FF;box-shadow:none}
 /* 这条记录自己那一档，右上角一枚小点 */
 .chip-period .chip-dot{position:absolute;top:3px;right:3px;width:4px;height:4px;border-radius:50%;
   background:#C4B5FD}
+
+/* 竖屏：画布正上方一整条，中间那一段横着滚，`自动` `更多` 钉在两头。 */
+.market-portrait .tv-periods{height:40px;padding:0 6px;width:100%}
+.market-portrait .tv-periods-list{flex:1 1 auto;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;
+  scroll-snap-type:x proximity}
+.market-portrait .tv-periods-list::-webkit-scrollbar{display:none}
+.market-portrait .tv-periods-list .chip-period{scroll-snap-align:center}
+
+/* 横屏：贴着画布左边一竖列，`自动` 在顶、`更多` 在底，菜单朝右开。 */
+.market-landscape .tv-periods{flex-direction:column;flex:0 0 52px;width:52px;padding:4px 0;gap:2px}
+.market-landscape .tv-periods-list{flex:1 1 auto;flex-direction:column;width:100%;min-height:0;gap:2px;
+  overflow-y:auto;scrollbar-width:none}
+.market-landscape .tv-periods-list::-webkit-scrollbar{display:none}
+.market-landscape .tv-periods .chip-period,.market-landscape .tv-periods .popwrap>.chip{
+  height:26px;min-height:26px;width:100%;padding:0;font-size:11px;justify-content:center}
+.market-landscape .tv-periods .popwrap{width:100%}
+.market-landscape .tv-periods .pop{left:calc(100% + 6px);top:auto;bottom:0;transform-origin:bottom left}
+
+/* 图例菜单和周期条的「更多」都配夜色，和工具条上那一套一致。 */
+.tv-periods .pop,.tv-legend .pop{background:#1B1F4D;
+  box-shadow:0 18px 40px -12px rgba(0,0,0,.65),inset 0 0 0 1px rgba(255,255,255,.12)}
+.tv-periods .pop .ph,.tv-legend .pop .ph{color:#A6A9C0}
+.tv-periods .pop .sep,.tv-legend .pop .sep{background:rgba(255,255,255,.1)}
+.tv-periods .pop button,.tv-legend .pop button{color:#EEF0FF}
+.tv-periods .pop button:hover,.tv-legend .pop button:hover{background:rgba(255,255,255,.08)}
+.tv-periods .pop button.on,.tv-legend .pop button.on{color:#FFB454;background:rgba(255,180,84,.14)}
+.tv-periods .pop .chk,.tv-legend .pop .chk{color:#FFB454}
+.tv-periods .pop .hint,.tv-legend .pop .hint{color:#A6A9C0}
+
+/* ---------- 品种栏：桌面在画布右边一竖条，手机是底部抽屉 ---------- */
+.tv-chart-watching{flex-direction:row}
+.tv-chart-watching>.tv-canvas{flex:1 1 auto;min-width:0}
+.tv-watch{flex:0 0 240px;width:240px;min-width:0;z-index:5;
+  display:flex;flex-direction:column;color:#EEF0FF;
+  background:#12153A;border-left:1px solid rgba(255,255,255,.08)}
+.tv-watch-h{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;
+  height:38px;padding:0 6px 0 12px;border-bottom:1px solid rgba(255,255,255,.08)}
+.tv-watch-t{font-size:13px;font-weight:800;color:#fff}
+.tv-watch-x{width:28px;height:28px;border-radius:8px;border:0;background:none;cursor:pointer;
+  font-size:18px;line-height:1;color:#A6A9C0}
+.tv-watch-x:hover{background:rgba(255,255,255,.1);color:#fff}
+.tv-watch .tv-watch-search{flex:0 0 auto;margin:8px;height:32px;min-height:32px;padding:0 10px;
+  font-size:12.5px;color:#EEF0FF;background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.14);border-radius:8px;box-shadow:none}
+.tv-watch .tv-watch-search::placeholder{color:#8A8FAD}
+.tv-watch-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 6px 10px}
+.tv-watch-g{padding:8px 8px 4px;font-size:11px;font-weight:800;letter-spacing:.12em;color:#8A8FAD}
+.tv-watch-ph{padding:8px;font-size:12px;color:#A6A9C0}
+.tv-watch-body>.chip{margin:4px 8px;background:rgba(255,255,255,.08);
+  border-color:rgba(255,255,255,.14);color:#EEF0FF;box-shadow:none}
+.tv-watch-row{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  padding:7px 8px;border:0;border-radius:8px;background:none;cursor:pointer;text-align:left;
+  font:12.5px/1.4 var(--sans);font-variant-numeric:tabular-nums;color:#EEF0FF}
+.tv-watch-row:hover{background:rgba(255,255,255,.08)}
+.tv-watch-row.on{background:rgba(196,181,253,.22);color:#fff}
+.tv-watch-step{font-size:11px;color:#A6A9C0}
+/* 手机：从底下掀起来的一张抽屉，占八成半屏高，顶上两个角圆 14px。 */
+.tv-watch.tv-watch-sheet{position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;
+  height:85dvh;max-height:85dvh;z-index:90;border-left:0;border-radius:14px 14px 0 0;
+  box-shadow:0 -18px 40px -12px rgba(0,0,0,.55);
+  animation:tv-watch-up 240ms var(--e-out) both}
+@keyframes tv-watch-up{from{transform:translateY(100%)}to{transform:none}}
+.market-mobile .tv-watch-row{min-height:40px}
+
+/* ---------- 手机：顶栏那个品种名点开抽屉，工具条压成一条横滚 ---------- */
+.market-mobile .market-title-tap{font-size:15px;cursor:pointer}
+.market-mobile .market-controls{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:6px}
+.market-mobile .market-controls::-webkit-scrollbar{display:none}
+.market-mobile .market-controls>*{flex-shrink:0}
+.market-mobile.market-fullscreen .market-controls{width:auto;max-width:calc(100% - 16px);
+  justify-content:flex-start}
 
 /* 工具条贴着底边，「指标」菜单往上弹，配夜色 */
 .market-fullscreen .market-controls .pop{--pop-max:460px;top:auto;bottom:calc(100% + 10px);transform-origin:bottom left;
@@ -601,15 +709,13 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
 .market-fullscreen .market-controls .pop .chk{color:#FFB454}
 .market-fullscreen .market-controls .pop .two .l2,.market-fullscreen .market-controls .pop .faint{color:#A6A9C0}
 
-/* 两秒四不动，叠加层淡出，屏幕上只剩这张图。图例和候选不隐藏。 */
-.market-fullscreen .market-controls,.market-fullscreen .market-stats,
-.market-fullscreen .market-note,.market-fullscreen .market-credit{transition:opacity 220ms var(--e-out)}
-.market-fullscreen.market-idle .market-controls,.market-fullscreen.market-idle .market-stats,
-.market-fullscreen.market-idle .market-note,.market-fullscreen.market-idle .market-credit{opacity:0}
+/* 两秒不动，叠加层淡出，屏幕上只剩这张图。图例、候选和品种栏不隐藏。 */
+.market-fullscreen .market-controls,.market-fullscreen .market-credit{transition:opacity 220ms var(--e-out)}
+.market-fullscreen.market-idle .market-controls,
+.market-fullscreen.market-idle .market-credit{opacity:0}
 /* 淡出只淡透明度。触屏没有 mousemove，人要把工具条唤醒只能直接按上去——这时候
    若连 pointer-events 一起关了，这一下就穿过去落在画布上，chip 永远收不到。 */
 .market-fullscreen.market-idle .market-controls{pointer-events:auto}
-.market-fullscreen.market-idle .market-stats,.market-fullscreen.market-idle .market-note,
 .market-fullscreen.market-idle .market-credit{pointer-events:none}
 
 /* ---------- 导航条：工具条正上方那一条完整历史 ---------- */
@@ -646,22 +752,10 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
 
 /* 手机竖屏全屏：右上角那块统计和图例、价格轴挤在一起，挪到工具条上方一整行 */
 @media(max-width:480px){
-  /* 从下往上一行一行摞：版权(0) → 免责(18) → 工具条(40) → 统计(工具条顶 + 6)。
-     工具条会换行，高度由 JS 量出来写进 --market-controls-h / --market-stats-b，
-     画布的留白用 --market-chrome-h，四块谁也压不着谁，时间轴画布整条露出来。 */
-  .market-fullscreen .market-credit{bottom:0;left:auto;right:10px;line-height:18px}
-  .market-fullscreen .market-note{bottom:18px;left:10px;right:10px;max-width:100%;line-height:18px;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .market-fullscreen .market-controls{bottom:40px;left:8px;right:8px;max-width:calc(100% - 16px)}
-  /* 周期条独占一行放在其余 chips 上面，装不下就横着滚；这一行也算进工具条高度。 */
-  .market-fullscreen .tv-periods{flex:1 0 100%;order:-1}
-  .market-fullscreen .tv-periods-list{flex:1 1 auto;overflow-x:auto;scrollbar-width:none;
-    scroll-snap-type:x proximity;padding-bottom:2px}
-  .market-fullscreen .tv-periods-list::-webkit-scrollbar{display:none}
-  .market-fullscreen .tv-periods-list .chip-period{scroll-snap-align:center}
-  .market-fullscreen .tv-periods-sep{display:none}
-  .market-fullscreen .market-stats{top:auto;bottom:var(--market-stats-b,74px);left:8px;right:8px;max-width:none;
-    text-align:center;font-size:11px;line-height:1.5;padding:4px 8px}
+  /* 从下往上摞：版权贴画布右下角，工具条一条横滚在它上面，高度由 JS 量出来写进
+     --market-controls-h，画布的留白用 --market-chrome-h，谁也压不着谁。 */
+  .market-fullscreen .market-credit{bottom:6px;left:auto;right:10px;line-height:18px}
+  .market-fullscreen .market-controls{bottom:26px;left:8px;right:8px;max-width:calc(100% - 16px)}
   /* 竖屏 480 以下高度本来就不够，导航条不放。 */
   .market-fullscreen .tv-nav{display:none}
 }
@@ -674,14 +768,12 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
 .tv-pip img{display:block;width:auto;height:auto;max-width:min(300px,32vw);max-height:min(280px,40vh);object-fit:contain}
 @keyframes tv-pip-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 
-/* 锚定段：全屏里这条记录的那一段时间，淡丁香色的一条带，左下角写它是哪来的
-   （左上角是图例，标签放那儿会被盖住；bottom 由 layout() 按量柱窗上沿算） */
+/* 锚定段：全屏里这条记录的那一段时间，淡丁香色的一条带。图上一个字都不留，
+   所以带子上那行「截图这段 · N 根」已经取消，只剩这条带本身。 */
 .tv-band{position:absolute;z-index:1;top:0;bottom:0;pointer-events:none;
   background:rgba(196,181,253,.14);
   border-left:1px solid rgba(196,181,253,.55);border-right:1px solid rgba(196,181,253,.55)}
-.tv-band-label{position:absolute;left:8px;bottom:8px;white-space:nowrap;
-  font:11px/1.4 var(--mono);color:#C4B5FD;
-  padding:1px 5px;border-radius:5px;background:rgba(15,18,48,.72)}
+
 
 /* 记下判断：截止那一根下面、量柱窗上沿的一个丁香色小三角加一行字 */
 .tv-judge{position:absolute;z-index:3;pointer-events:none;transform:translateX(-50%);
@@ -689,7 +781,6 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
   font:11px/1.3 var(--mono);color:#C4B5FD}
 .tv-judge-mark{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;
   border-bottom:7px solid #C4B5FD}
-.tv-judge-text{padding:1px 5px;border-radius:5px;background:rgba(15,18,48,.72)}
 
 /* 边缘呼吸条：这一侧正在取更早/更晚的行情；取不到就露出一颗「重试」 */
 .tv-edge{position:absolute;z-index:2;top:0;bottom:0;width:80px;pointer-events:none;
@@ -702,14 +793,11 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
   border-radius:8px;background:rgba(15,18,48,.82);border:1px solid rgba(255,255,255,.18);color:#EEF0FF}
 @keyframes tv-edge-breathe{0%,100%{opacity:.35}50%{opacity:1}}
 
-/* 完整历史只在全屏里：窗口态工具条最右那一句提示，全屏时收起来 */
-.market-fullscreen .market-hint{display:none}
-
 @media(prefers-reduced-motion:reduce){
   .market-dialog.market-fullscreen,.market-dialog:fullscreen,
-  .market-fullscreen .market-controls,.market-fullscreen .market-stats,
-  .market-fullscreen .market-note,.market-fullscreen .market-credit,
-  .market-fullscreen .market-controls .chip-period{transition-duration:0ms}
+  .market-fullscreen .market-controls,.market-fullscreen .market-credit,
+  .tv-periods .chip-period{transition-duration:0ms}
+  .tv-watch.tv-watch-sheet{animation:none}
   .tv-pip{animation:none}
   .tv-edge.loading{animation:none;opacity:.7}
 }
@@ -726,17 +814,16 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
      的话，时间轴和量柱整个跑到工具条底下，横屏就永远看不见时间。 */
   .market-fullscreen .market-plot{min-height:100px;padding-bottom:var(--market-chrome-h,88px)}
   .market-fullscreen .tv-canvas{min-height:120px}
-  .market-fullscreen .market-note,.market-fullscreen .market-credit,.market-fullscreen .tv-pip{display:none}
+  .market-fullscreen .tv-pip{display:none}
   .market-fullscreen .tv-legend{font-size:12px;line-height:1.5}
-  /* 图例头贴在左上角，统计原来也在 y≈49，两块正好撞上：统计整块挪到图例下方。 */
-  .market-fullscreen .market-stats{top:44px;right:10px;left:auto;bottom:auto;font-size:10px;line-height:1.45;padding:4px 8px;max-width:42%}
+  /* 横屏只有 375px 高，工具条贴到 8px，版权再待在画布下面就压在工具条上：抬到
+     画布里那条时间轴的右端去。 */
+  .market-fullscreen .market-credit{bottom:calc(var(--market-chrome-h,88px) + 2px);right:10px}
   .market-fullscreen .market-controls{bottom:8px;gap:4px;padding:4px 8px;max-width:calc(100% - 24px);left:12px;right:12px}
   .market-fullscreen .market-controls .chip{height:32px;min-height:32px;padding:0 10px;font-size:11px}
-  .market-fullscreen .market-controls .chip-period{height:32px;min-height:32px;padding:0 10px;font-size:11px}
   .market-fullscreen .tv-nav{left:12px;right:12px}
   .market-fullscreen .tv-datejump{top:6px}
   .market-fullscreen .market-controls .pop{--pop-max:200px}
-  .market-fullscreen .tv-band-label{font-size:10px}
   .market-fullscreen .tv-judge{font-size:10px}
   .market-fullscreen .tv-edge{width:48px}
 }
@@ -746,11 +833,6 @@ figure.upload-image .screenshot-actions{padding:0 10px 8px;font-size:11.5px;gap:
    都不掉。再窄（667×375）就还是让它换行——挤成一行的话周期条会被压到 0 宽。 */
 @media(max-height:500px) and (orientation:landscape) and (min-width:760px){
   .market-fullscreen .market-controls{flex-wrap:nowrap}
-  .market-fullscreen .tv-periods{flex:0 1 auto;min-width:0}
-  .market-fullscreen .tv-periods-list{flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;
-    scroll-snap-type:x proximity}
-  .market-fullscreen .tv-periods-list::-webkit-scrollbar{display:none}
-  .market-fullscreen .tv-periods-list .chip-period{scroll-snap-align:center}
 }
 .fhit-history .chart-slot svg>rect:first-child{fill:var(--board)}
 .fhit-history .chart-slot svg>path[stroke="#e3e5e9"]{stroke:#293548}

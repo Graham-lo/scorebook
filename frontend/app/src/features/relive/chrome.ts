@@ -1,5 +1,4 @@
-// 全屏那几块叠在图上的东西：工具条、统计、免责、版权——它们占多高，以及人怎么
-// 把它们唤醒。
+// 全屏那几块叠在图上的东西：工具条、版权——它们占多高，以及人怎么把它们唤醒。
 //
 // 两件事在手机上翻过车，所以都挪到这里、写成能单测的纯函数：
 //
@@ -9,7 +8,7 @@
 // `touchstart` 和 `pointermove`。
 //
 // 二、底下那几行的高度不能写死。工具条会换行，手机竖屏是两行、横屏是一行；写死
-// 80px 的留白在竖屏上装不下，统计就压到时间轴画布上去了。高度量出来写进 CSS
+// 80px 的留白在竖屏上装不下，工具条就压到时间轴画布上去了。高度量出来写进 CSS
 // 变量，`padding-bottom` 跟着走。
 
 /** 唤醒靠这几种事件。触屏只有后三种，少一个人就摸不到工具条。 */
@@ -50,27 +49,23 @@ export function bindWake(panel: Listenable, controls: Listenable, wake: () => vo
 export const CHROME = {
   /** 版权那一行，贴着底边。 */
   creditH: 18,
-  /** 免责那一行，压在版权上面。 */
-  noteH: 18,
-  /** 竖屏时工具条离底边多高：版权 + 免责两行。 */
+  /** 竖屏时工具条离底边多高。 */
   stackedBottom: 40,
   /** 桌面时工具条离底边多高。 */
   looseBottom: 26,
   /** 工具条和统计之间的缝。 */
   gap: 6,
-  /** 最上面再留一点，别让统计贴着时间轴画布。 */
+  /** 最上面再留一点，别让工具条贴着时间轴画布。 */
   pad: 8,
 } as const
 
 /**
  * 图那块画布底下要留多少留白，才装得下这一整套叠层。
  *
- * `stacked` 是手机竖屏那种从下往上摞的排法（版权、免责、工具条、统计各占一行）；
- * 否则是桌面那种工具条居中浮着、统计在右上角的排法，统计不占底边。
+ * `stacked` 是手机竖屏那种从下往上摞的排法；否则是桌面那种工具条居中浮着的排法。
  */
 export function chromeHeight(parts: {
   controlsH: number
-  statsH: number
   stacked: boolean
   /** 导航条的高度；没有导航条就是 0（手机竖屏不放）。 */
   navH?: number
@@ -78,21 +73,15 @@ export function chromeHeight(parts: {
   bottom?: number
 }): number {
   const controls = Math.max(0, Math.round(parts.controlsH))
-  const stats = Math.max(0, Math.round(parts.statsH))
   const nav = Math.max(0, Math.round(parts.navH ?? 0))
   const extra = nav ? nav + CHROME.gap : 0
   const loose = Math.max(0, Math.round(parts.bottom ?? CHROME.looseBottom))
   if (!parts.stacked) return loose + controls + CHROME.gap + extra + CHROME.pad
-  return CHROME.stackedBottom + controls + CHROME.gap + stats + extra + CHROME.pad
+  return CHROME.stackedBottom + controls + CHROME.gap + extra + CHROME.pad
 }
 
 /** 导航条贴在工具条正上方：工具条底边 + 工具条高 + 一道缝。 */
 export function navBottom(controlsH: number, stacked: boolean, looseBottom: number = CHROME.looseBottom): number {
   const base = stacked ? CHROME.stackedBottom : looseBottom
   return base + Math.max(0, Math.round(controlsH)) + CHROME.gap
-}
-
-/** 竖屏时统计那一行离底边多高：踩在工具条头顶上。 */
-export function statsBottom(controlsH: number): number {
-  return CHROME.stackedBottom + Math.max(0, Math.round(controlsH)) + CHROME.gap
 }

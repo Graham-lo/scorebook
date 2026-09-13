@@ -41,9 +41,15 @@ export interface StileOptions {
   alt?: string
 }
 
-export function stile(options: StileOptions): HTMLElement {
+/** 板子本身是个普通元素，只多一个 `locate`：定位变了（对上、解开）就地重画，不用刷新整页。 */
+export interface StileElement extends HTMLElement {
+  locate(at: AttachmentLocation | null): void
+}
+
+export function stile(options: StileOptions): StileElement {
   const name = options.label ?? '截图'
-  const board = mistBoard()
+  let board = mistBoard()
+  let view: ChartView | null = null
   const meta = h('div.stile-meta.none', {}, h('i'), h('span', { text: '还没对上行情' }))
   const see = h(
     'button.stile-see',
@@ -66,7 +72,17 @@ export function stile(options: StileOptions): HTMLElement {
   )
   const foot = h('div.stile-foot', {}, meta)
   if (!options.compact && options.acts) foot.appendChild(h('div.stile-acts', {}, options.acts))
-  const card = h('article.stile', {}, h('div.stile-top', {}, board, see), foot)
+  const top = h('div.stile-top', {}, board, see)
+  const card = h('article.stile', {}, top, foot) as StileElement
+  card.locate = (at) => {
+    if (at) { void paint(at); return }
+    view?.cancel()
+    view = null
+    const mist = mistBoard()
+    board.replaceWith(mist)
+    board = mist
+    say('还没对上行情', false)
+  }
   if (options.compact) card.classList.add('compact')
   if (options.label) {
     card.appendChild(h('span.stile-badge', { class: options.tone ?? '', text: options.label }))
@@ -98,29 +114,35 @@ export function stile(options: StileOptions): HTMLElement {
   }
 
   async function fill(): Promise<void> {
-    let at = options.location ?? null
-    if (!at) {
-      try {
-        const state = await gate.run(() => getLocate(options.id))
-        if (!card.isConnected && !document.contains(card)) return
-        at = state.location ?? null
-        if (!at) {
-          if (state.job && ['queued', 'running', 'retry_wait'].includes(state.job.status)) {
-            say('正在匹配走势…', false)
-          }
-          return
+    const at = options.location ?? null
+    if (at) { await paint(at); return }
+    try {
+      const state = await gate.run(() => getLocate(options.id))
+      if (!card.isConnected && !document.contains(card)) return
+      const found = state.location ?? null
+      if (!found) {
+        if (state.job && ['queued', 'running', 'retry_wait'].includes(state.job.status)) {
+          say('正在匹配走势…', false)
         }
-        options.onLocation?.(at)
-      } catch {
         return
       }
+      options.onLocation?.(found)
+      await paint(found)
+    } catch {
+      return
     }
+  }
+
+  /** 把对上的那一段画到板面上；再调一次就换成新的一段。 */
+  async function paint(at: AttachmentLocation): Promise<void> {
     say(`${at.symbol} · ${at.interval}`, true)
-    const view = new ChartView()
+    view?.cancel()
+    const next = new ChartView()
+    view = next
     board.className = 'stile-board'
-    board.replaceChildren(view.node, h('i.sweep'))
-    await gate.run(() => view.show((signal) => chartSvg(segment(at), { signal })))
-    tune(view.node)
+    board.replaceChildren(next.node, h('i.sweep'))
+    await gate.run(() => next.show((signal) => chartSvg(segment(at), { signal })))
+    if (view === next) tune(next.node)
   }
 }
 

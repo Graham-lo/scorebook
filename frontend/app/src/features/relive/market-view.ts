@@ -1,19 +1,21 @@
 // 全屏那张真 K 线的外壳：面板、工具条、候选切换、完整历史、指标开关。
 //
-// 全屏不是「把同一块东西撑大」。全屏的时候顶栏收成一条 44px 的深色条，候选切换
-// 搬进顶栏，工具条变成浮在底边中间的一颗药丸，统计、免责和版权各自贴角叠在图
-// 上，两秒四不动就淡出去——屏幕上只剩这张图。窗口态则一切照旧，节点是同一批，
-// 只是换个地方挂。
+// 图上除了左上角那行「品种 · 周期」和右下角那行版权，一个字都不留：统计、免责、
+// 「全屏看完整历史」都已经删掉。桌面照 TradingView 的规矩——周期在图例上点，品种
+// 在右边那一栏挑；手机照 AICoin 的骨架——周期条贴在画布上方（横屏贴左边），品种
+// 从顶栏那个名字掀起一张底部抽屉。排布按宽高自己算，不看是不是触屏。
 
 import { outline, type ChartOutline } from '../../api/chart'
 import { ApiError } from '../../api/errors'
 import { data } from '../../api/market'
 import type { Bar, ChartRequest, ChartSetup, MarketData } from '../../api/types'
-import { followingStats, marketOutline } from '../../data/chart-comparison'
+import { marketOutline } from '../../data/chart-comparison'
+import { instruments } from '../../api/catalog'
 import { getLocate } from '../../api/replay'
 import { historyEnd } from '../../data/chart-window'
 import { prefs } from '../../data/prefs'
-import { h } from '../../ui/dom'
+import { debounce, h } from '../../ui/dom'
+import { icon } from '../../ui/icons'
 import { sheet } from '../../ui/sheet'
 import { objectUrl } from '../../ui/media'
 import { lightbox } from '../../ui/lightbox'
@@ -35,7 +37,13 @@ import { SHORTCUT_TITLE, shortcutItems } from './shortcuts'
 import { moreSet, periodAt, quickSet, readPeriod, savePeriod } from './history/periods'
 import { barsIn, ladderFor, levelForSpan, pickLevel, pxPerBar } from './history/lod'
 import { NARROW_PX, holdOk, showsJudgment } from './view-rules'
-import { bindWake, chromeHeight, navBottom, statsBottom } from './chrome'
+import { bindWake, chromeHeight, navBottom } from './chrome'
+import {
+  PERIOD_AUTO, chartLayout, isMobileLayout, periodMenu, readScale, readWatchOpen, saveScale,
+  saveWatchOpen, scrollCenter, scrollShift, segmentOrder, toggleLog, type ChartLayout,
+  type ScaleMode,
+} from './chart-ui'
+import { spanForPeriod, spanOnBars } from './chart-span'
 import { barSpanMs } from './history/tiles'
 import type { TradingChart } from './trading-chart'
 
@@ -49,7 +57,6 @@ interface ComparisonOptions {
   /** 从重温页带过来的开关状态，省得同一台机器上两处不一致。 */
   choice?: Choice
 }
-const percent = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
 const IDLE_MS = 2400
 /** 换档提示在图例上停多久。 */
 /** 刚换过档，先别急着再换：阶梯有几档正好卡在滞回区间上。 */
@@ -76,10 +83,15 @@ export function followCount(startAt: string, cutoffAt: string, interval: string)
   return Math.max(0, Math.min(want, 2000 - seg))
 }
 
-export function openMarketChart(initial: ChartRequest, label = '图中这段', options: ComparisonOptions = {}): void {
+export function openMarketChart(initial: ChartRequest, _label = '图中这段', options: ComparisonOptions = {}): void {
   const related = options.related?.length ? options.related : [initial]
   let selected = Math.max(0, related.indexOf(initial))
-  let request = related[selected]!
+  /** 这条记录自己那一段：丁香带、截止线、`.chip-dot`、回锚定都按它。 */
+  let anchorReq = related[selected]!
+  /** 此刻画在图上的那一段。换品种、窗口态换周期只改它，`anchorReq` 不动。 */
+  let request = anchorReq
+  /** 眼前这张图就是这条记录本身吗。不是的话那几样标记一概不画。 */
+  const onRecord = (): boolean => request.symbol === anchorReq.symbol && request.market === anchorReq.market
   let showOutline = true
   let full = false
   let closed = false
@@ -95,11 +107,12 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
   const candidates = h('div.market-candidates', { attrs: { 'aria-label': '本次相似结果' } })
   const controls = h('div.market-controls')
   const plot = h('div.market-plot')
-  const stats = h('div.market-stats', { attrs: { 'aria-live': 'polite' } })
   // 轮廓只在读不出来的时候说话：成功了图上那条橙虚线自己会说，不用再写一行字。
   // 这两颗挂在工具条末尾（原来那一整行「K 线 · 历史真实行情」已经取消）。
   const outlineStatus = h('span.market-outline-status', { hidden: true })
   const outlineRetry = h('button.chip', { text: '重读轮廓', hidden: true, on: { click: () => void readOutline() } })
+  // 原来那块 `.market-stats` 整块取消了；数据本身有问题的那两句话搬到工具条末尾。
+  const dataNote = h('span.market-outline-status', { hidden: true })
   const overlayToggle = h('button.chip', { text: '截图轮廓', hidden: !options.queryAttachmentId,
     title: '截图轮廓（O）',
     attrs: { 'aria-pressed': 'true' }, on: { click: () => toggleOutline() } })
@@ -109,6 +122,8 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
   const next = h('button.chip', { text: '下一个 →', title: '下一个（]）', on: { click: () => pick(selected + 1) } })
   const counter = h('span.market-counter')
   if (related.length > 1) candidates.append(previous, counter, next)
+  // 候选那一排不再露脸：右边品种栏的「本次相关」就是它，`[` `]` 照常切。
+  candidates.hidden = true
   const picks = related.length > 1 ? related.map((item, i) => {
     const b = h('button.chip', { text: item.symbol, on: { click: () => pick(i) } }); candidates.appendChild(b); return b
   }) : []
@@ -141,6 +156,29 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     },
   })
   indicatorChip.node.querySelector('.chip')?.setAttribute('title', '指标（I）')
+
+  /* ------------------------------------------------------ 坐标那一颗 */
+
+  // 价格轴三选一。默认对数：同一张图上从上市那几分钱看到今天的几万块，常规轴会
+  // 把早年那一段压成一条直线。选了哪一档记在本机上，下次打开还是它。
+  let scaleMode: ScaleMode = readScale()
+  const scaleChip = popChip({
+    label: () => '坐标',
+    active: () => scaleMode !== 'log',
+    items: () => [
+      { label: '对数', value: 'log', on: scaleMode === 'log' },
+      { label: '常规', value: 'normal', on: scaleMode === 'normal' },
+      { label: '百分比', value: 'percent', on: scaleMode === 'percent' },
+    ],
+    onPick: (value) => setScale(value as ScaleMode),
+  })
+  scaleChip.node.querySelector('.chip')?.setAttribute('title', '坐标（Alt+L 切换对数/常规）')
+  function setScale(mode: ScaleMode): void {
+    scaleMode = mode
+    saveScale(mode)
+    stage?.setScaleMode(mode)
+    scaleChip.refresh()
+  }
 
   /* -------------------------------------------------- 完整历史（全屏） */
 
@@ -241,7 +279,11 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     onPick: (value) => pickPeriod(value),
   })
 
+  /** 上一次把条滚到哪一档上。人自己滚过之后不再抢，除非档变了或者条重铺了。 */
+  let scrolledTo: string | null = null
+
   function buildPeriods(list: readonly string[]): void {
+    scrolledTo = null
     periodChips.clear()
     periodList.textContent = ''
     periodBar.textContent = ''
@@ -252,7 +294,7 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
         on: { click: () => pickPeriod(step) },
       }) as HTMLButtonElement
       // 这条记录自己那一档右上角点一个点，人一眼认得出「我当时看的是这张图」。
-      if (step === request.interval) {
+      if (step === anchorReq.interval) {
         chip.appendChild(h('i.chip-dot', { title: '这条记录的周期', attrs: { 'aria-hidden': 'true' } }))
       }
       periodChips.set(step, chip)
@@ -261,8 +303,9 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
   }
 
   function paintPeriods(): void {
-    const list = quickSet(window.innerWidth, window.innerHeight, request.interval, picked)
+    const list = quickSet(window.innerWidth, window.innerHeight, anchorReq.interval, picked)
     if (list.join(' ') !== shownPeriods.join(' ')) { shownPeriods = list; buildPeriods(list) }
+    paintTitle()
     const lockTitle = `周期已锁定 ${level} · 按 A 回自动`
     const autoTitle = `周期自动 · 现在是 ${level}`
     autoChip.setAttribute('aria-pressed', String(!lockedLevel))
@@ -277,21 +320,97 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
       const off = unsupported.has(step)
       chip.disabled = off
       chip.title = off ? '这个周期后端暂不支持' : here ? (lockedLevel ? lockTitle : autoTitle) : ''
-      if (here && full) chip.scrollIntoView({ inline: 'nearest', block: 'nearest' })
     }
     moreChip.refresh()
+    showPeriod()
   }
 
-  /** 点条上（或「更多」里）某一档：锁定 + 换档，视野中心和跨度不动。 */
+  /**
+   * 把当前这一档整颗滚进可见区。
+   *
+   * 手机上条里放不下十来颗，不滚的话当前档常常半个字压在两头钉着的 `自动` /
+   * `更多` 边上，只看得见一半。只在档变了或者条刚重铺时滚一次：人自己滑到别处
+   * 看的时候，不能每次重绘都把他拽回来。竖屏横着滚，横屏竖着滚，同一段代码。
+   */
+  function showPeriod(): void {
+    if (periodBar.hidden) return
+    if (scrolledTo === level) return
+    const chip = periodChips.get(level)
+    if (!chip) return
+    const box = periodList.getBoundingClientRect()
+    if (!(box.width > 0) || !(box.height > 0)) return
+    const seen = chip.getBoundingClientRect()
+    if (!(seen.width > 0)) return
+    // 条还没被挤成「要滚」的样子——刚挂上文档的那一帧、画布还是占位图的时候都
+    // 是这样：这会儿谁都整颗露着，算出来当然不用挪。别把「滚过了」记下来，不然
+    // 等它真变窄，当前档被两头钉着的 `更多` 盖住半颗，也再没人来滚一次。
+    const wide = periodList.scrollWidth > periodList.clientWidth + 1
+    const tall = periodList.scrollHeight > periodList.clientHeight + 1
+    if (!wide && !tall) return
+    scrolledTo = level
+    const offX = scrollShift({ start: box.left, end: box.right }, { start: seen.left, end: seen.right })
+    const offY = scrollShift({ start: box.top, end: box.bottom }, { start: seen.top, end: seen.bottom })
+    // 露全了就别动。真要挪就一次挪到居中：那是吸附点，浏览器不会再把它吸回边上。
+    if (offX) periodList.scrollLeft += scrollCenter({ start: box.left, end: box.right }, { start: seen.left, end: seen.right })
+    if (offY) periodList.scrollTop += scrollCenter({ start: box.top, end: box.bottom }, { start: seen.top, end: seen.bottom })
+  }
+
+  /**
+   * 人手点的那一档（图例菜单、周期条、`更多`、数字键，都走这里）。
+   *
+   * 人手换档保「一根多宽」，不保「看了多长一段时间」：周期越大 K 线越粗，是这张
+   * 图最劝退的一件事。按当前根宽和画布宽反算出新的跨度，中心那一刻钉住不动，换
+   * 完每根还是那么粗。按密度自动换档（`goTo` / `onView` 那一路）照旧保跨度。
+   */
   function pickPeriod(step: string): void {
     if (unsupported.has(step)) return
-    const base = quickSet(window.innerWidth, window.innerHeight, request.interval, null)
+    const base = quickSet(window.innerWidth, window.innerHeight, anchorReq.interval, null)
     // 从「更多」里挑的那一颗临时露在条上；再选一颗快捷周期它就收回去。
     picked = base.includes(step) ? null : step
     lockedLevel = true
     savePeriod(request.market, request.symbol, step)
-    if (step !== level) switchLevel(step)
+    if (!full) { windowPeriod(step); return }
+    if (step !== level) handSwitch(step)
     else paintPeriods()
+  }
+
+  /** 这一刻视野中心不动、每根还是这么宽，换成 `step` 之后该看哪一段。 */
+  function heldSpan(step: string): { from: number; to: number } | null {
+    if (!stage) return null
+    const range = stage.visibleTime()
+    if (!range) return null
+    const stepMs = barSpanMs(step)
+    const held = spanForPeriod(range.from, range.to, stage.paneWidth(), stage.barSpacing(), stepMs)
+    // 上一档被未来封顶推过之后，中点可能已经在上市之前的空白里；照中点换档会换出
+    // 一张一根 K 线都没有的图。跨度不动，把这一段平移到最近的真 K 线上。
+    const edge = history?.edges() ?? null
+    const span = edge
+      ? spanOnBars(held, stepMs, { firstMs: edge.onboardMs, lastMs: edge.deliveryMs })
+      : held
+    return span.to > span.from ? span : null
+  }
+
+  /** 全屏里人手换档：保根宽、保中心。 */
+  function handSwitch(step: string): void {
+    if (!stage || !history) { switchLevel(step); return }
+    const span = heldSpan(step)
+    if (!span) { switchLevel(step); return }
+    applyLevel(step, span.from, span.to)
+    settling = Date.now() + SETTLE_MS
+    stage.setVisibleTime(span.from, span.to, false, barsAt(span.from, span.to))
+    pumpFocus(span.from, span.to, 0)
+    schedulePaint()
+  }
+
+  /** 窗口态换档：这里没有懒加载，重新取一段就是了，根宽照样保住。 */
+  function windowPeriod(step: string): void {
+    if (step === request.interval && step === level) { paintPeriods(); return }
+    pendingSpan = heldSpan(step)
+    request = { ...request, interval: step }
+    level = step
+    ladder = ladderFor(step)
+    paintPeriods()
+    void load()
   }
 
   /** 回自动：按密度换档，这个品种存的那一档也一并忘掉。 */
@@ -301,31 +420,34 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     paintPeriods()
   }
 
-  controls.append(periodBar, periodSep, followChip, magnetChip, overlayToggle, volumeToggle, indicatorChip.node,
-    h('button.chip', { text: '−', title: '缩小（−）', attrs: { 'aria-label': '缩小 K 线图' }, on: { click: () => zoomBy(1.35) } }),
-    h('button.chip', { text: '+', title: '放大（+）', attrs: { 'aria-label': '放大 K 线图' }, on: { click: () => zoomBy(1 / 1.35) } }),
-    h('button.chip', { text: '复位', title: '复位（0）', on: { click: () => home() } }))
-  // 触屏没有 F 这颗键，就别在提示里许一个按不出来的快捷键。
-  const marketHint = h('span.market-hint', { text: coarse() ? '全屏看完整历史' : '全屏看完整历史 · F' })
+  const zoomOut = h('button.chip', { text: '−', title: '缩小（−）', attrs: { 'aria-label': '缩小 K 线图' }, on: { click: () => zoomBy(1.35) } })
+  const zoomIn = h('button.chip', { text: '+', title: '放大（+）', attrs: { 'aria-label': '放大 K 线图' }, on: { click: () => zoomBy(1 / 1.35) } })
+  const resetChip = h('button.chip', { text: '复位', title: '复位（0）', on: { click: () => home() } })
   const shotToggle = options.attachmentId
     ? h('button.chip', { text: '原图', attrs: { 'aria-label': '查看原始截图' }, on: { click: () => openShot() } })
     : null
-  if (options.attachmentId) controls.append(
-    h('button.chip', { text: '找相似', on: { click: () => { window.location.hash = `/search/like/${options.attachmentId}` } } }),
-    shotToggle!)
-  // 全屏最右那一颗是「快捷键」；窗口态藏着，那一格让给下面这句话。
-  // 触屏没有键盘，这一颗只占地方——横屏 812×375 的工具条正好差它这一格才排成一行。
-  if (!coarse()) controls.appendChild(keysChip.node)
-  // 工具条最右那一句：告诉人完整历史在全屏里。全屏时由样式藏起来。
-  controls.appendChild(marketHint)
-  controls.append(outlineStatus, outlineRetry)
-  const notice = options.queryAttachmentId
-    ? '橙色虚线是截图轮廓，仅缩放时间和幅度，不代表截图品种的真实价格。竖线右侧是历史真实后续。'
-    : '竖线右侧为这段历史的真实后续走势。'
-  const note = h('p.market-note', { text: notice })
+  const similarChip = options.attachmentId
+    ? h('button.chip', { text: '找相似', on: { click: () => { window.location.hash = `/search/like/${options.attachmentId}` } } })
+    : null
+
+  /** 工具条上从左到右是哪几颗。桌面一套、手机一套，顺序都是定死的。 */
+  function orderControls(): void {
+    const line = isMobileLayout(layoutNow)
+      ? [volumeToggle, indicatorChip.node, scaleChip.node, overlayToggle, followChip, magnetChip,
+        resetChip, shotToggle, similarChip]
+      : [followChip, magnetChip, overlayToggle, volumeToggle, indicatorChip.node, scaleChip.node,
+        zoomOut, zoomIn, resetChip, similarChip, shotToggle, keysChip.node]
+    controls.replaceChildren(
+      ...line.filter((node): node is HTMLElement => !!node),
+      outlineStatus, outlineRetry, dataNote,
+    )
+  }
+
   const credit = h('a.market-credit', { text: 'TradingView Lightweight Charts™ · Copyright (с) 2025 TradingView, Inc.', attrs: { href: 'https://www.tradingview.com/', target: '_blank', rel: 'noopener noreferrer' } })
-  body.append(candidates, controls, plot, stats, note, credit)
-  const panel = sheet(`${request.symbol} · ${request.interval} · 币安`, body, () => {
+  // 周期条贴着画布：手机竖屏在上边一条，横屏在左边一竖列，桌面根本不露（周期在
+  // 图例上点）。所以它和画布得在同一个盒子里，方向由排布说了算。
+  const stageRow = h('div.market-stage', {}, periodBar, plot)
+  const panel = sheet(`${request.symbol} · ${request.interval}`, body, () => {
     closed = true; controller?.abort(); lifetime.abort(); stage?.destroy(); cache.clear(); contour = null
     history?.destroy(); history = null
     navFeed?.destroy(); navFeed = null
@@ -335,13 +457,21 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     if (painting) cancelAnimationFrame(painting)
     if (chromeFrame) cancelAnimationFrame(chromeFrame)
     chromeWatch?.disconnect()
-    window.removeEventListener('resize', measureChrome)
-    window.removeEventListener('orientationchange', measureChrome)
+    periodWatch?.disconnect()
+    window.removeEventListener('resize', onViewport)
+    window.removeEventListener('orientationchange', onViewport)
+    document.removeEventListener('click', onDocClick)
     window.clearTimeout(idleTimer)
     document.removeEventListener('fullscreenchange', onFullChange)
     document.removeEventListener('keydown', onKey)
     if (document.fullscreenElement === panel.node) void document.exitFullscreen().catch(() => {})
-  }, { onEscape: () => { if (anyPopOpen()) { closePops(); return true } if (!full) return false; setFull(false); return true } })
+  }, { onEscape: () => {
+    // Esc 一层一层退：先收菜单，再收品种栏，最后才出全屏。
+    if (anyPopOpen() || periodPop) { closePops(); closePeriodMenu(); return true }
+    if (watchOpen) { setWatch(false); return true }
+    if (!full) return false
+    setFull(false); return true
+  } })
   panel.node.classList.add('market-dialog')
   const head = panel.node.querySelector('.sheet-h')!
   head.insertBefore(fullscreen, panel.node.querySelector('.sheet-x'))
@@ -349,29 +479,47 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
 
   /* ---------------------------------------------------------- 全屏 */
 
-  /** 全屏时候选栏搬进顶栏，叠加层搬进画布；窗口态原样搬回去。 */
+  /** 全屏时工具条搬进画布；窗口态搬回去。版权一直贴在画布右下角。 */
   function placeChrome(): void {
+    // 底下这几下 append 是在挪节点，挪完浏览器会把周期条滚回原点；先记着，摆完放回去。
+    const keptLeft = periodList.scrollLeft
+    const keptTop = periodList.scrollTop
     if (full) {
       head.insertBefore(candidates, fullscreen)
-      plot.append(controls, stats, note, credit)
+      plot.append(controls)
       if (pip) plot.appendChild(pip)
+    } else if (isMobileLayout(layoutNow)) {
+      // 手机上工具条在画布下面（周期条在画布上面），这是 AICoin 那张图的骨架。
+      body.append(candidates, stageRow, controls)
+      pip?.remove()
     } else {
-      body.append(candidates, controls, plot, stats, note, credit)
+      body.append(candidates, controls, stageRow)
       pip?.remove()
     }
+    // 版权只在全屏时贴画布右下角（那儿有工具条留出的空）；窗口态回到图下方的
+    // 正常文档流里，压在时间轴刻度上就看不清刻度了。
+    if (full) plot.appendChild(credit)
+    else body.append(credit)
+    placeWatch()
+    periodList.scrollLeft = keptLeft
+    periodList.scrollTop = keptTop
+    // 周期条是这会儿才进的文档（窗口态首次展示、转屏、进出全屏都走这儿）：之前
+    // 它还没挂上去，量出来的宽高全是 0，滚不了。等一帧让布局落定再把当前档滚进来。
+    requestAnimationFrame(() => { if (!closed) showPeriod() })
   }
   function paintFull(): void {
+    // 进出全屏等于这条又「第一次展示」一遍：条的宽窄全变了，重新把当前档滚进来。
+    scrolledTo = null
     panel.node.classList.toggle('market-fullscreen', full)
     panel.node.parentElement?.classList.toggle('market-fullscreen-box', full)
     fullscreen.textContent = full ? '退出全屏' : '全屏'
     fullscreen.title = full ? '退出全屏（F）' : '全屏（F）'
     fullscreen.setAttribute('aria-label', full ? '退出全屏 K 线' : '全屏 K 线')
     if (!full) { pipOn = false; shotToggle?.setAttribute('aria-pressed', 'false'); pip?.remove(); pip = null }
-    periodBar.hidden = !full
-    periodSep.hidden = !full
+    applyLayout()
     followChip.hidden = !full
     magnetChip.hidden = !full
-    keysChip.node.hidden = !full || coarse()
+    keysChip.node.hidden = !full || coarse() || isMobileLayout(layoutNow)
     placeChrome()
     if (full) { wake(); beginHistory() }
     else { window.clearTimeout(idleTimer); panel.node.classList.remove('market-idle'); endHistory() }
@@ -385,6 +533,302 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
   function onFullChange(): void { if (document.fullscreenElement !== panel.node && full) { full = false; paintFull() } }
   document.addEventListener('fullscreenchange', onFullChange)
 
+  /* ------------------------------------ 桌面 / 手机竖屏 / 手机横屏 三套排布 */
+
+  // 按宽高算，不看是不是触屏：桌面浏览器窗口拖到 760 以下，就该是手机那一套。
+  let layoutNow: ChartLayout = chartLayout(window.innerWidth, window.innerHeight)
+  /** 品种栏开着没有。桌面记在本机上，手机每次掀起来都是新的。 */
+  let watchOpen = isMobileLayout(layoutNow) ? false : readWatchOpen()
+  /** 这一批候选里，这条记录自己是第几个。品种栏里它永远排第一。 */
+  const recordAt = Math.max(0, related.indexOf(initial))
+  /** 换周期、换品种之后要落到的那一段（保住根宽算出来的）。 */
+  let pendingSpan: { from: number; to: number } | null = null
+  /** 下一次重建完成之后按锚定复位（点「本次相关」里的记录行走这条）。 */
+  let homeOnLoad = false
+
+  function applyLayout(): void {
+    const was = isMobileLayout(layoutNow)
+    const wasLayout = layoutNow
+    layoutNow = chartLayout(window.innerWidth, window.innerHeight)
+    const mobile = isMobileLayout(layoutNow)
+    // 跨过 760 那条线：手机上品种栏不记状态，桌面上按本机记的那份来。
+    if (mobile !== was) watchOpen = mobile ? false : readWatchOpen()
+    panel.node.classList.toggle('market-desktop', !mobile)
+    panel.node.classList.toggle('market-mobile', mobile)
+    panel.node.classList.toggle('market-portrait', layoutNow === 'portrait')
+    panel.node.classList.toggle('market-landscape', layoutNow === 'landscape')
+    // 桌面上周期在图例上点，底下那条就不露了；手机上窗口态、全屏都露。
+    periodBar.hidden = !mobile
+    periodSep.hidden = true
+    keysChip.node.hidden = !full || coarse() || mobile
+    orderControls()
+    paintTitle()
+    paintLegend()
+    placeWatch()
+    // 跨过 760px 或者转屏：周期条、工具条、版权在文档流里的先后也得跟着翻一遍。
+    if (mobile !== was) placeChrome()
+    // 条的方向和宽度都变了，上一次滚到哪儿不算数：重新把当前档滚进来。
+    if (layoutNow !== wasLayout) scrolledTo = null
+    paintPeriods()
+  }
+
+  /** 顶栏那行字：桌面是「品种 · 周期」，手机只留品种，点它掀品种抽屉。 */
+  function paintTitle(): void {
+    // 顶栏那行字和图例是同一句话：换品种换周期都跟着走，两处不许说不一样的话。
+    const title = `${request.symbol} · ${level}`
+    panel.node.setAttribute('aria-label', title)
+    const slot = panel.node.querySelector('.sheet-t')
+    if (!slot) return
+    slot.textContent = isMobileLayout(layoutNow) ? request.symbol : title
+    slot.classList.toggle('market-title-tap', isMobileLayout(layoutNow))
+  }
+  panel.node.querySelector('.sheet-t')?.addEventListener('click', (event) => {
+    if (!isMobileLayout(layoutNow)) return
+    event.stopPropagation()
+    setWatch(!watchOpen)
+  })
+
+  /* ---------------------------------------------- 图例那一行是两颗按钮 */
+
+  function paintLegend(): void {
+    const parts = stage?.legendParts()
+    if (!parts) return
+    const mobile = isMobileLayout(layoutNow)
+    const sym = parts.symbol as HTMLButtonElement
+    const per = parts.period as HTMLButtonElement
+    sym.disabled = mobile
+    per.disabled = mobile
+    parts.line.classList.toggle('tv-legend-flat', mobile)
+    // 品种栏开着的时候，品种那半一直带着下划线。
+    sym.classList.toggle('on', watchOpen && !mobile)
+    sym.setAttribute('aria-expanded', String(watchOpen && !mobile))
+    per.setAttribute('aria-expanded', String(!!periodPop))
+  }
+
+  function bindLegend(): void {
+    const parts = stage?.legendParts()
+    if (!parts) return
+    parts.symbol.addEventListener('click', (event) => {
+      event.stopPropagation()
+      if (isMobileLayout(layoutNow)) return
+      setWatch(!watchOpen)
+    })
+    parts.period.addEventListener('click', (event) => {
+      event.stopPropagation()
+      if (isMobileLayout(layoutNow)) return
+      togglePeriodMenu()
+    })
+  }
+
+  /* -------------------------------------------- 图例上点开的那张周期菜单 */
+
+  let periodPop: HTMLElement | null = null
+  function closePeriodMenu(): void {
+    if (!periodPop) return
+    periodPop.remove()
+    periodPop = null
+    paintLegend()
+  }
+  function togglePeriodMenu(): void {
+    if (periodPop) { closePeriodMenu(); return }
+    const parts = stage?.legendParts()
+    if (!parts) return
+    closePops()
+    const list = h('div.pop-list')
+    for (const row of periodMenu({ level, auto: !lockedLevel, record: anchorReq.interval, unsupported })) {
+      const button = h('button', {
+        class: row.on ? 'on' : '',
+        disabled: row.off,
+        ...(row.off ? { title: '这个周期后端暂不支持' } : {}),
+        on: {
+          click: (event: Event) => {
+            event.stopPropagation()
+            closePeriodMenu()
+            if (row.value === PERIOD_AUTO) setAuto()
+            else pickPeriod(row.value)
+          },
+        },
+      }, h('span.chk', {}, icon('check')), row.label)
+      if (row.dot) button.appendChild(h('i.chip-dot', { title: '这条记录的周期', attrs: { 'aria-hidden': 'true' } }))
+      list.appendChild(button)
+    }
+    periodPop = h('div.pop.tv-period-pop', { on: { click: (event: Event) => event.stopPropagation() } }, list)
+    parts.line.appendChild(periodPop)
+    paintLegend()
+    wake()
+  }
+  function onDocClick(): void { closePeriodMenu() }
+  document.addEventListener('click', onDocClick)
+
+  /* ------------------------------------------------ 右边（手机是底下）那一栏品种 */
+
+  const watchSearch = h('input.input.tv-watch-search', {
+    placeholder: '搜索品种，如 BTC',
+    attrs: { type: 'search', 'aria-label': '搜索品种' },
+  }) as HTMLInputElement
+  const watchBody = h('div.tv-watch-body')
+  const watch = h('aside.tv-watch', { hidden: true, attrs: { 'aria-label': '品种' } },
+    h('div.tv-watch-h', {},
+      h('span.tv-watch-t', { text: '品种' }),
+      h('button.tv-watch-x', {
+        text: '×', attrs: { 'aria-label': '收起品种列表' }, on: { click: () => setWatch(false) },
+      })),
+    watchSearch, watchBody)
+  watch.addEventListener('click', (event) => event.stopPropagation())
+  const searchLater = debounce(() => void fillWatch(watchSearch.value.trim()), 250)
+  watchSearch.addEventListener('input', () => searchLater())
+
+  function placeWatch(): void {
+    const mobile = isMobileLayout(layoutNow)
+    watch.classList.toggle('tv-watch-sheet', mobile)
+    stage?.node.classList.toggle('tv-chart-watching', watchOpen && !mobile)
+    if (!watchOpen) { watch.remove(); watch.hidden = true; return }
+    // 手机上是一张贴着屏幕底边的抽屉，桌面上是画布右边那一竖条。
+    const host = mobile ? panel.node : stage?.node ?? null
+    if (!host) { watch.remove(); return }
+    watch.hidden = false
+    if (watch.parentElement !== host) host.appendChild(watch)
+    // 上次开着、这次一进来就摆在那儿：名单还没读过就顺手读一次。
+    if (!watchBody.childElementCount) void fillWatch(watchSearch.value.trim())
+  }
+
+  function setWatch(on: boolean): void {
+    // 画布一窄一宽，图默认会把右边钉住、左边吞掉一截。先记下中心和根宽，铺完再
+    // 按同样的根宽把中心摆回原处——看的那一段既不跳，中心也不挪。
+    const before = !isMobileLayout(layoutNow) ? stage?.visibleTime() ?? null : null
+    watchOpen = on
+    if (!isMobileLayout(layoutNow)) saveWatchOpen(on)
+    placeWatch()
+    paintLegend()
+    if (before) holdCentre(before)
+    if (!on) return
+    void fillWatch(watchSearch.value.trim())
+    wake()
+  }
+
+  /** 画布宽度变了：中心那一刻钉住，每根还是这么宽。 */
+  function holdCentre(before: { from: number; to: number }): void {
+    const mine = stage
+    if (!mine) return
+    const spacing = mine.barSpacing()
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (closed || stage !== mine) return
+      const span = spanForPeriod(before.from, before.to, mine.paneWidth(), spacing, barSpanMs(level))
+      if (!(span.to > span.from)) return
+      if (full) { settling = Date.now() + SETTLE_MS; pumpFocus(span.from, span.to, 0) }
+      mine.setVisibleTime(span.from, span.to, false, full ? barsAt(span.from, span.to) : undefined)
+    }))
+  }
+
+  function watchRow(symbol: string, step: string | null, act: () => void, seg?: number): HTMLElement {
+    const row = h('button.tv-watch-row', {
+      on: { click: (event: Event) => { event.stopPropagation(); act() } },
+    }, h('span.tv-watch-sym', { text: symbol }), step ? h('span.tv-watch-step', { text: step }) : null)
+    row.dataset['sym'] = symbol
+    if (seg !== undefined) row.dataset['seg'] = String(seg)
+    return row
+  }
+
+  /** 选中态就地重画：换品种、回记录段之后不必再去要一次目录。 */
+  function markWatch(): void {
+    for (const row of watchBody.querySelectorAll<HTMLElement>('.tv-watch-row')) {
+      const seg = row.dataset['seg']
+      const on = seg === undefined
+        ? row.dataset['sym'] === request.symbol
+        : Number(seg) === selected && onRecord()
+      row.classList.toggle('on', on)
+    }
+  }
+
+  let watchTurn = 0
+  async function fillWatch(query: string): Promise<void> {
+    const mine = ++watchTurn
+    watchBody.replaceChildren(h('div.tv-watch-ph', { text: '读取中…' }))
+    let page: Awaited<ReturnType<typeof instruments>>
+    try {
+      page = await instruments(
+        { ...(query ? { q: query } : {}), market: request.market, limit: 40 },
+        { signal: lifetime.signal })
+    } catch {
+      if (closed || mine !== watchTurn) return
+      watchBody.replaceChildren(
+        h('div.tv-watch-ph', { text: '品种列表暂时没取到' }),
+        h('button.chip', { text: '重试', on: { click: (event: Event) => { event.stopPropagation(); void fillWatch(query) } } }))
+      return
+    }
+    if (closed || mine !== watchTurn) return
+    const rows: HTMLElement[] = []
+    // 「本次相关」一直立着：换去别的品种之后，回这条记录的路就在这一组的第一行。
+    if (!query) {
+      rows.push(h('div.tv-watch-g', { text: '本次相关' }))
+      const order = segmentOrder(related.length, recordAt)
+      for (const i of order) {
+        const item = related[i]
+        if (!item) continue
+        rows.push(watchRow(item.symbol, item.interval, () => gotoSegment(i), i))
+      }
+    }
+    rows.push(h('div.tv-watch-g', { text: query ? '搜索结果' : '全部' }))
+    // 按 symbol 排。用码点比大小，数字、字母、中文各自成段，不会被本地规则打散。
+    const list = [...page.items].sort((a, b) => (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0))
+    if (!list.length) rows.push(h('div.tv-watch-ph', { text: '没有这个品种' }))
+    for (const item of list) {
+      rows.push(watchRow(item.symbol, null, () => pickSymbol(item.symbol)))
+    }
+    watchBody.replaceChildren(...rows)
+    markWatch()
+  }
+
+  /**
+   * 点「本次相关」里的一行：回这一段，效果和「复位」一样。
+   *
+   * 不是「换到这一档再让它自己找密度」——那样换完又会按当时的视野密度选回人手锁
+   * 的那一档（15m 之类），跟行里写的周期对不上。回记录段就是回这条记录当时的那
+   * 一档、那一段，根宽和第一次进全屏一模一样。
+   */
+  function gotoSegment(index: number): void {
+    if (isMobileLayout(layoutNow)) setWatch(false)
+    const item = related[index]
+    if (!item) return
+    selected = index
+    request = item
+    anchorReq = item
+    pendingSpan = null
+    picked = null
+    lockedLevel = false
+    // 这个品种这一会话里锁过的那一档也一并忘掉，不然重建之后它又把档抢回去。
+    savePeriod(item.market, item.symbol, null)
+    level = item.interval
+    ladder = ladderFor(item.interval)
+    paintPeriods()
+    markWatch()
+    // 图和数据都还是这一份：不用重建，直接按锚定重定就是复位。
+    if (full && stage && history && historySpace === spaceKey(request)) { home(); return }
+    homeOnLoad = true
+    void load()
+  }
+
+  /** 从「全部」里挑一个品种：同一档、同一段时间，换一张图。 */
+  function pickSymbol(symbol: string): void {
+    if (isMobileLayout(layoutNow)) setWatch(false)
+    if (symbol === request.symbol) return
+    if (symbol === anchorReq.symbol) {
+      // 回这条记录自己那个品种：回它原来那一段，标记才对得上；人挑的那一档留着。
+      request = { ...anchorReq, interval: level }
+      pendingSpan = null
+      markWatch()
+      void load()
+      return
+    }
+    const range = full && stage ? stage.visibleTime() : null
+    const from = range ? new Date(range.from).toISOString() : request.start_at
+    const to = range ? new Date(range.to).toISOString() : request.end_at
+    request = { symbol, market: anchorReq.market, interval: level, start_at: from, end_at: to, source: 'rest' }
+    pendingSpan = range
+    markWatch()
+    void load()
+  }
+
   /* ------------------------------------------------------ 闲置淡出 */
 
   let idleTimer = 0
@@ -394,7 +838,7 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     window.clearTimeout(idleTimer)
     idleTimer = window.setTimeout(() => {
       if (!full || closed) return
-      if (anyPopOpen() || controls.matches(':hover')) { wake(); return }
+      if (anyPopOpen() || periodPop || watchOpen || controls.matches(':hover')) { wake(); return }
       panel.node.classList.add('market-idle')
     }, IDLE_MS)
   }
@@ -415,22 +859,19 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
       if (!full) {
         plot.style.removeProperty('--market-chrome-h')
         plot.style.removeProperty('--market-controls-h')
-        plot.style.removeProperty('--market-stats-b')
         plot.style.removeProperty('--market-nav-h')
         plot.style.removeProperty('--market-nav-b')
         return
       }
       paintPeriods()
       const controlsH = controls.offsetHeight
-      const statsH = stats.offsetHeight
       const stacked = narrow() && window.innerHeight > window.innerWidth
       const navH = navHeight()
       // 横屏工具条贴到 8px，不是桌面那 26px；导航条和画布留白都要跟着它上去。
       const tight = window.innerHeight <= 500 && window.innerHeight <= window.innerWidth
       const bottom = tight ? 8 : undefined
-      plot.style.setProperty('--market-chrome-h', `${chromeHeight({ controlsH, statsH, stacked, navH, bottom })}px`)
+      plot.style.setProperty('--market-chrome-h', `${chromeHeight({ controlsH, stacked, navH, bottom })}px`)
       plot.style.setProperty('--market-controls-h', `${controlsH}px`)
-      plot.style.setProperty('--market-stats-b', `${statsBottom(controlsH)}px`)
       plot.style.setProperty('--market-nav-h', `${navH}px`)
       plot.style.setProperty('--market-nav-b', `${navBottom(controlsH, stacked, bottom)}px`)
       // 竖屏不放导航条，那会儿它根本没建出来；转成横屏后得补建，不能只在「已经
@@ -439,13 +880,21 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
       else if (nav) endNav()
     })
   }
+  // 周期条量出真尺寸、或者被挤窄到要滚的那一刻（窗口态首次挂上去、画布从占位图
+  // 换成真图、转屏）才滚得动；那几下都不在任何一次重绘里，只能盯着它的尺寸。
+  const periodWatch = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => { if (!closed) showPeriod() })
+    : null
+  periodWatch?.observe(periodList)
+
   const chromeWatch = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => measureChrome())
     : null
   chromeWatch?.observe(controls)
-  chromeWatch?.observe(stats)
-  window.addEventListener('resize', measureChrome, { passive: true })
-  window.addEventListener('orientationchange', measureChrome, { passive: true })
+  /** 窗口一变（宽窄、转屏）：排布重算一遍，底边那一摞重量一遍。 */
+  function onViewport(): void { applyLayout(); measureChrome() }
+  window.addEventListener('resize', onViewport, { passive: true })
+  window.addEventListener('orientationchange', onViewport, { passive: true })
 
   /* ---------------------------------------------------------- 键盘 */
 
@@ -464,9 +913,19 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     return true
   }
   function onKey(event: KeyboardEvent): void {
-    if (closed || !topModal(panel.node) || typing() || anyPopOpen()) return
-    if (event.metaKey || event.ctrlKey || event.altKey) return
+    if (closed || !topModal(panel.node) || typing()) return
+    if (event.metaKey || event.ctrlKey) return
     const hit = () => { event.preventDefault(); wake() }
+    // macOS 上 Alt+L 打出来的是「¬」，只有 code 认得出按的是哪一颗。
+    if (event.altKey) {
+      if (event.code === 'KeyL') { hit(); setScale(toggleLog(scaleMode)) }
+      return
+    }
+    // 菜单开着的时候键盘只认一件事：再按一次 P 把它收回去。
+    if (anyPopOpen() || periodPop) {
+      if (event.key === 'p' || event.key === 'P') { hit(); closePops(); closePeriodMenu() }
+      return
+    }
     if (full && event.shiftKey && event.key === 'Home') { hit(); toListing(); return }
     if (full && event.key === '?' && !coarse()) { hit(); keysChip.node.querySelector<HTMLElement>('.chip')?.click(); return }
     if (event.shiftKey) return
@@ -484,10 +943,12 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
       case 'o': case 'O': if (!overlayToggle.hidden) { hit(); toggleOutline() } break
       case 'i': case 'I': hit(); indicatorChip.node.querySelector<HTMLElement>('.chip')?.click(); break
       case 'a': case 'A': if (full) { hit(); setAuto() } break
+      case 'p': case 'P': if (!isMobileLayout(layoutNow)) { hit(); togglePeriodMenu() } break
+      case 'l': case 'L': hit(); setWatch(!watchOpen); break
       case '[': if (related.length > 1) { hit(); pick(selected - 1) } break
       case ']': if (related.length > 1) { hit(); pick(selected + 1) } break
       default:
-        if (full && /^[1-9]$/.test(event.key)) {
+        if (/^[1-9]$/.test(event.key)) {
           // 数字键按的是条上从左到右第几颗，不是阶梯下标——人看见几就按几。
           const step = periodAt(shownPeriods, event.key)
           if (step) { hit(); pickPeriod(step) }
@@ -540,7 +1001,9 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
 
   function pick(index: number): void {
     if (index < 0 || index >= related.length || index === selected) return
-    selected = index; request = related[selected]!
+    // 候选每一段都是「这条记录自己的」：锚定跟着换，丁香带、截止线照画。
+    selected = index; request = related[selected]!; anchorReq = request
+    markWatch()
     // 全屏里换到同一个品种同一档的另一段：图和数据都不用重建，挪一下锚定就是了。
     if (full && stage && history && historySpace === spaceKey(request)) { reanchor(); return }
     void load()
@@ -551,21 +1014,6 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
   const spaceKey = (item: ChartRequest): string =>
     `${item.market}|${item.symbol}|${item.interval}|${item.source ?? 'rest'}`
   const cutoffOf = (item: ChartRequest): string => item.match_end_at ?? item.end_at
-
-  /** 丁香带上沿那一行：这段是哪来的、有多少根。 */
-  function anchorLabel(): string {
-    const startMs = Date.parse(request.start_at)
-    const cutMs = Date.parse(cutoffOf(request))
-    const bars = windowBars.filter((bar) => {
-      const end = Date.parse(bar.end)
-      return end > startMs && end <= cutMs
-    }).length
-    // 从截图进来的（详情页「看真实走势」、记一笔里的那张图）就是「截图这段」；
-    // 手动校准那条路自己说自己是校准区间；剩下的是找相似匹配出来的。
-    const shot = options.attachmentId ?? options.queryAttachmentId
-    const name = label === '校准区间' ? '校准区间' : shot ? '截图这段' : '匹配这段'
-    return `${name} · ${bars} 根`
-  }
 
   /** 指标开着就让左边多铺一段，省得 MA256 在屏幕左半边是空的。 */
   function warmFeed(): void {
@@ -794,10 +1242,13 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     // 让浏览器把布局做完，第二帧让图自己的 resize 走完。
     const mine = stage
     // 这个品种这一会话里锁过哪一档就回到哪一档：锚定段还是那一段，只是档不同。
-    const remembered = readPeriod(request.market, request.symbol)
+    // 但这一次是「回记录段」的话，锁过的那一档不算数，就按记录自己那一档落。
+    const back = homeOnLoad
+    homeOnLoad = false
+    const remembered = back ? null : readPeriod(request.market, request.symbol)
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (closed || !full || stage !== mine) return
-      anchorNow(true)
+      anchorNow(true, back ? anchorReq.interval : undefined)
       if (remembered) pickPeriod(remembered)
     }))
   }
@@ -845,10 +1296,17 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     const start = Date.parse(request.start_at)
     const cut = Date.parse(cutoffOf(request))
     if (!Number.isFinite(start) || !Number.isFinite(cut) || !(cut > start)) return
+    if (!onRecord()) {
+      // 换到别的品种了：截止线、丁香带、判断三角一概不画，照原来那段时间看就是。
+      stage.setAnchor(null)
+      stage.setJudgment(null)
+      goTo(start, cut, animate, 0, forceLevel)
+      return
+    }
     const span = (cut - start) / 0.6
     const left = cut - 0.62 * span
     const right = left + span
-    stage.setAnchor({ startMs: start, endMs: cut, label: anchorLabel() })
+    stage.setAnchor({ startMs: start, endMs: cut })
     if (showsJudgment(options)) stage.setJudgment(cut)
     goTo(left, right, animate, 0, forceLevel)
   }
@@ -953,8 +1411,8 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     // 回锚定就是回到「这条记录当时那一段」：锁着的档也一并松开，按锚定跨度重定。
     picked = null
     setAuto()
-    // 回锚定 = 回这条记录当时的那一档、那一段。
-    anchorNow(true, request.interval)
+    // 回锚定 = 回这条记录当时的那一档、那一段（换过品种也照它来，不是眼前这档）。
+    anchorNow(true, anchorReq.interval)
   }
   /** 视野右端 = 现在，跨度不变。 */
   function toNow(): void {
@@ -1030,7 +1488,6 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
         const real = await data({ symbol: at.symbol, market: at.market, interval: at.interval, start_at: at.start_at, end_at: at.end_at, source: at.source }, { signal: lifetime.signal })
         found = { values: marketOutline(real.bars, at.start_at, at.end_at), symbol: at.symbol }
         if (!found.values.length) throw new Error('empty source window')
-        note.textContent = '橙色虚线来自截图对应的真实收盘价，仅缩放时间和幅度。竖线右侧是历史真实后续。'
       } else {
         found = await outline({ attachment_id: options.queryAttachmentId, red_up: prefs().updown === 'red_up' }, { signal: lifetime.signal })
       }
@@ -1053,21 +1510,20 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
     previous.toggleAttribute('disabled', selected === 0)
     next.toggleAttribute('disabled', selected === related.length - 1)
     counter.textContent = `${selected + 1} / ${related.length}`
-    const title = `${request.symbol} · ${request.interval} · 币安`
-    panel.node.setAttribute('aria-label', title)
-    panel.node.querySelector('.sheet-t')!.textContent = title
+    paintTitle()
   }
 
   async function load(): Promise<void> {
     controller?.abort()
     const current = new AbortController(); controller = current
     const kept = stage?.view() ?? null
-    stage?.destroy(); stage = null; stats.replaceChildren()
+    stage?.destroy(); stage = null
+    dataNote.hidden = true; dataNote.textContent = ''
     feed = null
     const target = request
     paintCandidates()
     plot.replaceChildren(h('div.market-loading', { text: '正在加载真实行情' }))
-    if (full) placeChrome()
+    placeChrome()
     let followUnavailable = false
     // 窗口态只画锚定段加一小段真实后续；再往前往后是全屏的事。
     const follow = followCount(target.start_at, cutoffOf(target), target.interval)
@@ -1102,8 +1558,13 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
       stage = tradingChart(result.bars, target.end_at, target.symbol, target.interval, target.start_at)
       if (!options.queryAttachmentId) stage.node.setAttribute('aria-label', `${target.symbol} 真实 K 线和成交量`)
       plot.replaceChildren(stage.node)
-      if (contour) stage.setOutline(contour.values)
-      stage.showOutline(showOutline)
+      // 不是这条记录自己的品种：截图轮廓和截止线都不属于这张图，一概不画。
+      if (contour && onRecord()) stage.setOutline(contour.values)
+      stage.showOutline(showOutline && onRecord())
+      stage.showCutoff(onRecord())
+      stage.setScaleMode(scaleMode)
+      bindLegend()
+      paintLegend()
       applyIndicators()
       const built = stage
       windowBars = result.bars
@@ -1116,20 +1577,27 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
       requestAnimationFrame(() => {
         if (closed || stage !== built) return
         if (full) { beginHistory(); return }
-        if (kept) built.setView(kept)
+        // 窗口态换周期换品种：按根宽算好的那一段，落下去就是它。
+        const span = pendingSpan
+        pendingSpan = null
+        const back = homeOnLoad
+        homeOnLoad = false
+        if (span) built.setVisibleTime(span.from, span.to, false)
+        else if (kept && !back) built.setView(kept)
         else built.reset()
       })
-      const after = followingStats(result.bars, target.end_at)
-      if (after) stats.appendChild(h('span', { text: `后续 ${after.count} 根：收盘 ${percent(after.close)} · 最高 ${percent(after.high)} · 最低 ${percent(after.low)}` }))
-      if (followUnavailable) stats.appendChild(h('span', { text: '后续行情暂未取到，先展示匹配区间' }))
-      else if (follow && (!after || after.count < follow)) stats.appendChild(h('span', { text: '后续已收盘行情不足所选根数' }))
-      if (result.coverage_complete === false) stats.appendChild(h('span', { text: '这段行情有缺口' }))
+      // 数据本身有问题的那两句，挂在工具条末尾；原来那一串涨跌幅统计取消了。
+      const says: string[] = []
+      if (followUnavailable) says.push('后续行情暂未取到，先展示匹配区间')
+      if (result.coverage_complete === false) says.push('这段行情有缺口')
+      dataNote.textContent = says.join(' · ')
+      dataNote.hidden = !says.length
       preheat(built, mine)
     } catch (error) {
       if (closed || current.signal.aborted) return
       plot.replaceChildren(h('div.market-loading', { text: error instanceof ApiError ? error.message : '这段行情暂时没取到' }),
         h('button.btn.sm', { text: '再试一次', on: { click: () => void load() } }))
-      if (full) placeChrome()
+      placeChrome()
     }
   }
 
@@ -1142,6 +1610,8 @@ export function openMarketChart(initial: ChartRequest, label = '图中这段', o
       .catch(() => { /* 补不上就按现有这一段算，和以前一样 */ })
   }
 
+  paintPeriods()
+  applyLayout()
   if (options.fullscreen) setFull(true)
   void load()
   void readOutline()
